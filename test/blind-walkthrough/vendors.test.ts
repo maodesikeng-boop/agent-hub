@@ -197,4 +197,101 @@ describe("vendors (S13, S14)", () => {
 
     expect(homedir().length).toBeGreaterThan(0);
   });
+
+  it("marks unverified a11y_cli vendors unsupported, blocks all host vendor config dirs, and hardens pi CLI args", async () => {
+    const matrix = listBlindVendorSupport();
+    const blindCwd = makeTempDir("blind-cwd-");
+    const blindHome = makeTempDir("blind-home-");
+    const fakeHostHome = makeTempDir("blind-host-");
+
+    for (const vendor of ["deepseek", "cursor", "opencode", "kimi"] as const) {
+      expect(matrix[vendor].mode).toBe("unsupported");
+      expect(matrix[vendor].supportsImageInput).toBe(false);
+      expect(matrix[vendor].reason.trim().length).toBeGreaterThan(0);
+      expect(() =>
+        resolveBlindVendorAdapter({
+          vendor,
+          systemPrompt: "Blind prompt.",
+          blindCwd,
+          blindHomeDir: blindHome,
+          baseEnv: { HOME: fakeHostHome },
+          platform: "darwin",
+        }),
+      ).toThrow(/unsupported/i);
+    }
+
+    for (const rel of [".kimi-code", ".dsh", ".config/opencode", ".local/share/opencode", ".local/state/opencode", ".opencode", ".config/cursor", ".pi/agent"]) {
+      expect(() =>
+        resolveBlindVendorAdapter({
+          vendor: "agy",
+          systemPrompt: "Blind prompt.",
+          blindCwd,
+          blindHomeDir: join(fakeHostHome, rel),
+          baseEnv: { HOME: fakeHostHome },
+          platform: "darwin",
+        }),
+      ).toThrow(/overlaps host vendor config directory/i);
+    }
+
+    const scratch = makeTempDir("blind-pi-stub-");
+    const dumpPath = join(scratch, "pi-invocation.json");
+    const stubPath = join(scratch, "stub-pi.mjs");
+    writeFileSync(
+      stubPath,
+      [
+        `#!${process.execPath}`,
+        `import { writeFileSync } from "node:fs";`,
+        `writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));`,
+        `console.log(JSON.stringify({ thought: "ok", confusion: null, action: { kind: "wait", reason: "ok" } }));`,
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(stubPath, 0o755);
+
+    const piAdapter = resolveBlindVendorAdapter({
+      vendor: "pi",
+      systemPrompt: "Blind prompt.",
+      blindCwd,
+      blindHomeDir: blindHome,
+      model: "anthropic/claude-sonnet-5-5",
+      effort: "low",
+      baseEnv: {
+        PATH: process.env.PATH,
+        HOME: fakeHostHome,
+        OPENCODE_API_KEY: "test-opencode-key",
+        DEEPSEEK_API_KEY: "test-deepseek-key",
+        GH_TOKEN: "should-not-leak",
+      },
+      platform: "darwin",
+      executablePath: stubPath,
+    });
+    await piAdapter.decideNext(
+      {
+        stepIndex: 1,
+        missionId: "first-launch-orient",
+        viewport: { kind: "desktop", width: 1280, height: 800 },
+        url: "http://127.0.0.1:4317/",
+        screenshotPath: join(scratch, "missing.png"),
+        visualHash: "abc",
+        a11yNodes: [],
+        a11yText: "[button] \"Router\"",
+        recentJournal: [],
+      },
+      new AbortController().signal,
+    );
+    const piDump = JSON.parse(readFileSync(dumpPath, "utf8")) as { argv: string[]; env: Record<string, string> };
+    expect(piDump.argv).toContain("--no-tools");
+    expect(piDump.argv).toContain("--no-mcp");
+    expect(piDump.argv).toContain("--no-session");
+    expect(piDump.argv).toContain("--no-context-files");
+    expect(piDump.argv).toContain("--no-extensions");
+    expect(piDump.argv).toContain("--model");
+    expect(piDump.argv).toContain("anthropic/claude-sonnet-5-5");
+    expect(piDump.argv).toContain("--thinking");
+    expect(piDump.argv).toContain("low");
+    expect(piDump.env.PI_CODING_AGENT_DIR).toBe(join(blindHome, ".pi", "agent"));
+    expect(piDump.env.OPENCODE_API_KEY).toBe("test-opencode-key");
+    expect(piDump.env.DEEPSEEK_API_KEY).toBe("test-deepseek-key");
+    expect(piDump.env.GH_TOKEN).toBeUndefined();
+  });
 });

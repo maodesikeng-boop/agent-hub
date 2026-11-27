@@ -7,13 +7,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DESKTOP_DIALOG_TOKEN_ENV, DESKTOP_DIALOG_URL_ENV } from "../../src/daemon/pick-folder.ts";
 import { readLedgerFile } from "../../src/daemon/process-ledger.ts";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST } from "../../src/shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, vendorSpec } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
 import { agyIsolatedHomeEnv } from "../../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import { assertIsolatedWorkspace } from "./context-barrier.ts";
 import { BLIND_DAEMON_START_TIMEOUT_MS, BLIND_DAEMON_STOP_TIMEOUT_MS } from "./limits.ts";
 import type { AppVendorMode } from "./types.ts";
+import { collectVendorCredentialEnvKeys } from "./vendors.ts";
 
 export type FolderPickerMode = "bridge_sample_project" | "disabled";
 
@@ -117,7 +118,10 @@ function closeServer(server: Server | null): Promise<void> {
   });
 }
 
-function buildDaemonEnv(input: {
+/**
+ * Postcondition: builds an isolated daemon env forwarding only system basics plus target-vendor credential env vars and isolated config-home paths when appVendorMode is real.
+ */
+export function buildIsolatedDaemonEnv(input: {
   readonly homeDir: string;
   readonly userHomeDir: string;
   readonly scratchDir: string;
@@ -136,8 +140,21 @@ function buildDaemonEnv(input: {
   env.LANG = "en_US.UTF-8";
   env.HOME = effectiveUserHome;
   env.USERPROFILE = effectiveUserHome;
-  if (input.appVendorMode.kind === "real" && input.appVendorMode.vendor === "agy") {
-    Object.assign(env, agyIsolatedHomeEnv({ platform: input.platform, env, userHome: effectiveUserHome, exists: existsSync }));
+  if (input.appVendorMode.kind === "real") {
+    const { vendor } = input.appVendorMode;
+    for (const key of collectVendorCredentialEnvKeys(vendor, input.baseEnv)) {
+      const value = input.baseEnv[key];
+      if (value !== undefined) env[key] = value;
+    }
+    const configHome = vendorSpec(vendor).home.configHome;
+    if (configHome) {
+      env[configHome.env] = join(effectiveUserHome, configHome.rel);
+    } else if (vendor === "claude") {
+      env.CLAUDE_CONFIG_DIR = join(effectiveUserHome, ".claude");
+    }
+    if (vendor === "agy") {
+      Object.assign(env, agyIsolatedHomeEnv({ platform: input.platform, env, userHome: effectiveUserHome, exists: existsSync }));
+    }
   }
   env[ENV_HOME] = input.homeDir;
   env[ENV_PORT] = "0";
@@ -274,7 +291,7 @@ export async function launchIsolatedBellwood(options: IsolatedAppOptions): Promi
   const bridge = folderPickerMode === "bridge_sample_project" ? await startFolderBridge(sampleProjectDir) : null;
 
   const daemonMain = join(repoRoot, "src", "daemon", "main.ts");
-  const daemonEnv = buildDaemonEnv({
+  const daemonEnv = buildIsolatedDaemonEnv({
     homeDir,
     userHomeDir,
     scratchDir,

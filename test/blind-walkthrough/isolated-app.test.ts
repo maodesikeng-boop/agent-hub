@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_HOME } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
-import { assertCleanTeardown, createSampleUserProject, launchIsolatedBellwood, stopIsolatedBellwood } from "./isolated-app.ts";
+import { assertCleanTeardown, buildIsolatedDaemonEnv, createSampleUserProject, launchIsolatedBellwood, stopIsolatedBellwood } from "./isolated-app.ts";
 
 const tempDirs: string[] = [];
 
@@ -86,4 +86,73 @@ describe("isolated-app (S4, S8)", () => {
     expect(handle.isRunning()).toBe(false);
     expect(existsSync(handle.homeDir)).toBe(false);
   }, 60_000);
+
+  it("R2 credential passthrough: forwards only target vendor credential env vars and isolated config home for real appVendorMode", () => {
+    const tempRoot = makeTempDir("blind-r2-env-");
+    const isolatedVendorHome = makeTempDir("blind-r2-vendor-home-");
+    const baseEnv = {
+      PATH: "/usr/bin:/bin",
+      CLAUDE_CODE_OAUTH_TOKEN: "claude-oauth-secret",
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      GEMINI_API_KEY: "gemini-secret",
+      OPENCODE_API_KEY: "opencode-secret",
+      GH_TOKEN: "github-should-not-pass",
+      HUB_TOKEN: "hub-should-not-pass",
+    };
+
+    const claudeEnv = buildIsolatedDaemonEnv({
+      homeDir: join(tempRoot, "h-claude"),
+      userHomeDir: join(tempRoot, "u-claude"),
+      scratchDir: join(tempRoot, "s-claude"),
+      appVendorMode: { kind: "real", vendor: "claude", isolatedHomeDir: isolatedVendorHome },
+      platform: "darwin",
+      baseEnv,
+      bridge: null,
+    });
+    expect(claudeEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-oauth-secret");
+    expect(claudeEnv.ANTHROPIC_API_KEY).toBe("anthropic-secret");
+    expect(claudeEnv.CLAUDE_CONFIG_DIR).toBe(join(isolatedVendorHome, ".claude"));
+    expect(claudeEnv.GEMINI_API_KEY).toBeUndefined();
+    expect(claudeEnv.OPENCODE_API_KEY).toBeUndefined();
+    expect(claudeEnv.GH_TOKEN).toBeUndefined();
+    expect(claudeEnv.HUB_TOKEN).toBeUndefined();
+
+    const agyEnv = buildIsolatedDaemonEnv({
+      homeDir: join(tempRoot, "h-agy"),
+      userHomeDir: join(tempRoot, "u-agy"),
+      scratchDir: join(tempRoot, "s-agy"),
+      appVendorMode: { kind: "real", vendor: "agy", isolatedHomeDir: isolatedVendorHome },
+      platform: "darwin",
+      baseEnv,
+      bridge: null,
+    });
+    expect(agyEnv.GEMINI_API_KEY).toBe("gemini-secret");
+    expect(agyEnv.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(agyEnv.OPENCODE_API_KEY).toBeUndefined();
+
+    const opencodeEnv = buildIsolatedDaemonEnv({
+      homeDir: join(tempRoot, "h-oc"),
+      userHomeDir: join(tempRoot, "u-oc"),
+      scratchDir: join(tempRoot, "s-oc"),
+      appVendorMode: { kind: "real", vendor: "opencode", isolatedHomeDir: isolatedVendorHome },
+      platform: "darwin",
+      baseEnv,
+      bridge: null,
+    });
+    expect(opencodeEnv.OPENCODE_API_KEY).toBe("opencode-secret");
+    expect(opencodeEnv.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+
+    const fakeEnv = buildIsolatedDaemonEnv({
+      homeDir: join(tempRoot, "h-fake"),
+      userHomeDir: join(tempRoot, "u-fake"),
+      scratchDir: join(tempRoot, "s-fake"),
+      appVendorMode: { kind: "fake" },
+      platform: "darwin",
+      baseEnv,
+      bridge: null,
+    });
+    expect(fakeEnv.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(fakeEnv.GEMINI_API_KEY).toBeUndefined();
+    expect(fakeEnv.OPENCODE_API_KEY).toBeUndefined();
+  });
 });

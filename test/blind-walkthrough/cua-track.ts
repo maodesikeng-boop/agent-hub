@@ -170,6 +170,7 @@ interface RawCuaTranscript {
   readonly blindVendor?: unknown;
   readonly missionIds?: unknown;
   readonly completedMissions?: unknown;
+  readonly blockedMissions?: unknown;
   readonly steps?: unknown;
   readonly systemPromptSha256?: unknown;
   readonly abortedReason?: unknown;
@@ -206,6 +207,9 @@ export function ingestCuaRecording(options: IngestCuaRecordingOptions): Walkthro
   const completedMissions = Array.isArray(parsed.completedMissions)
     ? (parsed.completedMissions.filter((id): id is BlindMissionId => typeof id === "string") as readonly BlindMissionId[])
     : [];
+  const blockedMissions = Array.isArray(parsed.blockedMissions)
+    ? (parsed.blockedMissions.filter((id): id is BlindMissionId => typeof id === "string") as readonly BlindMissionId[])
+    : [];
   const steps = parsed.steps as readonly WalkthroughStep[];
   const promptSha =
     typeof parsed.systemPromptSha256 === "string" && parsed.systemPromptSha256.trim() !== ""
@@ -222,6 +226,7 @@ export function ingestCuaRecording(options: IngestCuaRecordingOptions): Walkthro
     appVendorMode: { kind: "fake" },
     missionIds,
     completedMissions,
+    blockedMissions,
     steps,
     videoPath: options.videoPath,
     systemPromptSha256: promptSha,

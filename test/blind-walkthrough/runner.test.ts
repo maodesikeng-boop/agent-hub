@@ -477,4 +477,71 @@ describe("runner (S1, S2, S3, S5, S13, S16)", () => {
       expect(existsSync(step.screenshotAfter)).toBe(true);
     }
   }, 90_000);
+
+  it("clears a previously blocked mission from blockedMissions once resumeBlindWalkthrough achieves it", async () => {
+    const runDir = makeTempDir("blind-resume-unblock-");
+    const tempRoot = makeTempDir("blind-resume-unblock-tmp-");
+    mkdirSync(join(runDir, "steps"), { recursive: true });
+    const shot1 = join(runDir, "steps", "001-before.png");
+    const shot2 = join(runDir, "steps", "001-after.png");
+    writeFileSync(shot1, "png-before");
+    writeFileSync(shot2, "png-after");
+
+    const blockedCheckpoint: WalkthroughTrace = {
+      schemaVersion: BLIND_TRACE_SCHEMA_VERSION,
+      runId: "run-resume-unblock",
+      track: "browser_blind",
+      startedAt: "2026-11-28T00:00:00.000Z",
+      finishedAt: null,
+      blindVendor: "scripted",
+      appVendorMode: { kind: "fake" },
+      missionIds: ["first-launch-orient"],
+      completedMissions: [],
+      blockedMissions: ["first-launch-orient"],
+      steps: [
+        {
+          index: 1,
+          missionId: "first-launch-orient",
+          viewport: "desktop",
+          timestamp: "2026-11-28T00:00:05.000Z",
+          thought: "Could not find projects on first try.",
+          confusion: "Blocked earlier.",
+          action: { kind: "finish", achieved: false, summary: "Blocked earlier" },
+          screenshotBefore: shot1,
+          screenshotAfter: shot2,
+          telemetry: { consoleErrors: [], pageErrors: [], failedRequests: [], visualChanged: false, daemonAlive: true, durationMs: 300 },
+          noiseReason: null,
+        },
+      ],
+      videoPath: null,
+      systemPromptSha256: "abc123",
+      abortedReason: "interrupted",
+    };
+    writeFileSync(join(runDir, "checkpoint.json"), JSON.stringify(blockedCheckpoint, null, 2));
+
+    const adapter: BlindAgentAdapter = {
+      id: "scripted",
+      systemPrompt: "Fixed blind new-user system prompt.",
+      async decideNext() {
+        return {
+          thought: "Found projects and completed mission on resume.",
+          confusion: null,
+          action: { kind: "finish", achieved: true, summary: "Completed on resume" },
+        };
+      },
+    };
+
+    const resumed = await resumeBlindWalkthrough(runDir, {
+      tempRoot,
+      missionIds: ["first-launch-orient"],
+      viewports: [{ kind: "desktop", width: 1280, height: 800 }],
+      appVendorMode: { kind: "fake" },
+      adapter,
+    });
+
+    expect(resumed.completedMissions).toContain("first-launch-orient");
+    expect(resumed.blockedMissions).not.toContain("first-launch-orient");
+    const report = extractPainPoints(resumed, new Date("2026-11-28T04:00:00.000Z"));
+    expect(report.missionStatus["first-launch-orient"]).toBe("completed");
+  }, 60_000);
 });

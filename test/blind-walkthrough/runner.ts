@@ -731,11 +731,13 @@ async function executeWalkthrough(
         if (!outcome.achieved) allViewportsAchieved = false;
       }
 
-      if (missionBlocked && !blockedMissions.includes(mission.id)) {
-        blockedMissions.push(mission.id);
+      if (missionBlocked) {
+        if (!blockedMissions.includes(mission.id)) blockedMissions.push(mission.id);
         recorder.saveCheckpoint(buildTraceSnapshot(null, null));
-      } else if (abortedReason === null && allViewportsAchieved && !missionBlocked && !completedMissions.includes(mission.id)) {
-        completedMissions.push(mission.id);
+      } else if (abortedReason === null && allViewportsAchieved) {
+        const blockedIdx = blockedMissions.indexOf(mission.id);
+        if (blockedIdx >= 0) blockedMissions.splice(blockedIdx, 1);
+        if (!completedMissions.includes(mission.id)) completedMissions.push(mission.id);
         recorder.saveCheckpoint(buildTraceSnapshot(null, null));
       }
     }

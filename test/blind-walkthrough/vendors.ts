@@ -5,8 +5,10 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPathInsideOrEqual, normalizePathForComparison } from "../../src/daemon/platform/index.ts";
-import type { AgentVendor } from "../../src/shared/vendors.ts";
+import { vendorSpec, type AgentVendor } from "../../src/shared/vendors.ts";
 import { agyIsolatedHomeEnv } from "../../src/vendors/agy/paths.ts";
+import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { VENDOR_LIST } from "../../src/vendors/registry.ts";
 import { assertBlindPromptClean, assertIsolatedWorkspace, buildBlindAgentEnv } from "./context-barrier.ts";
 import type {
   BlindAction,
@@ -17,7 +19,9 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const HOST_VENDOR_CONFIG_DIRS = [".gemini", ".claude", ".codex", ".pi", ".cursor", ".kimi"] as const;
+const HOST_VENDOR_CONFIG_DIRS: readonly string[] = [
+  ...new Set([...VENDOR_LIST.flatMap((spec) => spec.home.dirs), ".pi", ".kimi"]),
+];
 
 export interface ResolveVendorAdapterOptions {
   readonly vendor: AgentVendor;
@@ -58,45 +62,71 @@ const BLIND_VENDOR_MATRIX: BlindVendorMatrix = {
   pi: {
     vendor: "pi",
     mode: "a11y_cli",
-    reason: "Runs headless text turns over sanitized accessibility snapshots.",
+    reason: "Runs ephemeral zero-tool headless text turns (--no-tools --no-mcp --no-session --no-context-files --no-extensions) over sanitized accessibility snapshots.",
     supportsImageInput: false,
   },
   deepseek: {
     vendor: "deepseek",
-    mode: "a11y_cli",
-    reason: "Runs headless text turns over sanitized accessibility snapshots.",
+    mode: "unsupported",
+    reason: "dsh headless single-turn execution without workspace file or shell tools is not yet verified for zero-context isolation.",
     supportsImageInput: false,
   },
   cursor: {
     vendor: "cursor",
-    mode: "a11y_cli",
-    reason: "Runs headless text turns over sanitized accessibility snapshots.",
+    mode: "unsupported",
+    reason: "cursor-agent print mode enables write and shell tools without a verified zero-tool isolation contract.",
     supportsImageInput: false,
   },
   opencode: {
     vendor: "opencode",
-    mode: "a11y_cli",
-    reason: "Runs headless text turns over sanitized accessibility snapshots.",
+    mode: "unsupported",
+    reason: "opencode headless single-turn execution without workspace file or shell tools is not yet verified for zero-context isolation.",
     supportsImageInput: false,
   },
   kimi: {
     vendor: "kimi",
-    mode: "a11y_cli",
-    reason: "Runs headless text turns over sanitized accessibility snapshots.",
+    mode: "unsupported",
+    reason: "kimi headless single-turn execution without workspace file or shell tools is not yet verified for zero-context isolation.",
     supportsImageInput: false,
   },
 };
 
-const ALLOWED_MODEL_ENV_KEYS: Readonly<Record<AgentVendor, readonly string[]>> = {
+const EXTRA_MODEL_ENV_KEYS: Readonly<Record<AgentVendor, readonly string[]>> = {
   claude: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
   agy: ["GEMINI_API_KEY"],
   codex: ["OPENAI_API_KEY"],
   pi: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"],
   deepseek: ["DEEPSEEK_API_KEY"],
   cursor: ["CURSOR_API_KEY"],
-  opencode: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"],
+  opencode: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"],
   kimi: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
 };
+
+const FORBIDDEN_PASSTHROUGH_KEYS = new Set(["HUB_TOKEN", "HUB_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK"]);
+
+/**
+ * Postcondition: returns the deduplicated credential env keys declared for vendor in VENDOR_PATHS plus safe model keys present in baseEnv.
+ */
+export function collectVendorCredentialEnvKeys(
+  vendor: AgentVendor,
+  baseEnv: Readonly<Record<string, string | undefined>>,
+): readonly string[] {
+  const keys = new Set<string>(EXTRA_MODEL_ENV_KEYS[vendor]);
+  const cred = VENDOR_PATHS[vendor].credentialEnv;
+  if (cred?.names) {
+    for (const name of cred.names) keys.add(name);
+  }
+  if (cred?.prefixes || cred?.pattern) {
+    for (const key of Object.keys(baseEnv)) {
+      const upper = key.toUpperCase();
+      if (FORBIDDEN_PASSTHROUGH_KEYS.has(upper) || upper.startsWith("AGENT_HUB_")) continue;
+      if (cred.prefixes?.some((prefix) => key.startsWith(prefix)) || cred.pattern?.test(key)) {
+        keys.add(key);
+      }
+    }
+  }
+  return [...keys];
+}
 
 /**
  * Postcondition: returns a complete support entry for every AgentVendor in VENDOR_LIST without silent omissions.
@@ -332,7 +362,7 @@ function buildVendorCliCommand(
   hostHome: string,
   repoRoot: string,
 ): { readonly command: string; readonly args: readonly string[] } {
-  const command = options.executablePath ?? options.vendor;
+  const command = options.executablePath ?? vendorSpec(options.vendor).cli.command;
   switch (options.vendor) {
     case "agy": {
       const allowRules = existsSync(observation.screenshotPath) ? [`read_file(${realpathOrSelf(observation.screenshotPath)})`] : [];
@@ -414,10 +444,25 @@ function buildVendorCliCommand(
       args.push(prompt);
       return { command, args };
     }
-    case "pi":
-      return { command, args: ["--no-mcp", "--exclude-tools", "bash,edit,write,read,grep,find,ls", "-p", prompt] };
+    case "pi": {
+      const args: string[] = [
+        "--no-tools",
+        "--no-mcp",
+        "--no-session",
+        "--no-context-files",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--exclude-tools",
+        "bash,edit,write,read,grep,find,ls",
+      ];
+      if (options.model) args.push("--model", options.model);
+      if (options.effort) args.push("--thinking", options.effort);
+      args.push("-p", prompt);
+      return { command, args };
+    }
     default:
-      return { command, args: ["-p", prompt] };
+      throw new Error(`Blind walkthrough vendor ${options.vendor} has no verified isolated CLI command`);
   }
 }
 
@@ -487,11 +532,18 @@ export function resolveBlindVendorAdapter(options: ResolveVendorAdapterOptions):
   assertIsolatedWorkspace(options.blindHomeDir, { env: baseEnv, platform });
   const hostHome = assertDistinctFromHostHome(options.blindHomeDir, baseEnv, platform);
 
-  const env = buildBlindAgentEnv(baseEnv, options.blindHomeDir, platform, ALLOWED_MODEL_ENV_KEYS[options.vendor]);
+  const env = buildBlindAgentEnv(
+    baseEnv,
+    options.blindHomeDir,
+    platform,
+    collectVendorCredentialEnvKeys(options.vendor, baseEnv),
+  );
+  const configHome = vendorSpec(options.vendor).home.configHome;
+  if (configHome) {
+    env[configHome.env] = join(options.blindHomeDir, configHome.rel);
+  }
   if (options.vendor === "agy") {
     Object.assign(env, agyIsolatedHomeEnv({ platform, env, userHome: options.blindHomeDir, exists: existsSync }));
-  } else if (options.vendor === "codex") {
-    env.CODEX_HOME = join(options.blindHomeDir, ".codex");
   } else if (options.vendor === "claude") {
     env.CLAUDE_CONFIG_DIR = join(options.blindHomeDir, ".claude");
   }

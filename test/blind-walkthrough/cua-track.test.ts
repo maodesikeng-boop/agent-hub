@@ -120,4 +120,31 @@ describe("cua-track (S10, S13, S15)", () => {
       }),
     ).toThrow(/schema|version|unsupported/i);
   });
+
+  it("preserves blockedMissions when ingesting a Track 2 CUA transcript", () => {
+    const dir = makeTempDir("cua-blocked-");
+    const transcriptFile = join(dir, "transcript.json");
+    writeFileSync(
+      transcriptFile,
+      JSON.stringify({
+        schemaVersion: BLIND_TRACE_SCHEMA_VERSION,
+        startedAt: "2026-11-28T01:00:00.000Z",
+        finishedAt: "2026-11-28T01:05:00.000Z",
+        blindVendor: "codex",
+        missionIds: ["first-launch-orient", "create-first-project"],
+        completedMissions: ["first-launch-orient"],
+        blockedMissions: ["create-first-project"],
+        steps: [],
+      }),
+    );
+
+    const trace = ingestCuaRecording({
+      runId: "cua-blocked-1",
+      transcriptPath: transcriptFile,
+      videoPath: null,
+      screenshotsDir: dir,
+    });
+    expect(trace.completedMissions).toEqual(["first-launch-orient"]);
+    expect(trace.blockedMissions).toEqual(["create-first-project"]);
+  });
 });

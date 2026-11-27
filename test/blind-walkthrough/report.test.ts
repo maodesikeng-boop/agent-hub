@@ -212,4 +212,35 @@ describe("report & retention bounds (S5, S6, S12, S13)", () => {
     expect(exitCode).toBe(1);
     expect(existsSync(unsafeOut)).toBe(false);
   });
+
+  it("classifies fake app-vendor stub 'ok' reply complaints as harness_noise only when appVendorMode is fake", () => {
+    const stubReplyStep = makeStep({
+      index: 1,
+      confusion:
+        "When asked to summarize the README, the project assistant simply replied 'ok' after 0s of work rather than providing the actual content or summary.",
+    });
+    const realUiStep = makeStep({
+      index: 2,
+      confusion: "There is no loading spinner or typing indicator to confirm that the assistant is actively processing my request.",
+    });
+
+    const fakeReport = extractPainPoints(
+      makeTrace("run-fake-stub", [stubReplyStep, realUiStep], { appVendorMode: { kind: "fake" } }),
+      new Date("2026-11-28T04:00:00.000Z"),
+    );
+    expect(fakeReport.harnessNoise).toHaveLength(1);
+    expect(fakeReport.harnessNoise[0]?.stepIndex).toBe(1);
+    expect(fakeReport.harnessNoise[0]?.summary).toMatch(/fake_app_vendor_stub_reply/);
+    expect(fakeReport.painPoints).toHaveLength(1);
+    expect(fakeReport.painPoints[0]?.stepIndices).toEqual([2]);
+
+    const realReport = extractPainPoints(
+      makeTrace("run-real-vendor", [stubReplyStep, realUiStep], {
+        appVendorMode: { kind: "real", vendor: "claude", isolatedHomeDir: "/tmp/isolated-claude" },
+      }),
+      new Date("2026-11-28T04:00:00.000Z"),
+    );
+    expect(realReport.harnessNoise).toHaveLength(0);
+    expect(realReport.painPoints).toHaveLength(2);
+  });
 });

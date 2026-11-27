@@ -161,6 +161,15 @@ function toPainPoints(groups: Map<string, MutablePainGroup>): readonly PainPoint
     });
 }
 
+const FAKE_VENDOR_STUB_REPLY_PATTERN =
+  /(?:\breplied|\bresponded|\banswered|\breply|\bresponse)\b[^.\n]{0,40}['"`]?ok['"`]?(?:\b|$)|['"`]ok['"`]\s*(?:after\s+0s|instead\s+of|rather\s+than)/i;
+
+function isFakeAppVendorStubReply(step: WalkthroughStep, signals: readonly string[]): boolean {
+  if (signals.length > 0) return false;
+  const text = [step.confusion ?? "", step.action.kind === "note_friction" ? step.action.summary : ""].join(" ").trim();
+  return text !== "" && FAKE_VENDOR_STUB_REPLY_PATTERN.test(text);
+}
+
 /**
  * Precondition: trace is a valid WalkthroughTrace with schemaVersion === BLIND_TRACE_SCHEMA_VERSION.
  * Postcondition: separates harness_noise from product_ux friction, grades severity deterministically (P0..P3), deduplicates repeated stuck-loop steps, and returns a PainPointReport.
@@ -171,7 +180,9 @@ export function extractPainPoints(trace: WalkthroughTrace, now: Date = new Date(
   }
   const harnessNoise: FrictionSignal[] = [];
   const groups = new Map<string, MutablePainGroup>();
-  const blockedMissions = new Set<BlindMissionId>(trace.blockedMissions ?? []);
+  const completedSet = new Set<BlindMissionId>(trace.completedMissions);
+  const explicitBlocked = new Set<BlindMissionId>(trace.blockedMissions ?? []);
+  const stepBlocked = new Set<BlindMissionId>();
 
   for (const step of trace.steps) {
     const evidence = stepEvidence(step);
@@ -190,11 +201,28 @@ export function extractPainPoints(trace: WalkthroughTrace, now: Date = new Date(
     }
 
     const signals = deterministicSignalsOf(step);
+    if (trace.appVendorMode.kind === "fake" && isFakeAppVendorStubReply(step, signals)) {
+      const detail = step.confusion?.trim() || (step.action.kind === "note_friction" ? step.action.summary.trim() : "");
+      harnessNoise.push({
+        stepIndex: step.index,
+        missionId: step.missionId,
+        viewport: step.viewport,
+        category: "harness_noise",
+        summary: `fake_app_vendor_stub_reply: ${detail}`,
+        evidencePaths: evidence,
+        deterministicSignals: ["noise:fake_app_vendor_stub_reply"],
+      });
+      continue;
+    }
+
+    if ((step.action.kind === "finish" && !step.action.achieved) || isStuckLoopStep(step)) {
+      stepBlocked.add(step.missionId);
+    } else if (step.action.kind === "finish" && step.action.achieved && completedSet.has(step.missionId) && !explicitBlocked.has(step.missionId)) {
+      stepBlocked.delete(step.missionId);
+    }
+
     const classified = classifyStepFriction(step, signals);
     if (!classified) continue;
-    if ((step.action.kind === "finish" && !step.action.achieved) || isStuckLoopStep(step)) {
-      blockedMissions.add(step.missionId);
-    }
 
     const key = `${step.missionId}:${normalizeKey(classified.title)}`;
     const existing = groups.get(key);
@@ -223,10 +251,9 @@ export function extractPainPoints(trace: WalkthroughTrace, now: Date = new Date(
     }
   }
 
-  const completedSet = new Set(trace.completedMissions);
   const missionStatus: Record<string, "completed" | "blocked" | "aborted"> = {};
   for (const missionId of trace.missionIds) {
-    if (blockedMissions.has(missionId)) {
+    if (explicitBlocked.has(missionId) || stepBlocked.has(missionId)) {
       missionStatus[missionId] = "blocked";
     } else if (completedSet.has(missionId)) {
       missionStatus[missionId] = "completed";
