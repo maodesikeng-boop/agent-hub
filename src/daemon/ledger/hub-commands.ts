@@ -28,6 +28,7 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import { scheduleShowIn } from "./schedule-runs.ts";
 import type { LedgerSchedules } from "./schedules.ts";
+import type { LedgerPmWatches } from "./pm-watch-commands.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
@@ -173,6 +174,7 @@ export function createLedgerHubCommands(
   workerView: ReturnType<typeof createLedgerWorkerView>,
   router: LedgerRouter,
   taskGraphs: LedgerTaskGraphs,
+  watches: LedgerPmWatches,
   taskGraphManual: (sessionId: SessionId) => string = () => "",
 ) {
   const { db, now, write } = ctx;
@@ -353,6 +355,7 @@ export function createLedgerHubCommands(
         return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
       case "schedule.remove":
         return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
+      case "watch.add": case "watch.list": case "watch.close": return watches.hubIn(p, caller, command, args);
       case "router.report": {
         const { files: rawFiles, ...rest } = args as HubArgs<"router.report">;
         const fileArgs = sharedFileArgs(rawFiles, context);
