@@ -375,9 +375,7 @@ export function startIn(
   kickOffWorkerIn(w, p, {
     worker,
     session,
-    project,
     firstMessageText,
-    inherited: space.effectiveInherit !== null,
     maxTimeMs,
     sandbox: computerUse === null ? undefined : { capabilities: computerUse, stepId: bindTarget?.stepId ?? null },
     afterStartedLine:

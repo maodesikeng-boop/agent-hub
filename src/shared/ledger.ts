@@ -202,10 +202,39 @@ export interface WorktreeTask {
   sessionId: SessionId;
   repo: string;
   worktreePath: string;
-  checkout: { kind: "branch"; branch: string; base?: string } | { kind: "review"; branch: string };
+  checkout: { kind: "branch"; branch: string; base?: string; expected?: string } | { kind: "review"; branch: string; expected?: string };
   status: WorkerStatus;
   setupCommand: string | null;
 }
+
+export type BranchTipFinding =
+  | { kind: "remote_ahead"; remote: string; local: string }
+  | { kind: "local_ahead"; remote: string; remoteSha: string }
+  | { kind: "remote_rewound"; remote: string; local: string; remoteSha: string }
+  | { kind: "diverged"; remote: string; local: string; remoteSha: string }
+  | { kind: "fetch_failed"; remote: string; error: string }
+  | { kind: "no_remote" }
+  | { kind: "ambiguous_remote"; remotes: string[] }
+  | { kind: "expected_missing"; expected: string };
+
+export type FastForwardOutcome =
+  | { kind: "up_to_date" }
+  | { kind: "fast_forwarded"; from: string; to: string }
+  | { kind: "dirty"; to: string }
+  | { kind: "failed"; to: string; error: string };
+
+/** What a Worker is told about how its starting commit was chosen. */
+export interface WorkspaceCheckoutNote {
+  branch: string;
+  commit: string;
+  findings: readonly BranchTipFinding[];
+  sync?: FastForwardOutcome;
+}
+
+/** `wait` while another Worker on the same worktree has not fully exited. */
+export type WorktreeSyncTask =
+  | { kind: "wait" }
+  | { kind: "sync"; repo: string; worktreePath: string; branch: string; expected: string | null };
 
 export interface SetupOutcome {
   kind: "ok" | "failed" | "timeout" | "stopped";
@@ -318,6 +347,9 @@ export interface Ledger extends LedgerHandoverWork {
   waitsForFirstTurn(sessionId: SessionId, messageId: MessageId): boolean;
   onWorktreeCreated(workerId: WorkerId, baseCommit: string, setup?: SetupOutcome): void;
   recordReviewSnapshot(workerId: WorkerId, snapshot: ReviewSnapshot): void;
+  noteWorkspaceCheckout(workerId: WorkerId, note: WorkspaceCheckoutNote): void;
+  getWorktreeSyncTask(workerId: WorkerId): WorktreeSyncTask | null;
+  onWorktreeSynced(workerId: WorkerId, note: WorkspaceCheckoutNote | { branch: string; error: string } | null): void;
 
   getReviewVerifyTask(workerId: WorkerId): { repo: string; branch: string; snapshot: ReviewSnapshot } | null;
   onReviewVerified(params: ReviewVerifyParams, result: ReviewVerifyResult): void;

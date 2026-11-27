@@ -28,10 +28,10 @@ export interface SessionProcessReaper {
   reapSession(sessionId: SessionId): Promise<number[]>;
 
   /**
-   * Precondition: activeSessionIds holds every live session.
-   * Postcondition: lists processes tagged by this daemon whose session is no longer active, or null when the process table could not be read.
+   * Precondition: activeSessionIds holds every live session and runningWatchIds every watch whose command the runner is running.
+   * Postcondition: lists processes tagged by this daemon whose session or watch run is over, or null when the process table could not be read.
    */
-  listEnded(activeSessionIds: ReadonlySet<number>): Promise<SessionProcess[] | null>;
+  listEnded(activeSessionIds: ReadonlySet<number>, runningWatchIds: ReadonlySet<number>): Promise<SessionProcess[] | null>;
 
   /**
    * Precondition: the user chose to stop pid.
@@ -48,12 +48,15 @@ export interface SessionProcessReaperOptions {
   readonly platform?: ListTaggedProcessesOptions & ReapTaggedProcessesOptions;
 }
 
-function parseSessionIdFromTag(tag: string): SessionId | null {
-  const match = /^s([1-9]\d*):/.exec(tag);
+function parseIdFromTag(tag: string, pattern: RegExp): number | null {
+  const match = pattern.exec(tag);
   if (match === null) return null;
   const id = Number(match[1]);
   return Number.isSafeInteger(id) ? id : null;
 }
+
+const parseSessionIdFromTag = (tag: string): SessionId | null => parseIdFromTag(tag, /^s([1-9]\d*):/);
+const parseWatchIdFromTag = (tag: string): number | null => parseIdFromTag(tag, /^watch([1-9]\d*):/);
 
 export function createSessionProcessReaper(options: SessionProcessReaperOptions): SessionProcessReaper {
   const { db, tagNonce, ownerTag, sessionTmp } = options;
@@ -74,7 +77,7 @@ export function createSessionProcessReaper(options: SessionProcessReaperOptions)
       return [...result.reapedPids];
     },
 
-    async listEnded(activeSessionIds) {
+    async listEnded(activeSessionIds, runningWatchIds) {
       const found = await scanTaggedProcesses(`:${tagNonce}`, options.platform);
       if (found === null) return null;
       const rootsBySession = new Map<SessionId, string[]>();
@@ -89,6 +92,8 @@ export function createSessionProcessReaper(options: SessionProcessReaperOptions)
       return found.flatMap((proc): SessionProcess[] => {
         const sessionId = parseSessionIdFromTag(proc.tag);
         if (sessionId !== null && activeSessionIds.has(sessionId)) return [];
+        const watchId = parseWatchIdFromTag(proc.tag);
+        if (watchId !== null && runningWatchIds.has(watchId)) return [];
         const sessionPrivate = isSessionPrivate(proc, sessionId === null ? [] : rootsOf(sessionId));
         return [{ pid: proc.pid, sessionId, tag: proc.tag, command: proc.command, cwd: proc.cwd, sessionPrivate }];
       });

@@ -3,13 +3,15 @@ import type { TaskGraphId, TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { Db } from "../../store/index.ts";
 import { fail } from "../context.ts";
-import { workerIdsOf } from "./rows.ts";
+import { readStoredArtifact, workerIdsOf } from "./rows.ts";
 import { buildGraphMaps } from "./store.ts";
 import type { KeyAdjacency, StepWorkspacePlan, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
+type StepMaps = { byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>; incoming: KeyAdjacency; outgoing: KeyAdjacency };
+
 type UpstreamWorker = { id: number; worktree_path: string | null; branch: string; base_commit: string };
 
-interface PlanInput {
+export interface PlanInput {
   graphRow: TaskGraphDbRow;
   step: TaskNodeDbRow;
   byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>;
@@ -34,27 +36,100 @@ function latestWorktreeWorker(db: Db, projectId: number, step: TaskNodeDbRow): U
   return null;
 }
 
-function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorker; forked: boolean } | null {
-  const { graphRow, step, byKey, incoming, outgoing } = input;
-  let cur = step.node_key;
-  let forked = false;
+/** Walks the single-parent chain above a step. */
+function* upstreamChain(startKey: TaskNodeKey, maps: StepMaps): Generator<TaskNodeDbRow> {
+  const { byKey, incoming } = maps;
+  let cur = startKey;
   const seen = new Set<TaskNodeKey>();
   while (true) {
     const ups = incoming.get(cur) ?? [];
-    if (ups.length !== 1) return null;
-    const uKey = ups[0]!;
-    if (seen.has(uKey)) return null;
-    seen.add(uKey);
-    if ((outgoing.get(uKey)?.length ?? 0) > 1) forked = true;
-    const u = byKey.get(uKey);
-    if (u === undefined) return null;
-    if (u.skipped === 1 || u.review === 1) {
-      cur = uKey;
-      continue;
-    }
-    const worker = latestWorktreeWorker(db, graphRow.project_id, u);
-    return worker === null ? null : { worker, forked };
+    if (ups.length !== 1 || seen.has(ups[0]!)) return;
+    cur = ups[0]!;
+    seen.add(cur);
+    const u = byKey.get(cur);
+    if (u === undefined) return;
+    yield u;
   }
+}
+
+/** Walks up single-parent edges past skipped and review steps to the step whose worktree a new step would reuse. */
+function upstreamWorktreeStep(
+  startKey: TaskNodeKey,
+  maps: StepMaps,
+): { step: TaskNodeDbRow; forked: boolean } | null {
+  let forked = false;
+  for (const u of upstreamChain(startKey, maps)) {
+    if ((maps.outgoing.get(u.node_key)?.length ?? 0) > 1) forked = true;
+    if (u.skipped === 1 || u.review === 1) continue;
+    return { step: u, forked };
+  }
+  return null;
+}
+
+/** A step after a review with an explicit base continues the reviewed branch, not the trunk or an earlier step's own branch. */
+function reviewedBaseUpstream(startKey: TaskNodeKey, maps: StepMaps): string | null {
+  for (const u of upstreamChain(startKey, maps)) {
+    if (u.skipped === 1) continue;
+    return u.review === 1 ? u.base : null;
+  }
+  return null;
+}
+
+const REPORTED_COMMIT = /\b[0-9a-f]{7,40}\b/i;
+
+/** The commit the nearest finished non-review upstream step reported delivering. */
+export function upstreamDeliveredCommit(input: PlanInput): string | null {
+  for (const u of upstreamChain(input.step.node_key, input)) {
+    if (u.skipped === 1 || u.review === 1) continue;
+    const reported = readStoredArtifact(u.artifact_json).artifact?.commit ?? "";
+    return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
+  }
+  return null;
+}
+
+function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorker; forked: boolean } | null {
+  const up = upstreamWorktreeStep(input.step.node_key, input);
+  if (up === null) return null;
+  const worker = latestWorktreeWorker(db, input.graphRow.project_id, up.step);
+  return worker === null ? null : { worker, forked: up.forked };
+}
+
+/** Upstream worktree a non-review step continues from, or null when it starts from main or a different reviewed branch. */
+function continuedUpstreamWorktree(
+  db: Db,
+  projectId: number,
+  step: TaskNodeDbRow,
+  maps: StepMaps,
+): { step: TaskNodeDbRow; worker: UpstreamWorker; forked: boolean } | null {
+  if (step.review === 1 || step.base === "main") return null;
+  const up = upstreamWorktreeStep(step.node_key, maps);
+  if (up === null) return null;
+  const worker = latestWorktreeWorker(db, projectId, up.step);
+  if (worker === null) return null;
+  const reviewed = reviewedBaseUpstream(step.node_key, maps);
+  if (reviewed !== null && worker.branch !== reviewed) return null;
+  return { step: up.step, worker, forked: up.forked };
+}
+
+const isStepFinished = (step: TaskNodeDbRow): boolean => step.status === "done" || step.status === "cancelled";
+
+/** Whether an active graph may still work in stepKey's worktree: the step is unfinished, or an unfinished downstream step would continue from it. */
+export function graphStillUsesStepWorktree(db: Db, projectId: number, maps: StepMaps, stepKey: TaskNodeKey): boolean {
+  const step = maps.byKey.get(stepKey);
+  if (step === undefined) return false;
+  if (!isStepFinished(step)) return true;
+  const queue = [...(maps.outgoing.get(stepKey) ?? [])];
+  const visited = new Set<TaskNodeKey>();
+  while (queue.length > 0) {
+    const key = queue.shift()!;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const n = maps.byKey.get(key);
+    if (n === undefined) continue;
+    if (!isStepFinished(n) && continuedUpstreamWorktree(db, projectId, n, maps)?.step.node_key === stepKey) return true;
+    queue.push(...(maps.outgoing.get(key) ?? []));
+  }
+  return false;
 }
 
 function resolveReviewPlan(db: Db, input: PlanInput): Extract<StepWorkspacePlan, { kind: "review" }> {
@@ -85,13 +160,16 @@ function chainWorkerIds(step: TaskNodeDbRow, byKey: ReadonlyMap<TaskNodeKey, Tas
 }
 
 export function resolveWorkspacePlan(db: Db, input: PlanInput): StepWorkspacePlan {
-  const { step, byKey, incoming } = input;
+  const { graphRow, step, byKey, incoming } = input;
   if (step.review === 1) return resolveReviewPlan(db, input);
   if (step.base === "main") return { kind: "fresh" };
-  const up = findUpstreamWorktree(db, input);
-  if (up === null) return { kind: "fresh" };
-  const w = up.worker;
-  if (!up.forked && w.worktree_path && existsSync(w.worktree_path)) {
+  const continued = continuedUpstreamWorktree(db, graphRow.project_id, step, input);
+  if (continued === null) {
+    const reviewed = reviewedBaseUpstream(step.node_key, input);
+    return reviewed === null ? { kind: "fresh" } : { kind: "fork", baseBranch: reviewed };
+  }
+  const w = continued.worker;
+  if (!continued.forked && w.worktree_path && existsSync(w.worktree_path)) {
     const chainIds = chainWorkerIds(step, byKey, incoming);
     const otherUsers = db.all<{ id: number }>("SELECT id FROM workers WHERE worktree_path = ?", w.worktree_path);
     if (!otherUsers.some((o) => !chainIds.has(o.id))) {

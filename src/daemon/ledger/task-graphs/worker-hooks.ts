@@ -36,7 +36,7 @@ import {
 } from "./store.ts";
 import type { StepWorkspacePlan, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow, WorkerBindTarget } from "./types.ts";
 import { collectDirectUpstreams, upstreamStatusEntries } from "./upstream.ts";
-import { findActiveDownstream, resolveWorkspacePlan } from "./workspace.ts";
+import { findActiveDownstream, resolveWorkspacePlan, upstreamDeliveredCommit, type PlanInput } from "./workspace.ts";
 
 function activeStepOfWorker(g: TaskGraphCtx, workerId: WorkerId): { node: TaskNodeDbRow; graphRow: TaskGraphDbRow } | null {
   const node = stepOfActiveWorker(g.db, workerId);
@@ -353,7 +353,7 @@ export function onWorkerEndedIn(g: TaskGraphCtx, p: Pending, workerId: WorkerId)
   return note;
 }
 
-export function workerGraphWorkspacePlan(g: TaskGraphCtx, workerId: WorkerId): StepWorkspacePlan | undefined {
+function activeStepPlanInput(g: TaskGraphCtx, workerId: WorkerId): PlanInput | undefined {
   const node = g.db.get<TaskNodeDbRow>(
     `SELECT n.* FROM task_graph_steps n
        JOIN task_graphs g ON g.id = n.graph_id
@@ -364,7 +364,17 @@ export function workerGraphWorkspacePlan(g: TaskGraphCtx, workerId: WorkerId): S
   if (node === undefined) return undefined;
   const graphRow = getGraphRow(g.db, node.graph_id);
   if (graphRow === undefined) return undefined;
-  return resolveWorkspacePlan(g.db, { graphRow, step: node, ...buildGraphMaps(g.db, graphRow.id) });
+  return { graphRow, step: node, ...buildGraphMaps(g.db, graphRow.id) };
+}
+
+export function workerGraphWorkspacePlan(g: TaskGraphCtx, workerId: WorkerId): StepWorkspacePlan | undefined {
+  const input = activeStepPlanInput(g, workerId);
+  return input === undefined ? undefined : resolveWorkspacePlan(g.db, input);
+}
+
+export function workerGraphUpstreamCommit(g: TaskGraphCtx, workerId: WorkerId): string | null {
+  const input = activeStepPlanInput(g, workerId);
+  return input === undefined ? null : upstreamDeliveredCommit(input);
 }
 
 export function workerGraphStatus(g: TaskGraphCtx, workerId: WorkerId, sessionId: SessionId): WorkerHubStatus["taskGraph"] | undefined {

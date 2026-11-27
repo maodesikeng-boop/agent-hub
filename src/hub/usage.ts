@@ -16,10 +16,14 @@ import {
   MIN_SCHEDULE_EVERY_MINUTES,
   SELF_RELOAD_DRAIN_MAX_MS,
   SETUP_TIMEOUT_MS,
+  WATCH_EVERY_MIN_MS,
+  WATCH_MAX_CAP_MS,
+  WATCH_MAX_DEFAULT_MS,
   WORKER_LOG_DEFAULT_STEPS,
   WORKER_SEARCH_DEFAULT_LIMIT,
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
+import { formatDurationShort } from "../shared/schedule.ts";
 import { hubLimitMaximum, hubLimitsHelpLine } from "../shared/hub-limits.ts";
 import { AGENT_VENDORS, ALL_EFFORTS } from "../shared/vendors.ts";
 
@@ -247,6 +251,32 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "remove",
     cli: "schedule remove",
     usage: `  ${hub} schedule remove <编号>                                删除`,
+  },
+  {
+    command: "watch.add",
+    group: "watch",
+    action: "add",
+    cli: "watch add",
+    usage: `  ${hub} watch add (--until <命令> [--every <间隔>] | --after <时长>) [--max <时长>] [--graph <图编号> | --worker <编号>] --stdin
+                                                          让后台替你等外部条件（检查通过、部署完成等），满足、失败或超时都叫醒你；正文是结果出来后你要做的事。
+                                                          --until 的命令在项目主文件夹里、只读沙箱中跑（能联网，不能改文件），按这台电脑的 shell 写：
+                                                          不带 --every 只跑一次，退出码 0 算满足、其他算失败；带 --every（最短 ${formatDurationShort(WATCH_EVERY_MIN_MS)}）就每隔一段跑一次，直到退出码为 0。
+                                                          --after 不跑命令，到点叫醒你。--max 是最多等多久（默认 ${formatDurationShort(WATCH_MAX_DEFAULT_MS)}，最长 ${formatDurationShort(WATCH_MAX_CAP_MS)}）。
+                                                          --graph / --worker 把它挂到图或 Worker 上：在盯期间那一项不算等你处理；图结束或 Worker 收工后，结果不再叫醒你`,
+  },
+  {
+    command: "watch.list",
+    group: "watch",
+    action: "list",
+    cli: "watch list",
+    usage: `  ${hub} watch list                                          在盯的条件和最近的结果`,
+  },
+  {
+    command: "watch.close",
+    group: "watch",
+    action: "close",
+    cli: "watch close",
+    usage: `  ${hub} watch close <编号>                                  不用再盯了；正在跑的命令会停下，不再叫醒你`,
   },
   {
     command: "router.report",
