@@ -3,7 +3,7 @@ import { COMPLETED_WORK_PAGE_SIZE, EMPTY_TOKEN_USAGE, type CompletedWorkItem, ty
 import { COMPLETED_WORK_MAX_PAGES } from "./limits.ts";
 import { makeMessage } from "./test-utils.ts";
 import type { WorkerEntry } from "./selectors.ts";
-import { activeWorkOf, completedDaysOf, completedKeyOf, prLabelOf, stepTargetOf } from "./work-panel-model.ts";
+import { activeWorkOf, completedDayLabel, completedDaysOf, completedKeyOf, prLabelOf, stepTargetOf } from "./work-panel-model.ts";
 
 function makeWorker(overrides: Partial<WorkerEntry> & { conversationId: number }): WorkerEntry {
   return {
@@ -115,8 +115,8 @@ describe("completedDaysOf", () => {
         ],
       },
     ];
-    const days = completedDaysOf(pages, now);
-    expect(days.map((d) => [d.label, d.items.length])).toEqual([
+    const days = completedDaysOf(pages);
+    expect(days.map((d) => [completedDayLabel(d.dayStart, now), d.items.length])).toEqual([
       ["Today", 1],
       ["Yesterday", 1],
       ["Nov 22", 1],
@@ -124,7 +124,6 @@ describe("completedDaysOf", () => {
   });
 
   it("keeps the server's order inside a day", () => {
-    const now = localTs(2026, 11, 25, 16, 0);
     const pages: CompletedWorkPage[] = [
       {
         total: 3,
@@ -136,29 +135,28 @@ describe("completedDaysOf", () => {
         ],
       },
     ];
-    const days = completedDaysOf(pages, now);
+    const days = completedDaysOf(pages);
     expect(days[0]!.items.map((i) => i.title)).toEqual(["W10", "W11", "W12"]);
   });
 
   it("drops an item already shown on an earlier page", () => {
-    const now = localTs(2026, 11, 25, 16, 0);
     const ts = localTs(2026, 11, 25, 14, 0);
     const pages: CompletedWorkPage[] = [
       { total: 2, next: null, items: [workerItem(1, ts)] },
       { total: 2, next: null, items: [workerItem(1, ts), workerItem(2, ts - 60_000)] },
     ];
-    const days = completedDaysOf(pages, now);
+    const days = completedDaysOf(pages);
     expect(days[0]!.items.map((i) => i.title)).toEqual(["W1", "W2"]);
   });
 
-  it("returns the same array for the same pages and the same day", () => {
+  it("returns the same array for the same pages, and only the label moves past midnight", () => {
     const pages: CompletedWorkPage[] = [
       { total: 1, next: null, items: [workerItem(1, localTs(2026, 11, 25, 10, 0))] },
     ];
-    const morning = localTs(2026, 11, 25, 8, 0);
-    const evening = localTs(2026, 11, 25, 22, 0);
-    expect(completedDaysOf(pages, morning)).toBe(completedDaysOf(pages, evening));
-    expect(completedDaysOf(pages, localTs(2026, 11, 26, 1, 0))).not.toBe(completedDaysOf(pages, evening));
+    const days = completedDaysOf(pages);
+    expect(completedDaysOf(pages)).toBe(days);
+    expect(completedDayLabel(days[0]!.dayStart, localTs(2026, 11, 25, 23, 59))).toBe("Today");
+    expect(completedDayLabel(days[0]!.dayStart, localTs(2026, 11, 26, 0, 1))).toBe("Yesterday");
   });
 
   it("stays within COMPLETED_WORK_MAX_PAGES times COMPLETED_WORK_PAGE_SIZE items", () => {
@@ -171,7 +169,7 @@ describe("completedDaysOf", () => {
         workerItem(p * COMPLETED_WORK_PAGE_SIZE + i + 1, now - (p * COMPLETED_WORK_PAGE_SIZE + i) * 1000),
       ),
     }));
-    const days = completedDaysOf(pages, now);
+    const days = completedDaysOf(pages);
     const count = days.reduce((sum, d) => sum + d.items.length, 0);
     expect(count).toBe(max);
   });

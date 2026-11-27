@@ -1,7 +1,8 @@
-import { memo, useEffect, useState } from "react";
+import { memo } from "react";
 import { formatDurationShort } from "../../shared/schedule.ts";
-import { GRAPH_DELIVERY_AGE_TICK_MS } from "../limits.ts";
+import { MINUTE_TICK_MS } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
+import { useNow } from "../useNow.ts";
 import type { GraphDelivery } from "../work-status.ts";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
@@ -12,21 +13,7 @@ export const GraphDeliveryRow = memo(function GraphDeliveryRow({
   row: NonNullable<GraphDelivery["row"]>;
   detail?: boolean;
 }) {
-  const [now, setNow] = useState(Date.now);
-  // A hidden workbench surface keeps this state but drops the interval, so re-read the clock whenever the row is shown again.
-  useEffect(() => {
-    const tick = () => setNow(Date.now());
-    const onVisible = () => {
-      if (document.visibilityState === "visible") tick();
-    };
-    tick();
-    const timer = window.setInterval(tick, GRAPH_DELIVERY_AGE_TICK_MS);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, []);
+  const now = useNow(MINUTE_TICK_MS);
   const elapsed = Math.max(0, now - row.since);
   return (
     <div
@@ -42,7 +29,7 @@ export const GraphDeliveryRow = memo(function GraphDeliveryRow({
         {row.wait.kind === "pm" ? "Waiting for the PM" : `Waiting for #${row.wait.watchId}: ${row.wait.body}`}
       </span>
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-        {elapsed < GRAPH_DELIVERY_AGE_TICK_MS ? "<1m" : formatDurationShort(Math.floor(elapsed / GRAPH_DELIVERY_AGE_TICK_MS) * GRAPH_DELIVERY_AGE_TICK_MS)}
+        {elapsed < MINUTE_TICK_MS ? "<1m" : formatDurationShort(Math.floor(elapsed / MINUTE_TICK_MS) * MINUTE_TICK_MS)}
       </span>
     </div>
   );
