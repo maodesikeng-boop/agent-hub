@@ -7,7 +7,7 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
     JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
 };
 
 pub struct SessionJob {
@@ -43,10 +43,9 @@ impl SessionJob {
         }
 
         if restrict_ui {
+            // No JOB_OBJECT_UILIMIT_DESKTOP: vendor CLIs create a private desktop per shell command and fail on ERROR_ACCESS_DENIED.
             let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
-                UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES
-                    | JOB_OBJECT_UILIMIT_DESKTOP
-                    | JOB_OBJECT_UILIMIT_GLOBALATOMS,
+                UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_GLOBALATOMS,
             };
             let ui_ok = unsafe {
                 SetInformationJobObject(

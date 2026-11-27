@@ -62,7 +62,7 @@ Linux enforces the same boundaries with `bubblewrap` (see [Linux sandbox design]
 
 Windows enforces Worker isolation without administrator privileges or WSL 2 through `apps/windows/crates/fusa-win-helper` (see [Windows native architecture](windows-native-design.md)):
 
-- **Job Object and restricted token**: Every Worker runs inside a `KILL_ON_JOB_CLOSE` Job Object with `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_DESKTOP | UILIMIT_GLOBALATOMS` under a full `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)` token (never `WRITE_RESTRICTED`, so restricting SIDs participate in both read and write checks).
+- **Job Object and restricted token**: Every Worker runs inside a `KILL_ON_JOB_CLOSE` Job Object with `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_GLOBALATOMS` (not `UILIMIT_DESKTOP`, because vendor CLIs create a private desktop for each shell command) under a full `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)` token (never `WRITE_RESTRICTED`, so restricting SIDs participate in both read and write checks).
 - **Capability SIDs (`state\win-sandbox-sids.json`)**: Protected by an exclusive cross-process lock file (`state\win-sandbox-sids.lock`), storing the shared `FusaWorker` SID, per-Worker `FusaWorker-<id>` write SIDs, and per-session `FusaRead-<sessionId>` read-only SIDs.
 - **Write and read NTFS ACLs**:
   - Each root in `protectedRoots` gets inheritable `DENY FusaWorker` write permissions (write, append, delete, delete-child, `WRITE_DAC`, `WRITE_OWNER`) plus `OWNER RIGHTS (S-1-3-4): READ_CONTROL` so file owners cannot rewrite DACLs via `icacls` or `Set-Acl`.
