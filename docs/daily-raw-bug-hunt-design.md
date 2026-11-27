@@ -18,7 +18,7 @@
 
 Check three criteria before implementation starts:
 
-1. **User sentences to scenarios.** Both quoted user requests in Section 1 map to concrete scenarios in Section 8 (`S1` through `S14`).
+1. **User sentences to scenarios.** Both quoted user requests in Section 1 map to concrete scenarios in Section 8 (`S1` through `S11`).
 2. **Verification categories.** Section 8 covers every verification category in `docs/plan-standard.md`, gives a one-sentence reason for the one category that does not apply (no new Web view), and checks every matching `REVIEW.md` rule from `origin/main`.
 3. **Structurally distinct designs.** Section 3 compares three distinct architectures: PM-side external shell scripts copying live files (Candidate A), a daemon-owned read-only collector with a deterministic static rule engine and schedule-driven PM triage (Candidate B, chosen), and a day-one continuous in-daemon diagnostic event bus with its own scheduler and Web panel (Candidate C).
 
@@ -75,6 +75,77 @@ The Project Manager can adjust these engineering choices without escalating to t
 Bellwood should run a daily, strictly read-only static scan over the raw runtime data it produces every day (SQLite ledger, daemon and desktop logs, setup logs, runtime state snapshots, and readable vendor session transcripts), deduplicate and suppress known or fixed issues to prevent daily noise, and feed verified real bugs cleanly into the full bug-fix workflow without ever mutating live ledger or session files.
 
 ## 2. Current state and history
+
+### Subsystem architecture walkthrough (`how` synthesis)
+
+#### Overview
+
+Bellwood runs as one local Node daemon (`src/daemon/daemon.ts`) supervised by either a native desktop shell (`apps/macos/DaemonSupervisor.swift` or `apps/windows/crates/fusa-supervisor`), `systemd --user`, or a terminal command (`src/daemon/entry.ts`). That daemon is the single owner of `state/hub.sqlite`, every background cleanup and retention loop, every vendor driver process, the local `hub.sock` Agent API, and the `schedules` tick loop. Because SQLite is locked exclusively by the daemon and Workers are OS-sandboxed out of `state/`, any live, safe, read-only scan of daily runtime data belongs inside the daemon rather than in external scripts.
+
+#### Key concepts
+
+- **Exclusive SQLite ledger (`src/daemon/store/open.ts`, `src/daemon/store/db.ts`):** `openStore()` runs `PRAGMA locking_mode = EXCLUSIVE` and `PRAGMA journal_mode = WAL` so synchronous `node:sqlite` queries never stall behind foreign write locks.
+- **Turn and receipt settlement (`src/daemon/ledger/driver-events.ts`, `turn-completions.ts`, `settle-turn.ts`, `turns.ts`, `turn-tools.ts`, `turn-background-waits.ts`):** Driver events enter a per-session queue (`createDriverEventDrain`), persist durable `turn_completions` receipts on `turn.ended`, and settle `turns`, `turn_inputs`, `turn_tools`, and `messages.status` atomically.
+- **Dual-bounded hourly retention (`src/daemon/db-retention.ts`, `src/daemon/ledger/db-table-retention.ts`, `src/daemon/file-cleanup.ts`):** Background sweeps run every hour (`WORKER_RETENTION_INTERVAL_MS = 1h`) for SQLite tables and daily for files, enforcing `RESOURCE_REGISTRY` age and count caps.
+- **Process and temp isolation (`src/daemon/process-ledger.ts`, `src/daemon/session-tmp.ts`, `src/shared/write-scope.ts`, `src/daemon/sent-files.ts`):** `DataDirReadScope` denies `state/` and `run/admin.sock` to Workers and Router sessions, and `isShareable()` blocks delivering any file from `state/` or vendor home directories (`SENSITIVE_HOME_PATHS`).
+- **Two Agent API lanes (`src/daemon/agent-api/server.ts`, `src/daemon/ledger/hub-commands.ts`):** Regular `HUB_COMMANDS` execute inside synchronous `db.transaction` (`ledger.hubCall`) and append to `hub_calls`. Daemon-level commands such as `self.reload` (`SELF_RELOAD_AGENT_PATH`) run as standalone Fastify routes outside ledger transactions and stay out of `HUB_USAGE_PROMPT`.
+
+#### How it works
+
+```mermaid
+flowchart LR
+  subgraph External["External processes"]
+    Sup["Desktop supervisor\n(macOS Swift / Win Rust)"]
+    CLIs["8 Vendor CLIs\n(claude, codex, pi, agy, ...)"]
+  end
+  subgraph Daemon["Bellwood Daemon (src/daemon/daemon.ts)"]
+    Drv["Driver & Drain\n(driver-events.ts)"]
+    Led["SQLite Ledger\n(state/hub.sqlite, EXCLUSIVE)"]
+    Ret["Hourly Retention\n(db-retention.ts)"]
+    Sch["Scheduler Tick 30s\n(schedules.ts)"]
+    Api["Agent API\n(run/hub.sock)"]
+    Setup["Setup Runner\n(setup.ts)"]
+  end
+  subgraph Disk["On-disk raw data"]
+    Logs["state/logs/\ndaemon.log, desktop-daemon.log,\nsetup/worker-*.log"]
+    Json["state/*.json\nchild-processes, session-tmp,\nfeishu-inbound"]
+    Trans["userHome transcripts\n(vendorTranscriptPath)"]
+  end
+
+  Sup -->|"stdout/stderr + crash window"| Logs
+  CLIs -->|"events"| Drv -->|"receipts + writes"| Led
+  CLIs -->|"raw sessions"| Trans
+  Setup -->|"headers + exit footers"| Logs
+  Daemon -->|"fatal errors"| Logs
+  Daemon -->|"atomic JSON"| Json
+  Ret -->|"hourly prune"| Led
+  Sch -->|"schedule.run message"| Led
+  Api -->|"hub.sock (PM/Worker)"| Led
+```
+
+1. **Runtime data production:** During normal turns, vendor CLIs stream events into `createDriverEventDrain` (`driver-events.ts:51`), which writes `turns`, `turn_inputs`, `turn_tools`, `session_steps`, `messages`, and `turn_background_waits` into `state/hub.sqlite`. Failures in actions (`actions` table), `hub` calls (`hub_calls`), handovers (`handovers.failure_reason` and `handover.failed` system messages), timeouts (`worker.max_time_exceeded` system messages and live `worker_turn_timeouts`), schedules (`schedules.last_status = 'failed'` and `schedule.failed` system messages), and subsystems (`health` table) all persist in SQLite. Worktree setup runs write structured blocks with exit footers to `state/logs/setup/worker-<id>.log` (`setup.ts:230,253`). Fatal daemon exceptions write to `state/logs/daemon.log` (`entry.ts:44-54`), while desktop supervisors redirect daemon stderr and record crash-loop restarts in `state/logs/desktop-daemon.log` (`apps/desktop/contract.json:19`).
+2. **Retention and lifetime:** Every hour, `startWorkerRetention` (`daemon.ts:650`, `db-table-retention.ts:455`) prunes old ended Workers (14d / 300 max), PM tool messages (7d / 500 per conv), terminal actions (14d / 5,000), `hub_calls` (14d / 2,000), handovers (30d / 20 per conv, clearing consumed blobs), turns (30d / 5,000 per conv), `feishu_posts` (14d), and expired `feishu_offline_inbox` rows (24h TTL).
+3. **Scheduled wakeups and shutdown order:** Every 30 seconds (`SCHEDULER_TICK_MS`), `runSchedulerTick()` (`daemon.ts:623`) calls `ledger.runDueSchedules(now)` (`schedules.ts:212`). Due daily schedules enqueue one `schedule.run` system message to the owning PM's conversation (skipping if the previous run's message is still `queued`/`delivered`/`processing`, and running missed schedules at most once on startup with `catchUp: true`). On shutdown (`daemon.ts:241-305`), timers stop first, then handover/catalog runners, Feishu, Router, executor, drivers, admin socket, UI server, and `agentApi` (bounded by `AGENT_API_CLOSE_MS = 3_000` ms), followed by `ledger.settleDriverEvents()` and finally `db.close()`.
+
+#### Where things live
+
+- `src/daemon/daemon.ts` and `src/daemon/entry.ts`: Daemon bootstrap, shutdown order, scheduler tick, and `daemon.log` fatal writer.
+- `src/daemon/store/{open,db,migrate}.ts`: Exclusive SQLite lock, WAL setup, and manifest-checked migrations.
+- `src/daemon/ledger/{turns,turn-tools,turn-completions,turn-background-waits,schedules,hub-commands,db-table-retention}.ts`: Core ledger state machines and hourly retention.
+- `src/daemon/setup/setup.ts`, `src/daemon/process-ledger.ts`, `src/daemon/session-tmp.ts`, `src/daemon/feishu/{store,account-bot,inbound-checkpoint}.ts`: Setup logs, process/temp JSON ledgers, and Feishu storage.
+- `src/daemon/agent-api/server.ts` and `src/hub/{args,parse,cli,usage}.ts`: `hub.sock` HTTP routes and `hub` CLI.
+- `src/vendors/*/daemon.ts` and `src/daemon/driver/transcript.ts`: Per-vendor transcript path hooks and `vendorFailureOf()` classification (`src/shared/vendors.ts:390`).
+- `apps/desktop/contract.json`, `apps/macos/DaemonSupervisor.swift`, `apps/windows/crates/fusa-supervisor/src/supervisor.rs`: Shared desktop supervisor crash-log contract.
+
+#### Gotchas
+
+1. **`worker_turn_timeouts` is ephemeral, not a 24h log.** `migrations/0024_worker_turn_timeout.sql:5` deletes each row when the Worker's turn finishes or ends. Historical 24-hour timeouts live in `messages` as system notices with `json_extract(meta, '$.event') = 'worker.max_time_exceeded'` (`src/shared/domain.ts:291`); `worker_turn_timeouts` only shows *currently active* overdue turns (`notified = 1`).
+2. **`feishu_posts` has no error column, and `feishu_offline_inbox` expires at 24h.** `feishu_posts.state` is `streaming | final | card_pending | card_settled` (`migrations/0034_feishu.sql:49`). Real Feishu failure signals come from `health` (`module = 'feishu'`), stale `feishu_posts` stuck in `streaming`, and aged undelivered `feishu_offline_inbox` rows (before hourly retention deletes them at `FEISHU_OFFLINE_INBOX_TTL_MS = 24h`).
+3. **`setup/worker-*.log` contains both successes and failures, and appends retries.** `runSetupCommand()` (`src/daemon/setup/setup.ts:230,253`) writes `=== <ISO> 在 <cwd> 跑准备命令 ===` and `--- 结束（<ok|failed|timeout|stopped>，<detail>），用时 <sec> 秒 ---` to the same file on every attempt. Static parsing must inspect the latest block's `kind` and flag only `failed` or `timeout`, never `ok` or `stopped`.
+4. **`state/child-processes.json` has no `sessionId` or timestamp.** Its schema (`src/daemon/process-ledger.ts:10-15`) is `{ pid, startTime, purpose, ownsGroup }`, pruned on child exit and startup `reapStale()`. Static orphan detection therefore relies on `state/session-tmp.json` (`{ sessionId, path, createdAt }`, `src/daemon/session-tmp.ts:12-16`) joined against `agent_sessions WHERE status = 'ended'`, plus liveness checks rather than nonexistent `sessionId` fields in `child-processes.json`.
+5. **`daemon.log` only receives fatal errors; normal stderr only lands in `desktop-daemon.log` under desktop supervisors.** `src/daemon/entry.ts:44-54` writes startup failures, `uncaughtException`, and `unhandledRejection` to `daemon.log`. Runtime `console.error` lines and crash-loop banners live in `desktop-daemon.log`, with different crash wording on macOS (`DaemonSupervisor.swift:1332-1335`: `<N> crashes within <W>s` / `Restarting in ... (crash N/M within Ws)`) and Windows (`supervisor.rs:775,1683`: `Owned daemon crashed:` / `The daemon crashed within <W> seconds <N> times`).
+6. **`handovers` stores errors in `failure_reason`, and `driver.warning` lives in `messages.meta`.** `migrations/0031_loaded_skills.sql:46` names the handover error column `failure_reason` (not `error`), alongside `handover.failed` and `driver.warning` entries in `messages` (`src/shared/domain.ts:278,285`).
+7. **Tight request and shutdown timeouts, plus `isShareable` restrictions.** `agent-api/server.ts:618` enforces `HUB_REQUEST_TIMEOUT_MS = 15_000` ms per request, and `daemon.ts:292` enforces `AGENT_API_CLOSE_MS = 3_000` ms during shutdown. Collection must stay bounded and abort immediately on `closing.signal`. Also, `isShareable()` (`src/daemon/sent-files.ts:107-122`) refuses to attach files from `state/` or vendor home directories (`SENSITIVE_HOME_PATHS`), so redacted findings must be returned via `hub diag bug-hunt` output rather than pointing `--file` at raw files.
 
 ### Design history
 
@@ -166,14 +237,14 @@ Missing concepts in the current codebase:
 
 | Category | Trigger condition (static rule) | Default severity | Known-noise filter (excluded) |
 |---|---|---|---|
-| `daemon_crash` | `uncaughtException`, `unhandledRejection`, or `StartupError` in `daemon.log`; or supervisor crash / restart loop in `desktop-daemon.log`. | `high` | Graceful `SIGTERM`, `SIGINT`, and reload exit code `75` (`apps/desktop/contract.json:17`). |
-| `turn_failure_or_orphan` | `turns` with `outcome = 'failed'`, `stop_source = 'crash'`, `outcome = 'empty_recovery'`, `turn_inputs.recovery_attempts >= TURN_RECOVERY_MAX_ATTEMPTS`, or `status = 'running'` on an `ended`/`broken` session. | `high` for crash/orphan/exhausted recovery; `medium` for repeated non-quota failures | User-initiated stops (`stop_source = 'user'`), handover stops (`stop_source = 'handover'`), and vendor `quota`/`auth` failures (categorized by `vendorFailureOf`). |
+| `daemon_crash` | `uncaughtException`, `unhandledRejection`, or `StartupError` in `daemon.log`; or supervisor crash / restart loop in `desktop-daemon.log` (matching both macOS `<N> crashes within <W>s` / `Restarting in ... (crash N/M)` and Windows `Owned daemon crashed:` / `The daemon crashed within <W> seconds <N> times`). | `high` | Graceful `SIGTERM`, `SIGINT`, and reload exit code `75` (`apps/desktop/contract.json:17`). |
+| `turn_failure_or_orphan` | `turns` with `outcome = 'failed'`, `stop_source = 'crash'`, `outcome = 'empty_recovery'`, `turn_inputs.recovery_attempts >= TURN_RECOVERY_MAX_ATTEMPTS`, `status = 'running'` on an `ended`/`broken` session, or `driver.warning` system messages in `messages`. | `high` for crash/orphan/exhausted recovery; `medium` for repeated non-quota failures | User-initiated stops (`stop_source = 'user'`), handover stops (`stop_source = 'handover'`), and vendor `quota`/`auth` failures (categorized by `vendorFailureOf`). |
 | `tool_unconfirmed_leak` | `turn_tools` with `status = 'unconfirmed'` on `ended` turns reaching `>= BUG_HUNT_UNCONFIRMED_TOOL_THRESHOLD` (3) per vendor/tool in window. | `medium` (`high` if >= 10) | Turns ended by `stop_source IN ('user', 'shutdown', 'handover')` where open tools are expected to close as unconfirmed. |
 | `ledger_settlement_or_action_stuck` | `turn_completions` with `attempts > 0`; `actions` in `failed` or `abandoned`; `messages` stuck in `queued`/`delivered`/`processing` for > 15m on `idle`/`ended` sessions; or `health.consecutive_failures >= HEALTH_FAILURE_THRESHOLD`. | `high` for `turn_completions` / `store` health; `medium` for `actions` / stuck messages | Transient single-attempt retries that later reached `done`. |
 | `hub_internal_error` | Any `hub_calls` row with `ok = 0 AND error_code = 'internal'`; or >= `BUG_HUNT_HUB_ERROR_SPIKE_THRESHOLD` (5) identical `(command, error_code)` rejections in 24h. | `high` for `internal`; `low` for repeated usage/conflict spikes | Isolated user/agent typos (`invalid` count < 5). |
-| `graph_or_worker_invariant` | `task_graph_steps` in `running` with no `open` Worker; `worker_turn_timeouts` bursts (>= 2); `turn_background_waits` hitting max reminders (`reminders_sent >= WORKER_BACKGROUND_REMIND_AT_MS.length`); or `handovers` with `status = 'failed'`. | `medium` (`high` for broken graph invariant) | Cancelled graphs or paused checkpoints waiting normally on user/PM. |
-| `channel_or_setup_failure` | `schedules.last_status = 'failed'`; failed `router_commands`; expired/failed `feishu_offline_inbox` or `feishu_posts` errors; `self-reload-build.log` build failure; or >= 2 Workers hitting the same `setup/worker-*.log` failure signature. | `medium` (`high` for self-reload build or repeated setup failures) | Skipped schedules when prior run is legitimately still in flight (`last_status = 'skipped'`). |
-| `vendor_transcript_or_resource_leak` | Malformed JSONL lines or unhandled error frames in readable vendor transcripts (`claude`, `codex`, `pi`) correlated with a failed turn; or orphaned `child-processes.json` / `session-tmp.json` entries older than `SESSION_TMP_ORPHAN_RETENTION_MS` for ended sessions; or optional test-bench flow failures. | `medium` (`low` for single malformed line on an `ok` turn) | Cleanly ended active sessions and intentionally kept resources (`resource_decisions`). |
+| `graph_or_worker_invariant` | `task_graph_steps` in `running` with no `open` Worker; `worker.max_time_exceeded` system-message bursts (>= 2 in 24h) or currently overdue `worker_turn_timeouts` (`notified = 1`); `turn_background_waits` hitting max reminders (`reminders_sent >= WORKER_BACKGROUND_REMIND_AT_MS.length`); or `handovers` with `status = 'failed'` (`failure_reason`). | `medium` (`high` for broken graph invariant) | Cancelled graphs or paused checkpoints waiting normally on user/PM. |
+| `channel_or_setup_failure` | `schedules.last_status = 'failed'` or `schedule.failed` system messages; failed `router_commands`; stale `feishu_posts` stuck in `streaming` > 15m or aged `feishu_offline_inbox` entries (plus `health.module = 'feishu'`); `self-reload-build.log` build failure; or >= 2 Workers whose latest `setup/worker-*.log` block ended with `--- 结束（failed|timeout，...） ---` carrying the same failure signature. | `medium` (`high` for self-reload build or repeated setup failures) | Skipped schedules when prior run is legitimately still in flight (`last_status = 'skipped'`), and `setup/worker-*.log` files whose latest block ended with `ok` or `stopped`. |
+| `vendor_transcript_or_resource_leak` | Malformed JSONL lines or unhandled error frames in readable vendor transcripts (`claude`, `codex`, `pi`) correlated with a failed turn; orphaned `session-tmp.json` entries older than `SESSION_TMP_ORPHAN_RETENTION_MS` for `ended` sessions or dead/mismatched `child-processes.json` entries; or optional test-bench flow failures. | `medium` (`low` for single malformed line on an `ok` turn) | Cleanly ended active sessions and intentionally kept resources (`resource_decisions`). |
 
 #### 3. Deduplication, fixed-bug suppression, regression detection, and budget caps
 
@@ -317,7 +388,7 @@ None. This change adds a new read-only diagnostic collector and daily static bug
 Every quoted user requirement and settled rule maps to concrete scenarios below:
 
 - **S1. Daily static scan detects bugs across all raw data classes without mutating `hub.sqlite`.**
-  - First: Seed a ledger with abnormal rows (crashed turn, unconfirmed tool leak, `hub_calls` internal error, failed action, failed handover, stuck graph step, failed schedule), plus `daemon.log` (`unhandledRejection`), `desktop-daemon.log` (crash burst), `setup/worker-1.log` (repeated failure), `child-processes.json` (orphan), and a Claude JSONL error transcript. Record `PRAGMA data_version` and row counts on `hub.sqlite`.
+  - First: Seed a ledger with abnormal rows (crashed turn, unconfirmed tool leak, `hub_calls` internal error, failed action, failed handover, stuck graph step, failed schedule), plus `daemon.log` (`unhandledRejection`), `desktop-daemon.log` (crash burst), `setup/worker-1.log` (repeated failure footer), `session-tmp.json` (orphan), and a Claude JSONL error transcript. Record `PRAGMA data_version` and row counts on `hub.sqlite`.
   - Next: Run `hub diag bug-hunt --since 24h` as a PM.
   - Expected: All eight signal categories produce deterministic redacted findings with stable `bh-...` fingerprints; expected noise (user stops, quota limits, clean exits) is excluded; `hub.sqlite` `data_version` and every table row count are completely unchanged.
 - **S2. Two consecutive turns / daily runs deduplicate repeats and detect post-fix regressions.**

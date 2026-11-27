@@ -91,8 +91,33 @@ describe("collectRawTelemetry acceptance scenarios (S1, S3, S5, S6, S7, S8, S11)
       "utf8",
     );
     writeFileSync(
+      join(paths.logsDir, "desktop-daemon.log"),
+      [
+        `${new Date(T_NOW - 18_000).toISOString()} [agent-hub] Restarting in 2s (crash 2/5 within 60s)…`,
+        `${new Date(T_NOW - 17_000).toISOString()} [supervisor] Owned daemon crashed: exit code 1`,
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    writeFileSync(
       join(paths.setupLogsDir, "worker-7.log"),
-      "setup command exited with code 1\nError: EACCES permission denied\n",
+      [
+        `=== ${new Date(T_NOW - 15_000).toISOString()} 在 /repo 跑准备命令 ===`,
+        "pnpm install",
+        "---",
+        "Error: EACCES permission denied",
+        "--- 结束（failed，退出码 1），用时 2 秒 ---",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(paths.setupLogsDir, "worker-8.log"),
+      [
+        `=== ${new Date(T_NOW - 14_000).toISOString()} 在 /repo 跑准备命令 ===`,
+        "pnpm install",
+        "---",
+        "Done in 1s",
+        "--- 结束（ok，退出码 0），用时 1 秒 ---",
+      ].join("\n") + "\n",
       "utf8",
     );
 
@@ -113,7 +138,9 @@ describe("collectRawTelemetry acceptance scenarios (S1, S3, S5, S6, S7, S8, S11)
     expect(window.turnAnomalies.length).toBeGreaterThanOrEqual(1);
     expect(window.hubCallFailures.length).toBe(1);
     expect(window.logHits.some((hit) => hit.source === "daemon_log" && hit.kind === "uncaught_exception")).toBe(true);
+    expect(window.logHits.some((hit) => hit.source === "desktop_log" && (hit.kind === "crash_loop" || hit.kind === "unexpected_exit"))).toBe(true);
     expect(window.setupFailures.some((f) => f.workerId === 7)).toBe(true);
+    expect(window.setupFailures.some((f) => f.workerId === 8)).toBe(false);
     expect(db.get<{ data_version: number }>("PRAGMA data_version")!.data_version).toBe(beforeVersion);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM hub_calls")!.n).toBe(beforeHubCalls);
   });
@@ -186,7 +213,11 @@ describe("collectRawTelemetry acceptance scenarios (S1, S3, S5, S6, S7, S8, S11)
     writeFileSync(join(paths.logsDir, "daemon.log"), bigLog, "utf8");
 
     for (let i = 1; i <= RAW_TELEMETRY_SETUP_LOGS_MAX_FILES + 20; i++) {
-      writeFileSync(join(paths.setupLogsDir, `worker-${i}.log`), `error in worker ${i}\n`, "utf8");
+      writeFileSync(
+        join(paths.setupLogsDir, `worker-${i}.log`),
+        `=== ${new Date(T_NOW - i * 1_000).toISOString()} 在 /repo 跑准备命令 ===\ncmd\n---\nerror in worker ${i}\n--- 结束（failed，退出码 1），用时 1 秒 ---\n`,
+        "utf8",
+      );
     }
 
     const window = await collectRawTelemetry(
