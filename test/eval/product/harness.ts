@@ -1,45 +1,56 @@
-// Tier 1 deterministic product capability harness runner and real-CLI loopback probe.
-// Invariant: costs 0 USD, isolates all CLI configs in scratch directories, and never mutates real user config files.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+// Tier 1 deterministic product capability harness runner exercising real Bellwood src/ paths at $0 API cost.
+// Invariant: isolates all CLI configs in scratch directories and never masks check or real-CLI probe failures.
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createSessionTokens } from "../../../src/daemon/agent-api/tokens.ts";
 import { osSandboxAvailable } from "../../../src/daemon/driver/write-scope.ts";
 import { createLedger } from "../../../src/daemon/ledger/index.ts";
 import { isSystemMessageCurrent } from "../../../src/daemon/ledger/notice-currency.ts";
+import { createRouterDispatcher } from "../../../src/daemon/router/dispatcher.ts";
 import { formatFleetDigestForPrompt } from "../../../src/daemon/router/prompt.ts";
+import { createRouterSandboxGuard } from "../../../src/daemon/router/sandbox.ts";
+import { createRouterTurnPurposes, createRouterTurnRunner } from "../../../src/daemon/router/single-turn.ts";
+import { createLocalTargetPort, createRouterTargetRegistry } from "../../../src/daemon/router/target-port.ts";
 import { openDatabase } from "../../../src/daemon/store/db.ts";
 import { migrate } from "../../../src/daemon/store/migrate.ts";
-import { ROUTER_FLEET_DIGEST_MAX_BYTES, utf8Bytes } from "../../../src/shared/index.ts";
+import {
+  ROUTER_FLEET_DIGEST_MAX_BYTES,
+  bundledModelCatalog,
+  utf8Bytes,
+  type Driver,
+  type DriverEventListener,
+  type DriverSendInput,
+  type DriverSendResult,
+  type SessionId,
+} from "../../../src/shared/index.ts";
 import { appendDeliverySuffix } from "../../../src/shared/pm-agenda.ts";
-import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "../../../src/shared/vendors.ts";
+import { AGENT_VENDORS, vendorSpec } from "../../../src/shared/vendors.ts";
 import { sandboxAllowsNestedSandbox } from "../../sandbox-probes.ts";
 import type { CheckResult } from "../types.ts";
 import { extractScaleSafeFacts, listProductEvalScenarios, selectEvalScenarios } from "./catalog.ts";
-import { appendBaselineEntry, readBaselineLedger, renderCapabilityReport } from "./ledger.ts";
+import { runFirstMessageEfficiencyScenario, runResidentEfficiencyScenario } from "./harness-efficiency.ts";
+import { type ScaleBenchmarkMetrics } from "./harness-report.ts";
+import { appendBaselineEntry, readBaselineLedger } from "./ledger.ts";
 import {
   PRODUCT_EVAL_HISTORY_MAX_RUNS,
   PRODUCT_EVAL_LEDGER_SCAN_MAX_ROWS,
   PRODUCT_EVAL_MAX_ENV_ERROR_RATE,
   PRODUCT_EVAL_MAX_REQUEST_BODY_BYTES,
 } from "./limits.ts";
-import {
-  checkPromptPrefixStability,
-  normalizeContextSnapshot,
-  startMockModelServer,
-} from "./mock-model-server.ts";
+import { startMockModelServer } from "./mock-model-server.ts";
+import { probeRealCliMatrix, type RealCliProbeOutcome } from "./real-cli-probes.ts";
 import {
   aggregateScenarioTrials,
   computeGraderFingerprint,
-  evaluateComparison,
+  evaluateTier1Scorecard,
 } from "./scoring.ts";
 import {
   CAPABILITY_DIMENSIONS,
   type CapabilityScorecard,
   type EvalScenarioSpec,
-  type PrefixStabilityReport,
   type TrialOutcome,
   type VendorCoverageRow,
 } from "./types.ts";
@@ -50,29 +61,10 @@ import {
   resolveVendorMockEnv,
 } from "./vendor-profiles.ts";
 
-export interface ScaleBenchmarkMetrics {
-  readonly workerCount: number;
-  readonly messageCount: number;
-  readonly stepLogCount: number;
-  readonly turnCount: number;
-  readonly interruptedTurnCount: number;
-  readonly routerCommandCount: number;
-  readonly malformedMetaCount: number;
-  readonly scanDurationMs: number;
-  readonly heapDeltaBytes: number;
-  readonly truncated: boolean;
-}
+export { renderTier1BaselineReport, type ScaleBenchmarkMetrics } from "./harness-report.ts";
+export type { RealCliProbeOutcome } from "./real-cli-probes.ts";
 
-export interface RealCliProbeOutcome {
-  readonly vendor: AgentVendor;
-  readonly binaryPath: string | null;
-  readonly status: "verified" | "not_verified";
-  readonly detail: string;
-  readonly resumePrefixStable: boolean | null;
-  readonly freshSessionDriftCaught: boolean | null;
-  readonly userConfigUntouched: boolean;
-  readonly recordedTurns: number;
-}
+const SCALE_BENCHMARK_RUNS = 5;
 
 export interface Tier1HarnessOptions {
   readonly runId?: string;
@@ -94,34 +86,6 @@ export interface Tier1HarnessResult {
   readonly vendorMatrix: readonly VendorCoverageRow[];
   readonly realCliProbes: readonly RealCliProbeOutcome[];
   readonly scaleBenchmark: ScaleBenchmarkMetrics;
-}
-
-interface FileFingerprint {
-  readonly path: string;
-  readonly exists: boolean;
-  readonly mtimeMs: number | null;
-  readonly sha256: string | null;
-}
-
-function fingerprintFile(path: string): FileFingerprint {
-  if (!existsSync(path)) {
-    return { path, exists: false, mtimeMs: null, sha256: null };
-  }
-  const st = statSync(path);
-  const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
-  return { path, exists: true, mtimeMs: st.mtimeMs, sha256: hash };
-}
-
-function sameFingerprint(a: FileFingerprint, b: FileFingerprint): boolean {
-  return a.exists === b.exists && a.mtimeMs === b.mtimeMs && a.sha256 === b.sha256;
-}
-
-function whichBinary(command: string): string | null {
-  const probe = process.platform === "win32" ? "where" : "which";
-  const res = spawnSync(probe, [command], { encoding: "utf8" });
-  if (res.status !== 0) return null;
-  const first = res.stdout.trim().split(/\r?\n/)[0]?.trim();
-  return first || null;
 }
 
 function gitMetadata(): { branch: string; commit: string } {
@@ -170,45 +134,169 @@ function makeOutcome(
   };
 }
 
-function runRoutingScenario(spec: EvalScenarioSpec, commit: string, graderSha: string): TrialOutcome {
-  const digest = formatFleetDigestForPrompt(
-    [
-      {
-        deviceId: "dev-local",
-        deviceName: "Local Mac",
-        online: true,
-        pms: Array.from({ length: 12 }, (_, i) => ({
-          pmId: i + 1,
-          pmName: `PM ${i + 1}`,
-          project: { id: i + 1, name: `project-${i + 1}`, description: `Project description ${i + 1}` },
-          activeWorkers: [],
-          activeWorkerTotal: 0,
-          pendingDecisionCount: i % 2,
-        })),
-      },
-    ],
-    [],
-  );
-  const withinBudget = utf8Bytes(digest) <= ROUTER_FLEET_DIGEST_MAX_BYTES;
-  const hasProject = digest.includes("project-1");
+class ZeroLlmSpyDriver implements Driver {
+  started = 0;
+  sent = 0;
+  private readonly listeners = new Set<DriverEventListener>();
+  async start(_sessionId: SessionId): Promise<void> {
+    this.started += 1;
+  }
+  async send(_sessionId: SessionId, _input: DriverSendInput): Promise<DriverSendResult> {
+    this.sent += 1;
+    return { kind: "written" };
+  }
+  async interrupt(_sessionId: SessionId): Promise<void> {}
+  async end(_sessionId: SessionId): Promise<void> {}
+  async shutdown(): Promise<void> {}
+  async cleanupStale(): Promise<void> {}
+  async queryCommands(): Promise<null> {
+    return null;
+  }
+  onEvent(listener: DriverEventListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+}
 
-  const checks: CheckResult[] = [
-    {
-      id: "RT1",
-      title: "Fleet digest stays within ROUTER_FLEET_DIGEST_MAX_BYTES",
-      status: withinBudget ? "pass" : "fail",
-      reason: `Rendered ${utf8Bytes(digest)} bytes (limit ${ROUTER_FLEET_DIGEST_MAX_BYTES})`,
-      evidence: [],
-    },
-    {
-      id: "RT2",
-      title: "Fleet digest preserves active project identifiers for routing",
-      status: hasProject ? "pass" : "fail",
-      reason: hasProject ? "Project identifiers preserved in digest" : "Missing expected project identifier",
-      evidence: [],
-    },
-  ];
-  return makeOutcome(spec, commit, graderSha, checks, true, 1);
+async function runRoutingScenario(
+  spec: EvalScenarioSpec,
+  commit: string,
+  graderSha: string,
+  workDir: string,
+): Promise<TrialOutcome> {
+  const routeRoot = join(workDir, "route-track-a");
+  const dataHome = join(routeRoot, "data");
+  const stateDir = join(dataHome, "state");
+  const launchDir = join(stateDir, "launch");
+  const uploadsDir = join(stateDir, "uploads");
+  const proj1Dir = join(routeRoot, "eval-route-proj");
+  const proj2Dir = join(routeRoot, "eval-other-proj");
+  for (const dir of [stateDir, launchDir, uploadsDir, proj1Dir, proj2Dir]) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const db = openDatabase(join(routeRoot, "router.sqlite"));
+  migrate(db);
+  const ledger = createLedger(db, {
+    pmHomeRoot: join(stateDir, "pm-home"),
+    personasDir: join(dataHome, "personas"),
+    dataHome,
+    uploadsDir,
+  });
+  const spyDriver = new ZeroLlmSpyDriver();
+  const localPort = createLocalTargetPort({
+    ledger,
+    deviceId: "dev-local",
+    deviceName: "EvalHost",
+    uploadsDir,
+    probeWorkspace: async () => ({ kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false }),
+  });
+  const dispatcher = createRouterDispatcher({
+    ledger,
+    runTurn: createRouterTurnRunner({
+      ledger,
+      driver: spyDriver,
+      tokens: createSessionTokens(),
+      purposes: createRouterTurnPurposes(),
+      stateDir,
+      launchDir,
+    }),
+    sandboxGuard: createRouterSandboxGuard(),
+    targetRegistry: createRouterTargetRegistry({ localPort }),
+    models: { list: async () => [bundledModelCatalog("claude")] },
+    resolveAttachment: () => null,
+    agentTimeoutMs: 500,
+  });
+
+  try {
+    const pm1 = ledger.createPm({ name: "Route PM 1", mode: "manage_only", vendor: "claude", persona: "" });
+    ledger.hubCall(pm1.sessionId, "project.create", { folder: proj1Dir, name: "eval-route-proj" });
+    const pm2 = ledger.createPm({ name: "Route PM 2", mode: "manage_only", vendor: "claude", persona: "" });
+    ledger.hubCall(pm2.sessionId, "project.create", { folder: proj2Dir, name: "eval-other-proj" });
+
+    const verbatimBody = "请检查构建脚本并原样保留 $HOME";
+    const cmd1 = await dispatcher.submitCommand({
+      clientId: "tier1-track-a-1",
+      text: `@eval-route-proj ${verbatimBody}`,
+    });
+    const cmdDup = await dispatcher.submitCommand({
+      clientId: "tier1-track-a-1",
+      text: `@eval-route-proj ${verbatimBody}`,
+    });
+
+    const pm1UserMsgs = ledger.messagesBefore(pm1.conversation.id, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user");
+    const pm2UserMsgs = ledger.messagesBefore(pm2.conversation.id, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user");
+
+    const receiptRow = db.get<{ status: string; dispatched_json: string | null }>(
+      "SELECT status, dispatched_json FROM router_commands WHERE id = ?",
+      cmd1.id,
+    );
+    const parsedDispatched = receiptRow?.dispatched_json
+      ? (JSON.parse(receiptRow.dispatched_json) as Array<{ op?: string; pmId?: number; verbatim?: boolean }>)
+      : [];
+
+    const digest = formatFleetDigestForPrompt(
+      [
+        {
+          deviceId: "dev-local",
+          deviceName: "EvalHost",
+          online: true,
+          pms: ledger.getRouterDigest().pms.map((p) => ({
+            pmId: p.pmId,
+            pmName: p.name,
+            project: p.project ? { id: p.project.id, name: p.project.name, description: p.project.description } : null,
+            activeWorkers: [],
+            activeWorkerTotal: 0,
+            pendingDecisionCount: 0,
+          })),
+        },
+      ],
+      [],
+    );
+    const digestOk = utf8Bytes(digest) <= ROUTER_FLEET_DIGEST_MAX_BYTES && digest.includes("eval-route-proj");
+
+    const trackAOk =
+      cmd1.status === "dispatched" &&
+      cmd1.plan?.track === "A" &&
+      cmd1.model === null &&
+      spyDriver.started === 0 &&
+      spyDriver.sent === 0 &&
+      pm1UserMsgs.length === 1 &&
+      pm1UserMsgs[0]?.text === verbatimBody &&
+      pm2UserMsgs.length === 0 &&
+      digestOk;
+
+    const durableReceiptOk =
+      receiptRow?.status === "dispatched" &&
+      parsedDispatched.length === 1 &&
+      parsedDispatched[0]?.op === "pm.forward" &&
+      parsedDispatched[0]?.pmId === pm1.pm.id &&
+      parsedDispatched[0]?.verbatim === true &&
+      cmdDup.id === cmd1.id &&
+      pm1UserMsgs.length === 1;
+
+    const checks: CheckResult[] = [
+      {
+        id: "RT1",
+        title: "Router Track A resolveAtMention dispatches @target verbatim with 0 LLM calls and bounded fleet digest",
+        status: trackAOk ? "pass" : "fail",
+        reason: `track=${String(cmd1.plan?.track)}, driverCalls=${spyDriver.started}/${spyDriver.sent}, pm1Msgs=${pm1UserMsgs.length}, digestBytes=${utf8Bytes(digest)}`,
+        evidence: [],
+      },
+      {
+        id: "RT2",
+        title: "Router persists durable delivery receipt in router_commands and preserves clientId idempotency",
+        status: durableReceiptOk ? "pass" : "fail",
+        reason: `receiptStatus=${String(receiptRow?.status)}, dispatched=${parsedDispatched.length}, dupIdMatch=${cmdDup.id === cmd1.id}`,
+        evidence: [],
+      },
+    ];
+    return makeOutcome(spec, commit, graderSha, checks, true, 1);
+  } finally {
+    await dispatcher.close();
+    ledger.close();
+    db.close();
+  }
 }
 
 function runOrchestrationScenario(
@@ -324,147 +412,6 @@ function runExecutionScenario(
   return { outcome: makeOutcome(spec, commit, graderSha, checks, true, 1), matrix };
 }
 
-async function runResidentEfficiencyScenario(
-  spec: EvalScenarioSpec,
-  commit: string,
-  graderSha: string,
-): Promise<TrialOutcome> {
-  const server = await startMockModelServer({
-    turns: [{ text: "resident reply 1" }, { text: "resident reply 2" }],
-  });
-  try {
-    const r1 = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-mock",
-        instructions: "System rules for PM.",
-        prompt_cache_key: "resident-sess-1",
-        tools: [{ type: "function", name: "Bash" }],
-        input: [{ role: "user", content: "Turn one" }],
-      }),
-    });
-    await r1.text();
-    const r2 = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-mock",
-        instructions: "System rules for PM.",
-        prompt_cache_key: "resident-sess-1",
-        tools: [{ type: "function", name: "Bash" }],
-        input: [
-          { role: "user", content: "Turn one" },
-          { role: "assistant", content: "resident reply 1" },
-          { role: "user", content: "Turn two" },
-        ],
-      }),
-    });
-    await r2.text();
-
-    const recorded = server.requests();
-    const stableReport = checkPromptPrefixStability(recorded);
-    const mutated = [
-      recorded[0]!,
-      { ...recorded[1]!, systemText: "System rules for PM. Mutated mid-session." },
-    ];
-    const brokenReport = checkPromptPrefixStability(mutated);
-    const snapshot = normalizeContextSnapshot(
-      { ...recorded[0]!, systemText: "Path /Users/alice/repo C:\\Users\\bob\\app 2026-11-28T02:00:00.000Z" },
-      { dynamicRoots: ["/private/tmp/work"] },
-    );
-    const redactedOk =
-      !snapshot.includes("/Users/alice") &&
-      !snapshot.includes("C:\\Users\\bob") &&
-      snapshot.includes("<USER_HOME>") &&
-      snapshot.includes("<TIMESTAMP>");
-
-    const checks: CheckResult[] = [
-      {
-        id: "EF1",
-        title: "Resident prompt channel preserves prefix across consecutive turns and catches mutations",
-        status: stableReport.stable && !brokenReport.stable && brokenReport.firstDivergenceTurn === 1 ? "pass" : "fail",
-        reason: `append-only stable=${stableReport.stable}, mutation caught at turn=${brokenReport.firstDivergenceTurn}`,
-        evidence: [],
-      },
-      {
-        id: "EF2",
-        title: "Model-visible context snapshot redacts cross-platform paths and timestamps",
-        status: redactedOk ? "pass" : "fail",
-        reason: redactedOk ? "Normalized snapshot redacted user paths and timestamps" : "Leak detected in snapshot",
-        evidence: [],
-      },
-    ];
-    return makeOutcome(spec, commit, graderSha, checks, stableReport.stable, 2);
-  } finally {
-    await server.close();
-  }
-}
-
-async function runFirstMessageEfficiencyScenario(
-  spec: EvalScenarioSpec,
-  commit: string,
-  graderSha: string,
-): Promise<TrialOutcome> {
-  const server = await startMockModelServer({
-    turns: [{ text: "first_message reply 1" }, { text: "first_message reply 2" }],
-  });
-  try {
-    const r1 = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "first-msg-mock",
-        messages: [{ role: "user", content: "[SYSTEM]\nInitial request" }],
-      }),
-    });
-    await r1.text();
-    const r2 = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "first-msg-mock",
-        messages: [
-          { role: "user", content: "[SYSTEM]\nInitial request" },
-          { role: "assistant", content: "first_message reply 1" },
-          { role: "user", content: "Follow up\n[PM Agenda Delta]" },
-        ],
-      }),
-    });
-    await r2.text();
-
-    const recorded = server.requests();
-    const stableReport = checkPromptPrefixStability(recorded);
-    const brokenReport = checkPromptPrefixStability([
-      recorded[0]!,
-      {
-        ...recorded[1]!,
-        inputMessages: [
-          { role: "user", content: "[SYSTEM MUTATED]\nInitial request" },
-          ...recorded[1]!.inputMessages.slice(1),
-        ],
-      },
-    ]);
-    const passed =
-      stableReport.stable &&
-      !brokenReport.stable &&
-      brokenReport.violations.some((v) => v.kind === "input_prefix_mutated");
-
-    const checks: CheckResult[] = [
-      {
-        id: "EF3",
-        title: "first_message prompt channel preserves message-0 prefix and catches edits",
-        status: passed ? "pass" : "fail",
-        reason: `append-only stable=${stableReport.stable}, message-0 edit caught=${!brokenReport.stable}`,
-        evidence: [],
-      },
-    ];
-    return makeOutcome(spec, commit, graderSha, checks, stableReport.stable, 2);
-  } finally {
-    await server.close();
-  }
-}
-
 async function runFaultResilienceScenario(
   spec: EvalScenarioSpec,
   commit: string,
@@ -497,7 +444,14 @@ async function runFaultResilienceScenario(
     const f2Body = await f2.text();
 
     const dummySpec: EvalScenarioSpec = { ...spec, minimumTrials: 3 };
-    const sample = makeOutcome(dummySpec, commit, graderSha, [], true, 1);
+    const passingChecks: CheckResult[] = dummySpec.checkIds.map((id) => ({
+      id,
+      title: id,
+      status: "pass",
+      reason: "ok",
+      evidence: [],
+    }));
+    const sample = makeOutcome(dummySpec, commit, graderSha, passingChecks, true, 1);
     const noisy = aggregateScenarioTrials(dummySpec, [
       sample,
       sample,
@@ -534,6 +488,13 @@ async function runFaultResilienceScenario(
   }
 }
 
+function medianOf(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid]!;
+  return (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
 function runScaleResilienceScenario(
   spec: EvalScenarioSpec,
   commit: string,
@@ -544,43 +505,54 @@ function runScaleResilienceScenario(
   const db = new DatabaseSync(dbFile);
   try {
     db.exec(`
-      CREATE TABLE workers (id INTEGER PRIMARY KEY, status TEXT);
-      CREATE TABLE messages (id INTEGER PRIMARY KEY, meta TEXT);
-      CREATE TABLE session_steps (id INTEGER PRIMARY KEY, kind TEXT);
-      CREATE TABLE turns (id INTEGER PRIMARY KEY, outcome TEXT);
-      CREATE TABLE router_commands (id INTEGER PRIMARY KEY, status TEXT);
+      CREATE TABLE workers (id INTEGER PRIMARY KEY, status TEXT, title TEXT, task TEXT);
+      CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER, sender TEXT, text TEXT, meta TEXT);
+      CREATE TABLE session_steps (id INTEGER PRIMARY KEY, session_id INTEGER, kind TEXT, detail TEXT);
+      CREATE TABLE turns (id INTEGER PRIMARY KEY, session_id INTEGER, outcome TEXT);
+      CREATE TABLE router_commands (id INTEGER PRIMARY KEY, status TEXT, plan_json TEXT, dispatched_json TEXT);
     `);
     db.exec("BEGIN");
-    const insW = db.prepare("INSERT INTO workers (status) VALUES (?)");
-    for (let i = 0; i < 300; i += 1) insW.run("done");
-    const insM = db.prepare("INSERT INTO messages (meta) VALUES (?)");
-    for (let i = 0; i < 29_998; i += 1) insM.run('{"ok":true}');
-    insM.run("{corrupt");
-    insM.run("bad-json");
-    const insS = db.prepare("INSERT INTO session_steps (kind) VALUES (?)");
-    for (let i = 0; i < 50_000; i += 1) insS.run("turn_started");
-    const insT = db.prepare("INSERT INTO turns (outcome) VALUES (?)");
-    for (let i = 0; i < 395; i += 1) insT.run("ok");
-    for (let i = 0; i < 5; i += 1) insT.run("interrupted");
-    const insR = db.prepare("INSERT INTO router_commands (status) VALUES (?)");
-    for (let i = 0; i < 150; i += 1) insR.run("done");
+    const insW = db.prepare("INSERT INTO workers (status, title, task) VALUES (?, ?, ?)");
+    for (let i = 0; i < 300; i += 1) insW.run("done", `Worker #${i + 1}`, "Implement scoped task and run tests");
+    const insM = db.prepare("INSERT INTO messages (conversation_id, sender, text, meta) VALUES (?, ?, ?, ?)");
+    for (let i = 0; i < 29_998; i += 1) insM.run(1, i % 2 === 0 ? "user" : "agent", `Message body ${i}`, '{"ok":true}');
+    insM.run(1, "agent", "Corrupt meta 1", "{corrupt");
+    insM.run(1, "agent", "Corrupt meta 2", "bad-json");
+    const insS = db.prepare("INSERT INTO session_steps (session_id, kind, detail) VALUES (?, ?, ?)");
+    for (let i = 0; i < 50_000; i += 1) insS.run(1, "turn_started", '{"step":1}');
+    const insT = db.prepare("INSERT INTO turns (session_id, outcome) VALUES (?, ?)");
+    for (let i = 0; i < 395; i += 1) insT.run(1, "ok");
+    for (let i = 0; i < 5; i += 1) insT.run(1, "interrupted");
+    const insR = db.prepare("INSERT INTO router_commands (status, plan_json, dispatched_json) VALUES (?, ?, ?)");
+    for (let i = 0; i < 150; i += 1) insR.run("dispatched", '{"track":"A"}', '[{"op":"pm.forward"}]');
     db.exec("COMMIT");
   } finally {
     db.close();
   }
 
-  const heapBefore = process.memoryUsage().heapUsed;
-  const t0 = performance.now();
-  const facts = extractScaleSafeFacts({ dbFile, maxRows: PRODUCT_EVAL_LEDGER_SCAN_MAX_ROWS });
-  const scanDurationMs = Math.round((performance.now() - t0) * 100) / 100;
-  const heapDeltaBytes = process.memoryUsage().heapUsed - heapBefore;
+  // Warm-up pass (not reported) followed by SCALE_BENCHMARK_RUNS timed passes per benchmark-checklist.
+  extractScaleSafeFacts({ dbFile, maxRows: PRODUCT_EVAL_LEDGER_SCAN_MAX_ROWS });
+  const durations: number[] = [];
+  const heapDeltas: number[] = [];
+  let facts = extractScaleSafeFacts({ dbFile, maxRows: PRODUCT_EVAL_LEDGER_SCAN_MAX_ROWS });
+  for (let i = 0; i < SCALE_BENCHMARK_RUNS; i += 1) {
+    const heapBefore = process.memoryUsage().heapUsed;
+    const t0 = performance.now();
+    facts = extractScaleSafeFacts({ dbFile, maxRows: PRODUCT_EVAL_LEDGER_SCAN_MAX_ROWS });
+    durations.push(Math.round((performance.now() - t0) * 100) / 100);
+    heapDeltas.push(process.memoryUsage().heapUsed - heapBefore);
+  }
+  const scanDurationMs = Math.round(medianOf(durations) * 100) / 100;
+  const scanMinMs = Math.min(...durations);
+  const scanMaxMs = Math.max(...durations);
+  const heapDeltaBytes = Math.round(medianOf(heapDeltas));
 
   const ledgerFile = join(workDir, "torn-baseline.jsonl");
   const dummyCard: CapabilityScorecard = {
     schemaVersion: 1,
     runId: "20261128-000000",
-    baseRef: "main",
-    baseCommit: commit,
+    baseRef: "absolute-gate",
+    baseCommit: "tier1",
     headRef: "head",
     headCommit: commit,
     graderSha256Base: graderSha,
@@ -593,12 +565,12 @@ function runScaleResilienceScenario(
     dimensions: CAPABILITY_DIMENSIONS.map((d) => ({
       dimension: d,
       suite: "regression",
-      basePassPowK: 1,
+      basePassPowK: null,
       headPassPowK: 1,
-      basePassAtK: 1,
+      basePassAtK: null,
       headPassAtK: 1,
-      cacheReadDelta: 0,
-      turnDelta: 0,
+      cacheReadDelta: null,
+      turnDelta: null,
       prefixRegressed: false,
       status: "pass",
       reasons: [],
@@ -641,7 +613,7 @@ function runScaleResilienceScenario(
       id: "RS3",
       title: "One-month ledger scan extracts exact bounded facts",
       status: factsOk ? "pass" : "fail",
-      reason: `Scanned 300 workers / 30,000 messages / 50,000 steps / 400 turns / 150 router commands in ${scanDurationMs} ms`,
+      reason: `Scanned 300 workers / 30,000 messages / 50,000 steps / 400 turns / 150 router commands in median ${scanDurationMs} ms (${SCALE_BENCHMARK_RUNS} runs, ${scanMinMs}..${scanMaxMs} ms)`,
       evidence: [],
     },
     {
@@ -657,225 +629,13 @@ function runScaleResilienceScenario(
     outcome: makeOutcome(spec, commit, graderSha, checks, true, 1),
     benchmark: {
       ...facts,
+      runs: SCALE_BENCHMARK_RUNS,
       scanDurationMs,
+      scanMinMs,
+      scanMaxMs,
       heapDeltaBytes,
     },
   };
-}
-
-function writeLaunchConfigFiles(scratchHome: string, configFiles: readonly { readonly relativePath: string; readonly content: string }[]): void {
-  for (const file of configFiles) {
-    const full = join(scratchHome, file.relativePath);
-    mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, file.content, "utf8");
-  }
-}
-
-async function runChildAsync(
-  command: string,
-  args: readonly string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
-): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(command, [...args], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const done = (status: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ status, stdout, stderr });
-    };
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length < 16_384) stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < 16_384) stderr += chunk.toString("utf8");
-    });
-    child.once("error", (err) => {
-      stderr += String(err);
-      done(1);
-    });
-    child.once("close", (code) => done(code));
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
-      done(null);
-    }, options.timeoutMs);
-  });
-}
-
-async function probeRealCodexCli(workDir: string): Promise<RealCliProbeOutcome> {
-  const binaryPath = whichBinary("codex");
-  const realConfig = join(homedir(), ".codex", "config.toml");
-  const before = fingerprintFile(realConfig);
-
-  if (!binaryPath) {
-    return {
-      vendor: "codex",
-      binaryPath: null,
-      status: "not_verified",
-      detail: "codex binary not installed on PATH",
-      resumePrefixStable: null,
-      freshSessionDriftCaught: null,
-      userConfigUntouched: true,
-      recordedTurns: 0,
-    };
-  }
-
-  const scratchHome = join(workDir, "real-codex-home");
-  const scratchRepo = join(workDir, "real-codex-repo");
-  mkdirSync(scratchHome, { recursive: true });
-  mkdirSync(scratchRepo, { recursive: true });
-
-  const server = await startMockModelServer({
-    turns: [{ text: "mock reply 1" }, { text: "mock reply 2" }, { text: "mock reply fresh" }],
-  });
-  try {
-    const launch = resolveVendorMockEnv("codex", server.baseUrl, scratchHome);
-    writeLaunchConfigFiles(scratchHome, launch.configFiles);
-    const env = { ...process.env, ...launch.env };
-
-    const t1 = await runChildAsync(binaryPath, ["exec", "--skip-git-repo-check", "hello one"], {
-      cwd: scratchRepo,
-      env,
-      timeoutMs: 30_000,
-    });
-    const t2 = await runChildAsync(binaryPath, ["exec", "resume", "--last", "--skip-git-repo-check", "hello two"], {
-      cwd: scratchRepo,
-      env,
-      timeoutMs: 30_000,
-    });
-    const resumeReqs = server.requests();
-    const resumeReport: PrefixStabilityReport = checkPromptPrefixStability(resumeReqs);
-
-    const t3 = await runChildAsync(binaryPath, ["exec", "--skip-git-repo-check", "fresh turn"], {
-      cwd: scratchRepo,
-      env,
-      timeoutMs: 30_000,
-    });
-    const allReqs = server.requests();
-    const freshCheck =
-      resumeReqs.length >= 2 && allReqs.length >= 3
-        ? checkPromptPrefixStability([resumeReqs[0]!, allReqs[allReqs.length - 1]!])
-        : null;
-    const driftCaught =
-      freshCheck !== null &&
-      !freshCheck.stable &&
-      freshCheck.violations.some((v) => v.kind === "cache_key_changed");
-
-    const after = fingerprintFile(realConfig);
-    const userConfigUntouched = sameFingerprint(before, after);
-    const ok =
-      t1.status === 0 &&
-      t2.status === 0 &&
-      t3.status === 0 &&
-      resumeReqs.length >= 2 &&
-      resumeReport.stable &&
-      driftCaught &&
-      userConfigUntouched;
-
-    return {
-      vendor: "codex",
-      binaryPath,
-      status: ok ? "verified" : "not_verified",
-      detail: ok
-        ? `Real codex 2-turn resume prefix stable=true (${resumeReqs.length} turns); fresh session cache_key_changed caught; real ~/.codex/config.toml untouched`
-        : `codex exits=(${String(t1.status)},${String(t2.status)},${String(t3.status)}) reqs=${allReqs.length} resumeStable=${String(resumeReport.stable)} driftCaught=${String(driftCaught)}`,
-      resumePrefixStable: resumeReqs.length >= 2 ? resumeReport.stable : null,
-      freshSessionDriftCaught: driftCaught,
-      userConfigUntouched,
-      recordedTurns: allReqs.length,
-    };
-  } finally {
-    await server.close();
-  }
-}
-
-async function probeRealClaudeCli(workDir: string): Promise<RealCliProbeOutcome> {
-  const binaryPath = whichBinary("claude");
-  const realConfig = join(homedir(), ".claude.json");
-  const before = fingerprintFile(realConfig);
-
-  if (!binaryPath) {
-    return {
-      vendor: "claude",
-      binaryPath: null,
-      status: "not_verified",
-      detail: "claude binary not installed on PATH",
-      resumePrefixStable: null,
-      freshSessionDriftCaught: null,
-      userConfigUntouched: true,
-      recordedTurns: 0,
-    };
-  }
-
-  const scratchHome = join(workDir, "real-claude-home");
-  const scratchRepo = join(workDir, "real-claude-repo");
-  mkdirSync(scratchHome, { recursive: true });
-  mkdirSync(scratchRepo, { recursive: true });
-
-  const server = await startMockModelServer({
-    turns: [{ text: "claude mock reply 1" }, { text: "claude mock reply 2" }],
-  });
-  try {
-    const launch = resolveVendorMockEnv("claude", server.baseUrl, scratchHome);
-    const env: NodeJS.ProcessEnv = { ...process.env, ...launch.env };
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-
-    const sessionId = "11111111-2222-4333-8444-555555555555";
-    const t1 = await runChildAsync(
-      binaryPath,
-      ["-p", "--output-format", "json", "--session-id", sessionId, "--model", "claude-sonnet-4-5", "hello one"],
-      { cwd: scratchRepo, env, timeoutMs: 30_000 },
-    );
-    const afterT1 = server.requests();
-    if (t1.status === 0 && afterT1.length >= 1) {
-      const t2 = await runChildAsync(
-        binaryPath,
-        ["-p", "--output-format", "json", "--resume", sessionId, "--model", "claude-sonnet-4-5", "hello two"],
-        { cwd: scratchRepo, env, timeoutMs: 30_000 },
-      );
-      const allReqs = server.requests();
-      const mainReqs = allReqs.filter((r) => r.model.includes("sonnet"));
-      const report = mainReqs.length >= 2 ? checkPromptPrefixStability(mainReqs) : null;
-      const after = fingerprintFile(realConfig);
-      const userConfigUntouched = sameFingerprint(before, after);
-      const ok = t2.status === 0 && mainReqs.length >= 2 && (report?.stable ?? false) && userConfigUntouched;
-      return {
-        vendor: "claude",
-        binaryPath,
-        status: ok ? "verified" : "not_verified",
-        detail: `Real claude 2-turn resume requests=${mainReqs.length} (total=${allReqs.length}), exits=(${String(t1.status)},${String(t2.status)}), prefixStable=${String(report?.stable ?? null)}, real ~/.claude.json untouched=${String(userConfigUntouched)}`,
-        resumePrefixStable: report?.stable ?? null,
-        freshSessionDriftCaught: null,
-        userConfigUntouched,
-        recordedTurns: mainReqs.length,
-      };
-    }
-
-    const after = fingerprintFile(realConfig);
-    const userConfigUntouched = sameFingerprint(before, after);
-    const reason = (t1.stderr || t1.stdout || `exit ${String(t1.status)}`).trim().split(/\r?\n/)[0] ?? "unknown";
-    return {
-      vendor: "claude",
-      binaryPath,
-      status: "not_verified",
-      detail: `Isolated HOME loopback probe did not complete (${afterT1.length} requests, exit ${String(t1.status)}): ${reason.slice(0, 160)}`,
-      resumePrefixStable: null,
-      freshSessionDriftCaught: null,
-      userConfigUntouched,
-      recordedTurns: afterT1.length,
-    };
-  } finally {
-    await server.close();
-  }
 }
 
 export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promise<Tier1HarnessResult> {
@@ -892,14 +652,20 @@ export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promis
 
   try {
     const byId = new Map(scenarios.map((s) => [s.id, s]));
-    const routing = runRoutingScenario(byId.get("route-track-a-mention")!, commit, graderSha);
+    const routing = await runRoutingScenario(byId.get("route-track-a-mention")!, commit, graderSha, workDir);
     const orch = runOrchestrationScenario(byId.get("orch-pm-agenda-stale-notice")!, commit, graderSha, workDir);
     const exec = runExecutionScenario(byId.get("exec-worker-isolation-matrix")!, commit, graderSha, workDir);
-    const effRes = await runResidentEfficiencyScenario(byId.get("eff-prefix-stability-resident")!, commit, graderSha);
+    const effRes = await runResidentEfficiencyScenario(
+      byId.get("eff-prefix-stability-resident")!,
+      commit,
+      graderSha,
+      workDir,
+    );
     const effFirst = await runFirstMessageEfficiencyScenario(
       byId.get("eff-prefix-stability-first-message")!,
       commit,
       graderSha,
+      workDir,
     );
     const resFault = await runFaultResilienceScenario(byId.get("res-fault-injection-and-quarantine")!, commit, graderSha);
     const resScale = runScaleResilienceScenario(
@@ -909,7 +675,7 @@ export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promis
       workDir,
     );
 
-    const headTrials: TrialOutcome[] = [
+    const trials: TrialOutcome[] = [
       routing,
       orch,
       exec.outcome,
@@ -918,20 +684,17 @@ export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promis
       resFault,
       resScale.outcome,
     ];
-    const baseTrials: TrialOutcome[] = headTrials.map((t) => ({
-      ...t,
-      versionLabel: "base",
-    }));
 
-    const scorecard = evaluateComparison({
+    const realCliProbes: RealCliProbeOutcome[] =
+      options.probeRealClis === false ? [] : await probeRealCliMatrix(workDir);
+
+    const scorecard = evaluateTier1Scorecard({
       runId,
-      baseRef: branch,
-      baseCommit: commit,
-      headRef: branch,
-      headCommit: commit,
+      ref: branch,
+      commit,
       scenarios,
-      baseTrials,
-      headTrials,
+      trials,
+      realCliProbes,
     });
 
     if (options.ledgerFile) {
@@ -942,32 +705,6 @@ export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promis
       });
     }
 
-    const realCliProbes: RealCliProbeOutcome[] = [];
-    if (options.probeRealClis !== false) {
-      realCliProbes.push(await probeRealCodexCli(workDir));
-      realCliProbes.push(await probeRealClaudeCli(workDir));
-      for (const vendor of AGENT_VENDORS) {
-        if (vendor === "codex" || vendor === "claude") continue;
-        const profile = getVendorEvalProfile(vendor);
-        const bin = whichBinary(vendorSpec(vendor).cli.command);
-        realCliProbes.push({
-          vendor,
-          binaryPath: bin,
-          status: "not_verified",
-          detail:
-            profile.tier1Coverage === "fake_driver_contract"
-              ? `fake_driver_contract (${profile.gapReason ?? "no loopback override"})`
-              : bin
-                ? "Installed; covered by loopback launch contract (live probe skipped in baseline smoke)"
-                : `${vendorSpec(vendor).cli.command} binary not installed on PATH`,
-          resumePrefixStable: null,
-          freshSessionDriftCaught: null,
-          userConfigUntouched: true,
-          recordedTurns: 0,
-        });
-      }
-    }
-
     const durationMs = Math.round(performance.now() - started);
     return {
       runId,
@@ -976,7 +713,7 @@ export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promis
       commit,
       durationMs,
       scenarios,
-      trials: headTrials,
+      trials,
       scorecard,
       vendorMatrix: exec.matrix,
       realCliProbes,
@@ -985,64 +722,4 @@ export async function runTier1Harness(options: Tier1HarnessOptions = {}): Promis
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
-}
-
-export function renderTier1BaselineReport(result: Tier1HarnessResult): string {
-  const lines: string[] = [
-    renderCapabilityReport(result.scorecard, { format: "markdown" }),
-    "",
-    "## Tier 1 Execution Summary",
-    "",
-    `- Recorded At: \`${result.recordedAt}\``,
-    `- Branch / Commit: \`${result.branch}\` (\`${result.commit}\`)`,
-    `- Wall Duration: \`${result.durationMs} ms\` | API Cost: \`$0.00\``,
-    `- Tier 1 Scenarios Passed: \`${result.trials.filter((t) => t.checks.every((c) => c.status === "pass")).length}/${result.trials.length}\``,
-    "",
-    "### Check Details",
-    "",
-    "| Scenario | Dimension | Check | Status | Reason |",
-    "|---|---|---|---|---|",
-  ];
-
-  for (const trial of result.trials) {
-    for (const check of trial.checks) {
-      lines.push(`| ${trial.scenarioId} | ${trial.dimension} | ${check.id} ${check.title} | ${check.status} | ${check.reason} |`);
-    }
-  }
-
-  lines.push(
-    "",
-    "## One-Month Ledger Scale Benchmark",
-    "",
-    `- Seeded Volume: \`${result.scaleBenchmark.workerCount}\` workers, \`${result.scaleBenchmark.messageCount}\` messages (\`${result.scaleBenchmark.malformedMetaCount}\` corrupt meta), \`${result.scaleBenchmark.stepLogCount}\` step logs, \`${result.scaleBenchmark.turnCount}\` turns (\`${result.scaleBenchmark.interruptedTurnCount}\` interrupted), \`${result.scaleBenchmark.routerCommandCount}\` router commands`,
-    `- Scan Duration: \`${result.scaleBenchmark.scanDurationMs} ms\` | Heap Delta: \`${(result.scaleBenchmark.heapDeltaBytes / (1024 * 1024)).toFixed(2)} MiB\` | Truncated: \`${String(result.scaleBenchmark.truncated)}\``,
-    "",
-    "## Cross-Vendor Coverage Matrix",
-    "",
-    "| Vendor | Tier 1 Coverage | Prompt-Cache Check | Replay Support | Gap / Notes |",
-    "|---|---|---|---|---|",
-  );
-
-  for (const row of result.vendorMatrix) {
-    lines.push(
-      `| ${row.vendor} | ${row.tier1Coverage} | ${row.promptCacheCheck} | ${row.replaySupport} | ${row.gapReason ?? "none"} |`,
-    );
-  }
-
-  if (result.realCliProbes.length > 0) {
-    lines.push(
-      "",
-      "## Real-CLI Loopback Verification",
-      "",
-      "| Vendor | Binary | Status | Recorded Turns | User Config Untouched | Detail |",
-      "|---|---|---|---|---|---|",
-    );
-    for (const probe of result.realCliProbes) {
-      lines.push(
-        `| ${probe.vendor} | ${probe.binaryPath ? "installed" : "missing"} | ${probe.status} | ${probe.recordedTurns} | ${String(probe.userConfigUntouched)} | ${probe.detail} |`,
-      );
-    }
-  }
-
-  return `${lines.join("\n")}\n`;
 }

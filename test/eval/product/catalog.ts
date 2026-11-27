@@ -377,7 +377,7 @@ export function extractScaleSafeFacts(input: ScaleSafeFactsInput): EvalDimension
     if (tables.has("messages") && tableColumns(db, "messages").has("meta")) {
       malformedMetaCount = countQuery(
         db,
-        "SELECT count(*) AS n FROM (SELECT meta FROM messages ORDER BY id LIMIT ?) WHERE meta IS NOT NULL AND meta != '' AND json_valid(meta) = 0",
+        "SELECT count(*) AS n FROM (SELECT meta FROM messages ORDER BY id DESC LIMIT ?) WHERE meta IS NOT NULL AND meta != '' AND json_valid(meta) = 0",
         maxRows,
       );
     }

@@ -23,6 +23,23 @@ import {
 const DEFAULT_WILSON_Z = 1.959964;
 const EPSILON = 1e-9;
 
+export interface Tier1ProbeGateItem {
+  readonly vendor: string;
+  readonly status: "verified" | "failed" | "not_verified";
+  readonly userConfigUntouched: boolean;
+  readonly resumePrefixStable: boolean | null;
+  readonly detail: string;
+}
+
+export interface Tier1EvaluationInput {
+  readonly runId: string;
+  readonly ref: string;
+  readonly commit: string;
+  readonly scenarios: readonly EvalScenarioSpec[];
+  readonly trials: readonly TrialOutcome[];
+  readonly realCliProbes?: readonly Tier1ProbeGateItem[];
+}
+
 function assertValidTrialCounts(nValid: number, nPassed: number): void {
   if (!Number.isInteger(nValid) || !Number.isInteger(nPassed) || nValid < 1 || nPassed < 0 || nPassed > nValid) {
     throw new RangeError(`Invalid trial counts: nValid=${nValid}, nPassed=${nPassed}`);
@@ -84,10 +101,19 @@ export function computeGraderFingerprint(scenarios: readonly EvalScenarioSpec[])
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function isAdvisoryScenario(spec: EvalScenarioSpec): boolean {
+  return spec.gateLevel === "advisory" || spec.tier === "canary";
+}
+
+function requiresAbsolutePass(spec: EvalScenarioSpec): boolean {
+  return spec.tier === "harness" || spec.gateLevel === "pr_blocking";
+}
+
 function isTrialPassed(trial: TrialOutcome): boolean {
   if (trial.envError !== null) return false;
+  if (trial.checks.length === 0) return false;
   if (trial.checks.some((c) => c.status === "fail")) return false;
-  if (trial.checks.length > 0 && !trial.checks.some((c) => c.status === "pass")) return false;
+  if (!trial.checks.some((c) => c.status === "pass")) return false;
   return trial.efficiency.prefixStable !== false;
 }
 
@@ -176,9 +202,84 @@ function splitPassRate(
   return meanOf(rates);
 }
 
+interface ScenarioPair {
+  readonly spec: EvalScenarioSpec;
+  readonly base: ScenarioAggregate | null;
+  readonly head: ScenarioAggregate | null;
+}
+
+function evaluatePairGroup(pairs: readonly ScenarioPair[]): {
+  status: DimensionStatus;
+  prefixRegressed: boolean;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  const prefixRegressed = pairs.some((p) => p.head !== null && !p.head.allPrefixesStable);
+
+  if (pairs.some((p) => p.base?.status === "invalid_run" || p.head?.status === "invalid_run")) {
+    reasons.push("Environment error rate exceeded cap");
+    return { status: "invalid_run", prefixRegressed, reasons };
+  }
+  if (
+    pairs.some(
+      (p) =>
+        p.base === null ||
+        p.head === null ||
+        p.base.status === "inconclusive" ||
+        p.head.status === "inconclusive",
+    )
+  ) {
+    reasons.push("Valid trials below scenario minimumTrials");
+    return { status: "inconclusive", prefixRegressed, reasons };
+  }
+
+  let regressed = false;
+  let improved = false;
+
+  if (prefixRegressed) {
+    regressed = true;
+    reasons.push("Prompt-cache prefix stability regressed");
+  }
+
+  for (const p of pairs) {
+    const b = p.base!;
+    const h = p.head!;
+
+    if (b.meanCacheReadRatio !== null && h.meanCacheReadRatio !== null) {
+      const delta = h.meanCacheReadRatio - b.meanCacheReadRatio;
+      if (delta < -PRODUCT_EVAL_MAX_CACHE_READ_DROP - EPSILON) {
+        regressed = true;
+        reasons.push(
+          `${p.spec.id}: cacheReadRatio dropped by ${(-delta * 100).toFixed(1)}pp (limit ${(PRODUCT_EVAL_MAX_CACHE_READ_DROP * 100).toFixed(1)}pp)`,
+        );
+      }
+    }
+
+    if (requiresAbsolutePass(p.spec) && h.status !== "pass") {
+      regressed = true;
+      reasons.push(`${p.spec.id}: Tier 1 absolute pass gate failed (${h.nPassed}/${h.nValid}, status=${h.status})`);
+    } else if (p.spec.suite === "regression") {
+      if (b.passPowK !== null && h.passPowK !== null && h.passPowK < b.passPowK - EPSILON) {
+        regressed = true;
+        reasons.push(`${p.spec.id}: pass^${h.k} dropped ${b.passPowK.toFixed(2)} -> ${h.passPowK.toFixed(2)}`);
+      } else if (b.passPowK !== null && h.passPowK !== null && h.passPowK > b.passPowK + EPSILON) {
+        improved = true;
+      }
+    } else if (b.passAtK !== null && h.passAtK !== null && h.passAtK > b.passAtK + EPSILON) {
+      improved = true;
+    }
+  }
+
+  return {
+    status: regressed ? "regressed" : improved ? "improved" : "pass",
+    prefixRegressed,
+    reasons,
+  };
+}
+
 function buildDimensionScorecard(
   dimension: (typeof CAPABILITY_DIMENSIONS)[number],
-  pairs: readonly { readonly spec: EvalScenarioSpec; readonly base: ScenarioAggregate | null; readonly head: ScenarioAggregate | null }[],
+  pairs: readonly ScenarioPair[],
 ): DimensionScorecard {
   if (pairs.length === 0) {
     return {
@@ -196,61 +297,29 @@ function buildDimensionScorecard(
     };
   }
 
+  const blockingPairs = pairs.filter((p) => !isAdvisoryScenario(p.spec));
+  const advisoryPairs = pairs.filter((p) => isAdvisoryScenario(p.spec));
+  const primaryPairs = blockingPairs.length > 0 ? blockingPairs : advisoryPairs;
+
   const suite = pairs.some((p) => p.spec.suite === "regression") ? "regression" : "capability";
-  const basePassPowK = meanOf(pairs.map((p) => p.base?.passPowK).filter((v): v is number => v !== null && v !== undefined));
-  const headPassPowK = meanOf(pairs.map((p) => p.head?.passPowK).filter((v): v is number => v !== null && v !== undefined));
-  const basePassAtK = meanOf(pairs.map((p) => p.base?.passAtK).filter((v): v is number => v !== null && v !== undefined));
-  const headPassAtK = meanOf(pairs.map((p) => p.head?.passAtK).filter((v): v is number => v !== null && v !== undefined));
-  const baseCache = meanOf(pairs.map((p) => p.base?.meanCacheReadRatio).filter((v): v is number => v !== null && v !== undefined));
-  const headCache = meanOf(pairs.map((p) => p.head?.meanCacheReadRatio).filter((v): v is number => v !== null && v !== undefined));
-  const baseTurns = meanOf(pairs.map((p) => p.base?.meanTurns).filter((v): v is number => v !== null && v !== undefined));
-  const headTurns = meanOf(pairs.map((p) => p.head?.meanTurns).filter((v): v is number => v !== null && v !== undefined));
+  const basePassPowK = meanOf(primaryPairs.map((p) => p.base?.passPowK).filter((v): v is number => v !== null && v !== undefined));
+  const headPassPowK = meanOf(primaryPairs.map((p) => p.head?.passPowK).filter((v): v is number => v !== null && v !== undefined));
+  const basePassAtK = meanOf(primaryPairs.map((p) => p.base?.passAtK).filter((v): v is number => v !== null && v !== undefined));
+  const headPassAtK = meanOf(primaryPairs.map((p) => p.head?.passAtK).filter((v): v is number => v !== null && v !== undefined));
+  const baseCache = meanOf(primaryPairs.map((p) => p.base?.meanCacheReadRatio).filter((v): v is number => v !== null && v !== undefined));
+  const headCache = meanOf(primaryPairs.map((p) => p.head?.meanCacheReadRatio).filter((v): v is number => v !== null && v !== undefined));
+  const baseTurns = meanOf(primaryPairs.map((p) => p.base?.meanTurns).filter((v): v is number => v !== null && v !== undefined));
+  const headTurns = meanOf(primaryPairs.map((p) => p.head?.meanTurns).filter((v): v is number => v !== null && v !== undefined));
 
   const cacheReadDelta = baseCache !== null && headCache !== null ? headCache - baseCache : null;
   const turnDelta = baseTurns !== null && headTurns !== null ? headTurns - baseTurns : null;
-  const prefixRegressed = pairs.some((p) => p.head !== null && !p.head.allPrefixesStable);
 
-  const reasons: string[] = [];
-  let status: DimensionStatus = "pass";
-
-  if (pairs.some((p) => p.base?.status === "invalid_run" || p.head?.status === "invalid_run")) {
-    status = "invalid_run";
-    reasons.push("Environment error rate exceeded cap");
-  } else if (pairs.some((p) => p.base === null || p.head === null || p.base.status === "inconclusive" || p.head.status === "inconclusive")) {
-    status = "inconclusive";
-    reasons.push("Valid trials below scenario minimumTrials");
-  } else {
-    let regressed = false;
-    let improved = false;
-
-    if (prefixRegressed) {
-      regressed = true;
-      reasons.push("Prompt-cache prefix stability regressed");
-    }
-    if (cacheReadDelta !== null && cacheReadDelta < -PRODUCT_EVAL_MAX_CACHE_READ_DROP - EPSILON) {
-      regressed = true;
-      reasons.push(`cacheReadRatio dropped by ${(-cacheReadDelta * 100).toFixed(1)}pp (limit ${(PRODUCT_EVAL_MAX_CACHE_READ_DROP * 100).toFixed(1)}pp)`);
-    }
-
-    for (const p of pairs) {
-      const b = p.base!;
-      const h = p.head!;
-      if (p.spec.suite === "regression") {
-        if (b.passPowK !== null && h.passPowK !== null && h.passPowK < b.passPowK - EPSILON) {
-          regressed = true;
-          reasons.push(`${p.spec.id}: pass^${h.k} dropped ${b.passPowK.toFixed(2)} -> ${h.passPowK.toFixed(2)}`);
-        } else if (b.passPowK !== null && h.passPowK !== null && h.passPowK > b.passPowK + EPSILON) {
-          improved = true;
-        }
-      } else if (b.passAtK !== null && h.passAtK !== null && h.passAtK > b.passAtK + EPSILON) {
-        improved = true;
-      }
-    }
-
-    if (regressed) {
-      status = "regressed";
-    } else if (improved) {
-      status = "improved";
+  const primaryEval = evaluatePairGroup(primaryPairs);
+  const reasons = [...primaryEval.reasons];
+  if (blockingPairs.length > 0 && advisoryPairs.length > 0) {
+    const advEval = evaluatePairGroup(advisoryPairs);
+    for (const r of advEval.reasons) {
+      reasons.push(`[advisory] ${r}`);
     }
   }
 
@@ -263,8 +332,8 @@ function buildDimensionScorecard(
     headPassAtK,
     cacheReadDelta,
     turnDelta,
-    prefixRegressed,
-    status,
+    prefixRegressed: primaryEval.prefixRegressed,
+    status: primaryEval.status,
     reasons,
   };
 }
@@ -283,9 +352,14 @@ export function evaluateComparison(input: ComparisonInput): CapabilityScorecard 
     headByScenario.set(t.scenarioId, list);
   }
 
+  const expectedGraderSha = computeGraderFingerprint(input.scenarios);
   const baseGrader = uniqueGraderSha(input.baseTrials);
   const headGrader = uniqueGraderSha(input.headTrials);
-  const graderMatched = baseGrader.consistent && headGrader.consistent && baseGrader.sha === headGrader.sha;
+  const graderMatched =
+    baseGrader.consistent &&
+    headGrader.consistent &&
+    baseGrader.sha === headGrader.sha &&
+    baseGrader.sha === expectedGraderSha;
 
   const totalTrials = input.baseTrials.length + input.headTrials.length;
   const totalEnvErrors =
@@ -293,7 +367,7 @@ export function evaluateComparison(input: ComparisonInput): CapabilityScorecard 
     input.headTrials.filter((t) => t.envError !== null).length;
   const envErrorRate = totalTrials === 0 ? 0 : totalEnvErrors / totalTrials;
 
-  const scenarioPairs = input.scenarios.map((spec) => {
+  const scenarioPairs: ScenarioPair[] = input.scenarios.map((spec) => {
     const baseList = baseByScenario.get(spec.id) ?? [];
     const headList = headByScenario.get(spec.id) ?? [];
     return {
@@ -326,6 +400,16 @@ export function evaluateComparison(input: ComparisonInput): CapabilityScorecard 
     ),
   );
 
+  const blockingDimensions = dimensions.filter((d) =>
+    scenarioPairs.some((p) => p.spec.dimension === d.dimension && !isAdvisoryScenario(p.spec)),
+  );
+  const blockingScenarioIds = new Set(scenarioPairs.filter((p) => !isAdvisoryScenario(p.spec)).map((p) => p.spec.id));
+  const blockingTrials = [...input.baseTrials, ...input.headTrials].filter((t) => blockingScenarioIds.has(t.scenarioId));
+  const blockingEnvErrorRate =
+    blockingTrials.length === 0
+      ? 0
+      : blockingTrials.filter((t) => t.envError !== null).length / blockingTrials.length;
+
   const reasons: string[] = [];
   let verdict: ComparisonVerdict = "pass";
   let releaseGatePass = true;
@@ -333,12 +417,19 @@ export function evaluateComparison(input: ComparisonInput): CapabilityScorecard 
   if (!graderMatched) {
     verdict = "grader_changed";
     releaseGatePass = false;
-    reasons.push(`Grader SHA-256 mismatch: base=${String(baseGrader.sha)} vs head=${String(headGrader.sha)}`);
-  } else if (envErrorRate > PRODUCT_EVAL_MAX_ENV_ERROR_RATE + EPSILON || dimensions.some((d) => d.status === "invalid_run")) {
+    reasons.push(
+      `Grader SHA-256 mismatch: expected=${expectedGraderSha}, base=${String(baseGrader.sha)}, head=${String(headGrader.sha)}`,
+    );
+  } else if (
+    blockingEnvErrorRate > PRODUCT_EVAL_MAX_ENV_ERROR_RATE + EPSILON ||
+    blockingDimensions.some((d) => d.status === "invalid_run")
+  ) {
     verdict = "invalid_run";
     releaseGatePass = false;
-    reasons.push(`Environment error rate ${(envErrorRate * 100).toFixed(1)}% exceeded cap ${(PRODUCT_EVAL_MAX_ENV_ERROR_RATE * 100).toFixed(1)}%`);
-  } else if (dimensions.some((d) => d.status === "inconclusive")) {
+    reasons.push(
+      `Environment error rate ${(blockingEnvErrorRate * 100).toFixed(1)}% exceeded cap ${(PRODUCT_EVAL_MAX_ENV_ERROR_RATE * 100).toFixed(1)}%`,
+    );
+  } else if (blockingDimensions.some((d) => d.status === "inconclusive")) {
     verdict = "inconclusive";
     releaseGatePass = false;
     reasons.push("Exploratory or incomplete trial count cannot pass release gate");
@@ -348,13 +439,20 @@ export function evaluateComparison(input: ComparisonInput): CapabilityScorecard 
     reasons.push(
       `Public/holdout divergence detected: public ${(publicDelta! * 100).toFixed(1)}pp, holdout ${(holdoutDelta! * 100).toFixed(1)}pp (gap ${overfitGap!.toFixed(2)} > ${PRODUCT_EVAL_MAX_OVERFIT_GAP.toFixed(2)})`,
     );
-  } else if (dimensions.some((d) => d.status === "regressed")) {
+  } else if (blockingDimensions.some((d) => d.status === "regressed")) {
     verdict = "regressed";
     releaseGatePass = false;
-    for (const d of dimensions) {
+    for (const d of blockingDimensions) {
       if (d.status === "regressed") {
         reasons.push(`${d.dimension}: ${d.reasons.join("; ") || "regressed"}`);
       }
+    }
+  }
+
+  for (const d of dimensions) {
+    const isAdvisoryOnly = !blockingDimensions.includes(d) && d.status !== "not_applicable";
+    if (isAdvisoryOnly && (d.status === "regressed" || d.status === "inconclusive" || d.status === "invalid_run")) {
+      reasons.push(`[advisory] ${d.dimension}: ${d.reasons.join("; ") || d.status}`);
     }
   }
 
@@ -377,6 +475,171 @@ export function evaluateComparison(input: ComparisonInput): CapabilityScorecard 
       scenarioId: p.spec.id,
       base: p.base,
       head: p.head,
+    })),
+    verdict,
+    releaseGatePass,
+    reasons,
+  };
+}
+
+export function evaluateTier1Scorecard(input: Tier1EvaluationInput): CapabilityScorecard {
+  const byScenario = new Map<string, TrialOutcome[]>();
+  for (const t of input.trials) {
+    const list = byScenario.get(t.scenarioId) ?? [];
+    list.push(t);
+    byScenario.set(t.scenarioId, list);
+  }
+
+  const expectedGraderSha = computeGraderFingerprint(input.scenarios);
+  const headGrader = uniqueGraderSha(input.trials);
+  const graderMatched = headGrader.consistent && headGrader.sha === expectedGraderSha;
+
+  const totalTrials = input.trials.length;
+  const totalEnvErrors = input.trials.filter((t) => t.envError !== null).length;
+  const envErrorRate = totalTrials === 0 ? 0 : totalEnvErrors / totalTrials;
+
+  const aggregates = input.scenarios.map((spec) => {
+    const list = byScenario.get(spec.id) ?? [];
+    return {
+      spec,
+      head: list.length > 0 ? aggregateScenarioTrials(spec, list) : null,
+    };
+  });
+
+  const failedProbes = (input.realCliProbes ?? []).filter(
+    (p) => p.status === "failed" || !p.userConfigUntouched || p.resumePrefixStable === false,
+  );
+  const probeFailedPrefix = failedProbes.some((p) => p.resumePrefixStable === false);
+  const probeTouchedConfig = failedProbes.some((p) => !p.userConfigUntouched);
+
+  const dimensions: DimensionScorecard[] = CAPABILITY_DIMENSIONS.map((dimension) => {
+    const entries = aggregates.filter((a) => a.spec.dimension === dimension);
+    if (entries.length === 0) {
+      return {
+        dimension,
+        suite: "regression",
+        basePassPowK: null,
+        headPassPowK: null,
+        basePassAtK: null,
+        headPassAtK: null,
+        cacheReadDelta: null,
+        turnDelta: null,
+        prefixRegressed: false,
+        status: "not_applicable",
+        reasons: [],
+      };
+    }
+
+    const headPassPowK = meanOf(entries.map((e) => e.head?.passPowK).filter((v): v is number => v !== null && v !== undefined));
+    const headPassAtK = meanOf(entries.map((e) => e.head?.passAtK).filter((v): v is number => v !== null && v !== undefined));
+    const scenarioPrefixRegressed = entries.some((e) => e.head !== null && !e.head.allPrefixesStable);
+    const dimPrefixRegressed = scenarioPrefixRegressed || (dimension === "efficiency" && probeFailedPrefix);
+    const dimReasons: string[] = [];
+    let status: DimensionStatus = "pass";
+
+    if (entries.some((e) => e.head?.status === "invalid_run")) {
+      status = "invalid_run";
+      dimReasons.push("Environment error rate exceeded cap");
+    } else if (entries.some((e) => e.head === null || e.head.status === "inconclusive")) {
+      status = "inconclusive";
+      dimReasons.push("Missing or incomplete Tier 1 trials");
+    } else {
+      let failed = false;
+      if (scenarioPrefixRegressed) {
+        failed = true;
+        dimReasons.push("Prompt-cache prefix stability regressed");
+      }
+      for (const e of entries) {
+        if (e.head!.status !== "pass" || e.head!.nPassed < e.head!.nValid) {
+          failed = true;
+          dimReasons.push(`${e.spec.id}: Tier 1 harness failed (${e.head!.nPassed}/${e.head!.nValid}, status=${e.head!.status})`);
+        }
+      }
+      if (dimension === "efficiency" && failedProbes.length > 0 && (probeFailedPrefix || !probeTouchedConfig)) {
+        failed = true;
+        for (const p of failedProbes) {
+          if (p.resumePrefixStable === false || p.status === "failed") {
+            dimReasons.push(`real-cli ${p.vendor}: ${p.detail}`);
+          }
+        }
+      }
+      if (dimension === "execution" && probeTouchedConfig) {
+        failed = true;
+        for (const p of failedProbes) {
+          if (!p.userConfigUntouched) {
+            dimReasons.push(`real-cli ${p.vendor}: real user config mutated (${p.detail})`);
+          }
+        }
+      }
+      if (failed) status = "regressed";
+    }
+
+    return {
+      dimension,
+      suite: "regression",
+      basePassPowK: null,
+      headPassPowK,
+      basePassAtK: null,
+      headPassAtK,
+      cacheReadDelta: null,
+      turnDelta: null,
+      prefixRegressed: dimPrefixRegressed,
+      status,
+      reasons: dimReasons,
+    };
+  });
+
+  const reasons: string[] = [];
+  let verdict: ComparisonVerdict = "pass";
+  let releaseGatePass = true;
+
+  if (!graderMatched) {
+    verdict = "grader_changed";
+    releaseGatePass = false;
+    reasons.push(`Grader SHA-256 mismatch: expected=${expectedGraderSha}, head=${String(headGrader.sha)}`);
+  } else if (envErrorRate > PRODUCT_EVAL_MAX_ENV_ERROR_RATE + EPSILON || dimensions.some((d) => d.status === "invalid_run")) {
+    verdict = "invalid_run";
+    releaseGatePass = false;
+    reasons.push(
+      `Environment error rate ${(envErrorRate * 100).toFixed(1)}% exceeded cap ${(PRODUCT_EVAL_MAX_ENV_ERROR_RATE * 100).toFixed(1)}%`,
+    );
+  } else if (dimensions.some((d) => d.status === "inconclusive")) {
+    verdict = "inconclusive";
+    releaseGatePass = false;
+    reasons.push("Tier 1 harness missing required scenario outcomes");
+  } else if (dimensions.some((d) => d.status === "regressed") || failedProbes.length > 0) {
+    verdict = "regressed";
+    releaseGatePass = false;
+    for (const d of dimensions) {
+      if (d.status === "regressed") {
+        reasons.push(`${d.dimension}: ${d.reasons.join("; ") || "failed"}`);
+      }
+    }
+    for (const p of failedProbes) {
+      const msg = `real-cli ${p.vendor}: ${p.detail}`;
+      if (!reasons.some((r) => r.includes(msg))) reasons.push(msg);
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    runId: input.runId,
+    baseRef: "absolute-gate",
+    baseCommit: "tier1",
+    headRef: input.ref,
+    headCommit: input.commit,
+    graderSha256Base: expectedGraderSha,
+    graderSha256Head: headGrader.sha,
+    graderMatched,
+    envErrorRate,
+    publicDelta: null,
+    holdoutDelta: null,
+    overfitGap: null,
+    dimensions,
+    scenarioAggregates: aggregates.map((a) => ({
+      scenarioId: a.spec.id,
+      base: null,
+      head: a.head,
     })),
     verdict,
     releaseGatePass,
