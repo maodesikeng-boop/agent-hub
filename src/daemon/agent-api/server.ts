@@ -41,6 +41,12 @@ import type { QuotaResponse, SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
 import { HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
+import {
+  TELEMETRY_BODY_SCHEMAS,
+  persistMiningStateAfterCall,
+  prepareTelemetryCall,
+  type AgentApiTelemetryOptions,
+} from "./telemetry.ts";
 import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
@@ -78,6 +84,7 @@ export interface AgentApiOptions {
   ) => Promise<{ text: string; data: unknown }>;
   selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
   selfReloadStatus?: () => SelfReloadStatus | undefined;
+  telemetry?: AgentApiTelemetryOptions;
   tokens: SessionTokens;
   logger?: boolean;
   log?: (line: string) => void;
@@ -348,6 +355,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       summary: { type: "string", minLength: 1 },
     },
   },
+  ...TELEMETRY_BODY_SCHEMAS,
 };
 
 const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> = {
@@ -604,6 +612,9 @@ function createPreparation(opts: AgentApiOptions) {
       }
       return context;
     }
+    if (command === "telemetry.export" || command === "telemetry.mine") {
+      return prepareTelemetryCall(opts.telemetry, command, body, signal);
+    }
     return command === "worker.start" ? prepareWorkerStart(opts, probeWorkspace, sessionId, body, signal) : {};
   };
 }
@@ -740,6 +751,9 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       // Prepares (large copies, git probes) take time, so check the token again before calling the ledger.
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
       const result = ledger.hubCall(auth.sessionId, command, body as never, context);
+      if (command === "telemetry.mine") {
+        await persistMiningStateAfterCall(opts.telemetry, body, result.data, closing.signal);
+      }
       reportHealth(null);
       return send(reply, { ok: true, text: result.text, data: result.data });
     }));

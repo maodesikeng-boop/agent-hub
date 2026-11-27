@@ -79,6 +79,15 @@ export type Options = {
   verbatim?: boolean;
   "pm-name"?: string;
   build?: boolean;
+  window?: string;
+  since?: string;
+  until?: string;
+  scope?: string;
+  sections?: string;
+  format?: string;
+  backlog?: string[];
+  state?: string;
+  "dry-run"?: boolean;
   help?: boolean;
 };
 
@@ -145,6 +154,15 @@ export const HUB_ARG_OPTIONS = {
   verbatim: { type: "boolean" },
   "pm-name": { type: "string" },
   build: { type: "boolean" },
+  window: { type: "string" },
+  since: { type: "string" },
+  until: { type: "string" },
+  scope: { type: "string" },
+  sections: { type: "string" },
+  format: { type: "string" },
+  backlog: { type: "string", multiple: true },
+  state: { type: "string" },
+  "dry-run": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const satisfies NonNullable<ParseArgsConfig["options"]>;
 

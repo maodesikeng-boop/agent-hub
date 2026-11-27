@@ -26,6 +26,13 @@ import { hubLimitMaximum } from "./hub-limits.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { AskDetail, PendingAsk } from "./pending-asks.ts";
 import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
+import type {
+  DailyTelemetryBundle,
+  DailyTelemetryFormat,
+  DailyTelemetryScope,
+  DailyTelemetrySection,
+} from "./daily-telemetry.ts";
+import type { FeatureMiningResult } from "./feature-mining.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -79,6 +86,8 @@ export const HUB_COMMANDS = [
   "graph.skip",
   "graph.cancel",
   "graph.finish",
+  "telemetry.export",
+  "telemetry.mine",
 ] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
@@ -120,6 +129,8 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "graph.skip": ["pm"],
   "graph.cancel": ["pm"],
   "graph.finish": ["pm"],
+  "telemetry.export": ["pm"],
+  "telemetry.mine": ["pm"],
 };
 
 /**
@@ -130,6 +141,8 @@ export const HUB_HELP_ONLY_COMMANDS = {
   "ask.list": `看全部在等用户的卡：${HUB_COMMAND} ask list`,
   "ask.show": `看全文：${HUB_COMMAND} ask show <编号>`,
   "schedule.show": `看全文和最近几次结果：${HUB_COMMAND} schedule show <编号>`,
+  "telemetry.export": `导出只读运行数据快照：${HUB_COMMAND} telemetry export`,
+  "telemetry.mine": `从运行数据挖掘产品需求候选：${HUB_COMMAND} telemetry mine`,
 } as const satisfies Partial<Record<HubCommand, string>>;
 
 export type HubHelpOnlyCommand = keyof typeof HUB_HELP_ONLY_COMMANDS;
@@ -243,6 +256,23 @@ export interface HubArgsMap {
     graphId?: TaskGraphId;
     unmergedOk?: boolean;
     summary: string;
+  };
+  "telemetry.export": {
+    windowMs?: number;
+    sinceMs?: number;
+    untilMs?: number;
+    scope?: DailyTelemetryScope;
+    sections?: DailyTelemetrySection[];
+    format?: DailyTelemetryFormat;
+  };
+  "telemetry.mine": {
+    windowMs?: number;
+    sinceMs?: number;
+    untilMs?: number;
+    scope?: DailyTelemetryScope;
+    backlogPaths?: string[];
+    statePath?: string;
+    dryRun?: boolean;
   };
 }
 
@@ -489,6 +519,8 @@ interface HubDataMap {
   "graph.skip": { graph: TaskGraph };
   "graph.cancel": { graph: TaskGraph };
   "graph.finish": { graph: TaskGraph; reportItem: RouterItem };
+  "telemetry.export": { bundle: DailyTelemetryBundle };
+  "telemetry.mine": { result: FeatureMiningResult; stateRecoveredFromCorrupt: boolean };
 }
 
 export type HubData<C extends HubCommand> = HubDataMap[C];

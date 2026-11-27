@@ -69,6 +69,8 @@ import type { WorkerPick } from "./worker.ts";
 import type { TurnReplyView } from "./turn-reply.ts";
 import type { HubFileArg } from "./deliverables.ts";
 import type { SentFile } from "./sent-files.ts";
+import type { TelemetryLogRecord } from "./daily-telemetry.ts";
+import type { BacklogItem, FeatureMiningState } from "./feature-mining.ts";
 
 export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict", "git_failed"] as const;
 export type LedgerErrorCode = (typeof LEDGER_ERROR_CODES)[number];
@@ -236,6 +238,10 @@ export interface HubCallContext {
   graphPrs?: Readonly<Record<string, WorkerPr>>;
   selfReload?: SelfReloadStatus;
   sharedFiles?: readonly SentFile[];
+  telemetryLogs?: readonly TelemetryLogRecord[];
+  miningBacklog?: readonly BacklogItem[];
+  miningPriorState?: FeatureMiningState;
+  miningStateRecovered?: boolean;
 }
 
 export type GraphPrTarget = { cwd: string; branch: string } | { cwd: string; prUrl: string };

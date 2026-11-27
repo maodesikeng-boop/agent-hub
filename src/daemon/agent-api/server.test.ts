@@ -80,6 +80,8 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "graph.skip": { nodeKey: "n1", graphId: 1, reason: "不再需要" },
   "graph.cancel": { graphId: 1, reason: "取消任务图" },
   "graph.finish": { graphId: 1, unmergedOk: true, summary: "里程碑已合并交付" },
+  "telemetry.export": { windowMs: 86_400_000, scope: "pm", format: "summary" },
+  "telemetry.mine": { windowMs: 86_400_000, scope: "pm", dryRun: true },
 };
 
 describe("agent api over inject", () => {

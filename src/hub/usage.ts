@@ -326,6 +326,22 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "graph finish",
     usage: `  ${hub} graph finish [<图编号>] [--unmerged-ok] --stdin        所有节点完成后结束任务图，正文是交付摘要（自动同步给总助；有未合并 PR 时默认拦下提醒）`,
   },
+  {
+    command: "telemetry.export",
+    group: "telemetry",
+    action: "export",
+    cli: "telemetry export",
+    usage: `  ${hub} telemetry export [--window 24h|7d] [--since <时间>] [--until <时间>] [--scope pm|all] [--sections <列表>] [--format summary|json]
+                                                          只读导出时间窗内的脱敏运行数据快照（对话、卡片、任务图、Worker 汇报、命令报错与日志），不改写账本`,
+  },
+  {
+    command: "telemetry.mine",
+    group: "telemetry",
+    action: "mine",
+    cli: "telemetry mine",
+    usage: `  ${hub} telemetry mine [--window 24h|7d] [--since <时间>] [--until <时间>] [--scope pm|all] [--backlog <文件>...] [--state <状态文件>] [--dry-run]
+                                                          从脱敏运行数据里静态挖掘并按真实频次与痛感分级产品新需求，自动对照已有待办文件去重与冷却防刷屏`,
+  },
 ];
 
 const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                              ${PRODUCT_ID} 自身代码合进来后热重启守护进程：立即返回，等所有会话这一轮收尾、

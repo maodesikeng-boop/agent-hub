@@ -442,6 +442,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       refreshVendor: (vendor) => models.ensureUsable(vendor),
       capabilityInventory,
       sandboxGuard,
+      telemetry: {
+        logsDir: paths.logsDir,
+        setupLogsDir: paths.setupLogsDir,
+        deniedPaths: [
+          paths.dbFile,
+          paths.uiTokenFile,
+          paths.providerSecretsFile,
+          paths.feishuSecretsFile,
+          paths.accountFile,
+          paths.meshDir,
+        ],
+      },
       ...(options.onSelfReload
         ? {
             selfReload: ({ sessionId, build }: { sessionId: number; build: boolean }) => {

@@ -10,7 +10,7 @@ import {
   HUB_ARG_OPTIONS,
   findGitBashMangledArg,
 } from "./args.ts";
-import { parseCoreCommand, parseScheduleCommand } from "./parse-core.ts";
+import { parseCoreCommand, parseScheduleCommand, parseTelemetryCommand } from "./parse-core.ts";
 import { parseWorkerCommand, parseAskCommand } from "./parse-worker.ts";
 import { parseRouterCommand } from "./parse-router.ts";
 import { parseGraphAuthorCommand, parseGraphStepCommand } from "./parse-graph.ts";
@@ -21,6 +21,7 @@ const GROUP_PARSERS: readonly ((args: GroupArgs) => Parsed | undefined)[] = [
   parseWorkerCommand,
   parseAskCommand,
   parseScheduleCommand,
+  parseTelemetryCommand,
   parseRouterCommand,
   parseGraphAuthorCommand,
   parseGraphStepCommand,

@@ -32,6 +32,17 @@ import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
 import { describeSelfReload } from "../self-reload.ts";
+import {
+  DAILY_TELEMETRY_SECTIONS,
+  formatTelemetrySummary,
+  resolveTelemetryWindow,
+} from "../../shared/daily-telemetry.ts";
+import {
+  EMPTY_FEATURE_MINING_STATE,
+  renderFeatureMiningDigest,
+  runFeatureMiningPipeline,
+} from "../../shared/feature-mining.ts";
+import { collectDailyTelemetryDbSnapshot } from "./daily-telemetry.ts";
 
 const projectCreateArgsSchema = z.object({
   folder: z.string(),
@@ -160,6 +171,64 @@ function pmStatusIn(deps: PmStatusDeps, caller: AgentSessionRow & { pmId: PmId }
       ...(summaries.length > 0 ? { activeTaskGraphs: summaries } : {}),
       ...(selfReload !== undefined ? { selfReload } : {}),
     },
+  };
+}
+
+function runTelemetryCommand(
+  db: LedgerContext["db"],
+  nowMs: number,
+  caller: { pmId: PmId },
+  command: "telemetry.export" | "telemetry.mine",
+  args: unknown,
+  context: HubCallContext,
+): HubResult<"telemetry.export"> | HubResult<"telemetry.mine"> {
+  if (command === "telemetry.export") {
+    const a = args as HubArgs<"telemetry.export">;
+    const { sinceMs, untilMs } = resolveTelemetryWindow({
+      sinceMs: a.sinceMs,
+      untilMs: a.untilMs,
+      windowMs: a.windowMs,
+      nowMs,
+    });
+    const bundle = collectDailyTelemetryDbSnapshot(db, {
+      pmId: caller.pmId,
+      sinceMs,
+      untilMs,
+      scope: a.scope ?? "pm",
+      sections: a.sections ?? DAILY_TELEMETRY_SECTIONS,
+      nowMs,
+      platform: process.platform,
+      preloadedLogs: context.telemetryLogs,
+    });
+    const text = a.format === "json" ? JSON.stringify(bundle, null, 2) : formatTelemetrySummary(bundle);
+    return { text, data: { bundle } };
+  }
+  const a = args as HubArgs<"telemetry.mine">;
+  const { sinceMs, untilMs } = resolveTelemetryWindow({
+    sinceMs: a.sinceMs,
+    untilMs: a.untilMs,
+    windowMs: a.windowMs,
+    nowMs,
+  });
+  const bundle = collectDailyTelemetryDbSnapshot(db, {
+    pmId: caller.pmId,
+    sinceMs,
+    untilMs,
+    scope: a.scope ?? "pm",
+    sections: DAILY_TELEMETRY_SECTIONS,
+    nowMs,
+    platform: process.platform,
+    preloadedLogs: context.telemetryLogs,
+  });
+  const result = runFeatureMiningPipeline({
+    bundle,
+    priorState: context.miningPriorState ?? EMPTY_FEATURE_MINING_STATE,
+    backlog: context.miningBacklog ?? [],
+    nowMs,
+  });
+  return {
+    text: renderFeatureMiningDigest(result),
+    data: { result, stateRecoveredFromCorrupt: context.miningStateRecovered === true },
   };
 }
 
@@ -376,6 +445,9 @@ export function createLedgerHubCommands(
         return taskGraphs.cancelIn(p, caller, args as HubArgs<"graph.cancel">);
       case "graph.finish":
         return taskGraphs.finishIn(p, caller, args as HubArgs<"graph.finish">, context);
+      case "telemetry.export":
+      case "telemetry.mine":
+        return runTelemetryCommand(db, now(), caller, command, args, context);
     }
   };
 
