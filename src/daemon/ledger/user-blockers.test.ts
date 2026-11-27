@@ -347,6 +347,30 @@ describe("要用户动手的事：系统挂卡、处理完接着派", () => {
     expect(workerSendActions(wid)).toEqual([]);
   });
 
+  it("a released step whose slot another step now holds goes to the PM and its Worker is not resumed", async () => {
+    const slotted = (title: string, vendor?: string) => ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title, steps: [{ key: "impl", title: "实现", brief: "写代码", slot: "real-env", ...(vendor === undefined ? {} : { vendor }) }] }),
+    }).data.graph;
+    const blocked = slotted("被卡住的", "codex");
+    const wid = showGraph(blocked.id).nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(wid);
+    const send = workerSendActions(wid)[0]!;
+    db.run("UPDATE actions SET status = 'failed' WHERE id = ?", send.id);
+    ledger.onActionFailed(send, "spawn_failed: codex exited before thread ready (exit 1): Error: authentication required. Run 'codex login' to log in");
+    const blockerId = showGraph(blocked.id).nodes[0]!.userBlocker!.id;
+    const other = slotted("占着名额的");
+    expect(stateOf(showGraph(other.id).nodes[0]!)).toBe("running");
+    enqueued.length = 0;
+
+    expect((await recheck(blockerId)).resolved).toBe(true);
+    expect(stateOf(showGraph(blocked.id).nodes[0]!)).toBe("waiting:pm");
+    expect(showGraph(blocked.id).nodes[0]!.activeWorkerId).toBe(wid);
+    expect(workerSendActions(wid)).toEqual([]);
+    expect(stateOf(showGraph(other.id).nodes[0]!)).toBe("running");
+    const notice = db.get<{ text: string }>("SELECT text FROM messages WHERE conversation_id = ? AND sender = 'system' ORDER BY id DESC LIMIT 1", lin.conversationId)!;
+    expect(notice.text).toContain("名额「real-env」");
+  });
+
   it("卡住后那条消息已经不是失败（厂商先回了一段报错文字）：点 Done 后叫 Worker 接着干，步骤回到在干", async () => {
     const { graphId, wid, messageId, blockerId } = await blockOneCodexWorker();
     db.run("UPDATE messages SET status = 'replied' WHERE id = ?", messageId);

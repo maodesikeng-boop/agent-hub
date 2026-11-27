@@ -763,3 +763,4 @@ export const PM_AGENDA_STEP_LINES_MAX = 8;
 export const PM_AGENDA_DELTA_LINES_MAX = 8;
 // A model rebuilding state from a long chain of changes drifts, so a snapshot replaces the chain this often.
 export const PM_AGENDA_DELTAS_PER_SNAPSHOT = 20;
+export const STEP_SLOT_NAME_MAX_CHARS = 32;

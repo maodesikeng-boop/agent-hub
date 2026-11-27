@@ -256,6 +256,30 @@ describe("Worker sandbox approval", () => {
     expect(resumed?.sandboxApproval).toBeUndefined();
   });
 
+  it("refuses a sandbox approval over HTTP while another step holds the slot and keeps the card pending", async () => {
+    const slotGraph = (title: string, sandboxed: boolean) => f.ledger.hubCall(f.pm.sessionId, "graph.create", { specJson: JSON.stringify({
+      title,
+      steps: [{ key: "run", title: "Read window", vendor: "codex", brief: "Read the Calculator window", slot: "real-env",
+        ...(sandboxed ? { noOuterSandbox: true, caps: "custom", allow: [COMPUTER_USE] } : {}) }],
+    }) }, { workspace: { kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false } }).data.graph;
+    const waiting = slotGraph("Sandboxed", true);
+    const waitingWorker = waiting.nodes[0]!.activeWorkerId!;
+    const approval = approvalOf(waitingWorker)!;
+    const holder = slotGraph("Holder", false);
+    expect(holder.nodes[0]).toMatchObject({ status: "running" });
+    const cookie = await loginCookie(f.ui, { token: TOKEN, port: PORT });
+    const refused = await request(approval.id, APPROVE, cookie);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.body).toContain("名额「real-env」");
+    expect(f.ledger.getSandboxApproval!(approval.id)?.status).toBe("pending");
+    expect(approvalOf(waitingWorker)?.id).toBe(approval.id);
+    expect(actionsOf(waitingWorker)).toEqual([]);
+    expect(f.ledger.snapshot().activeTaskGraphs.find((g) => g.id === waiting.id)?.nodes[0]).toMatchObject({ status: "waiting", waitingFor: "user" });
+    f.ledger.hubCall(f.pm.sessionId, "worker.end", { workerId: holder.nodes[0]!.activeWorkerId! });
+    expect((await request(approval.id, { ...APPROVE, clientId: "after-free" }, cookie)).json()).toMatchObject({ approval: { status: "approved" } });
+    expect(f.ledger.snapshot().activeTaskGraphs.find((g) => g.id === waiting.id)?.nodes[0]).toMatchObject({ status: "running" });
+  });
+
   it("counts ordinary step decisions without counting sandbox approval in the Router digest", () => {
     createSandboxGraph();
     const count = () => f.ledger.getRouterDigest().pms.find((pm) => pm.pmId === f.pm.pm.id)?.pendingDecisionCount;

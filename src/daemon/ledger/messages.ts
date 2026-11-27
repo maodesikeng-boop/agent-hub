@@ -25,7 +25,7 @@ import { WEB_MESSAGE_COLUMNS, toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import { clearStreaming, idle, toolRunning, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
-import { getAgentSession } from "../store/index.ts";
+import { getAgentSession, type Db } from "../store/index.ts";
 import type { LedgerSessions, LiveSession } from "./sessions.ts";
 import { replyIdOf, type TurnReplyView } from "../../shared/turn-reply.ts";
 import type { StopSource } from "../../shared/turn.ts";
@@ -54,6 +54,15 @@ export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
 function clearBackgroundTasks(live: LiveSession): void {
   live.backgroundTasks = undefined;
   live.backgroundTaskList = undefined;
+}
+
+/** Step slots read the stored count, so it changes in the same write as the live one. */
+function storeBackgroundTasks(db: Db, sessionId: SessionId, count: number): void {
+  if (count > 0) {
+    db.run("INSERT INTO session_background_tasks (session_id, count) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET count = excluded.count", sessionId, count);
+  } else {
+    db.run("DELETE FROM session_background_tasks WHERE session_id = ?", sessionId);
+  }
 }
 
 export interface LedgerMessagesOptions {
@@ -303,6 +312,7 @@ export function createLedgerMessages(
     const sessionId = session.id;
     switch (event.type) {
       case "session.started":
+        storeBackgroundTasks(db, sessionId, 0);
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
           clearBackgroundTasks(l);
@@ -405,6 +415,7 @@ export function createLedgerMessages(
         return inserted ? undefined : "duplicate_tool";
       }
       case "background.changed":
+        storeBackgroundTasks(db, sessionId, event.count);
         updateLive(p, sessionId, (l) => {
           l.backgroundTasks = event.count;
           l.backgroundTaskList = event.tasks;
@@ -427,6 +438,7 @@ export function createLedgerMessages(
           if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped", null, sessionId);
           else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event), sessionId);
         }
+        storeBackgroundTasks(db, sessionId, 0);
         updateLive(p, sessionId, (l) => {
           idle(l);
           clearBackgroundTasks(l);

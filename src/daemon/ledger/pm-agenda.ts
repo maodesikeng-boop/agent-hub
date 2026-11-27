@@ -12,14 +12,17 @@ import { pendingAsksOfPm } from "./pending-asks.ts";
 import { enqueuePmNoticeIn } from "./pm-notices.ts";
 import { WORKER_REPORT_STATUS_LABELS, parseWorkerReport } from "../../shared/worker.ts";
 import { lastWorkerIdOf, parseJsonOr, readStoredArtifact } from "./task-graphs/rows.ts";
+import { slotViewsOf, type StepSlotView } from "./task-graphs/slots.ts";
 
-const graphSteps = `SELECT s.node_key, s.title, s.status, s.waiting_for, s.active_worker_id, s.worker_ids_json, s.artifact_json, s.gate_question,
-         coalesce(st.state_since, s.updated_at) AS since,
+const graphSteps = `SELECT s.id, s.node_key, s.title, s.status, s.waiting_for, s.active_worker_id, s.worker_ids_json, s.artifact_json, s.gate_question,
+         sl.slot, coalesce(st.state_since, s.updated_at) AS since,
          EXISTS (SELECT 1 FROM worker_sandbox_approvals a WHERE a.step_id = s.id AND a.worker_id = s.active_worker_id AND a.status = 'pending') AS approval,
          EXISTS (SELECT 1 FROM user_blocker_steps b WHERE b.step_id = s.id) AS blocker
-    FROM task_graph_steps s LEFT JOIN task_graph_step_states st ON st.step_id = s.id`;
+    FROM task_graph_steps s LEFT JOIN task_graph_step_states st ON st.step_id = s.id
+    LEFT JOIN task_graph_step_slots sl ON sl.step_id = s.id`;
 
 interface AgendaStepRow {
+  id: number;
   node_key: string;
   title: string;
   status: string;
@@ -28,6 +31,7 @@ interface AgendaStepRow {
   worker_ids_json: string;
   artifact_json: string | null;
   gate_question: string | null;
+  slot: string | null;
   since: number;
   approval: number;
   blocker: number;
@@ -49,7 +53,7 @@ interface GraphSummaryRow {
 
 const graphSummaryColumns = `g.id, g.title, count(s.id) AS steps,
          count(CASE WHEN s.status = 'done' THEN 1 END) AS done,
-         count(CASE WHEN s.status = 'pending' THEN 1 END) AS pending,
+         count(CASE WHEN s.status = 'pending' AND sl.queued_at IS NULL THEN 1 END) AS pending,
          count(CASE WHEN s.status = 'running' THEN 1 END) AS running,
          count(CASE WHEN s.waiting_for = 'pm' THEN 1 END) AS waiting_pm,
          count(CASE WHEN s.waiting_for = 'user' THEN 1 END) AS waiting_user,
@@ -57,6 +61,7 @@ const graphSummaryColumns = `g.id, g.title, count(s.id) AS steps,
          min(CASE WHEN s.waiting_for = 'pm' THEN coalesce(st.state_since, s.updated_at) END) AS oldest_wait`;
 const activeGraphSummaries = `FROM task_graphs g LEFT JOIN task_graph_steps s ON s.graph_id = g.id
     LEFT JOIN task_graph_step_states st ON st.step_id = s.id
+    LEFT JOIN task_graph_step_slots sl ON sl.step_id = s.id
    WHERE g.status = 'active' AND g.pm_id = ?`;
 
 const graphReady = (row: GraphSummaryRow): boolean => row.steps > 0 && row.steps === row.done;
@@ -84,9 +89,14 @@ function waitingReason(db: Db, row: AgendaStepRow): string {
   return "";
 }
 
-function stepLineOf(db: Db, row: AgendaStepRow): AgendaStepLine {
+/** Null for a pending step: one queued for a free slot starts in the drain that follows this write, so it waits on nobody. */
+function stepLineOf(db: Db, row: AgendaStepRow, slots: ReadonlyMap<number, StepSlotView>): AgendaStepLine | null {
   const base = { key: row.node_key, title: row.title, since: row.since };
-  if (row.status === "running") return { ...base, state: { kind: "running", workerId: row.active_worker_id, slot: null } };
+  if (row.status === "running") return { ...base, state: { kind: "running", workerId: row.active_worker_id, slot: row.slot } };
+  if (row.status === "pending") {
+    const queue = slots.get(row.id)?.queue;
+    return row.slot === null || queue === undefined ? null : { ...base, state: { kind: "queued_slot", slot: row.slot, ...queue } };
+  }
   if (row.waiting_for === "pm") return { ...base, state: { kind: "waiting_pm", reason: waitingReason(db, row) } };
   const reason = row.approval ? "确认 Worker 沙箱" : row.blocker ? "动手" : "拍板";
   return { ...base, state: { kind: "waiting_user", reason } };
@@ -95,11 +105,13 @@ function stepLineOf(db: Db, row: AgendaStepRow): AgendaStepLine {
 function graphBlockOf(db: Db, row: GraphSummaryRow): AgendaGraphBlock {
   const ready = graphReady(row);
   const oldestNeedsPmSince = ready ? row.latest_step : row.oldest_wait;
-  const steps = ready ? [] : db.all<AgendaStepRow>(
-    `${graphSteps} WHERE s.graph_id = ? AND s.status IN ('running', 'waiting')
+  const rows = ready ? [] : db.all<AgendaStepRow>(
+    `${graphSteps} WHERE s.graph_id = ? AND (s.status IN ('running', 'waiting') OR (s.status = 'pending' AND sl.queued_at IS NOT NULL))
        ORDER BY CASE WHEN s.waiting_for = 'pm' THEN 0 ELSE 1 END, s.sort_order, s.id`,
     row.id,
-  ).map((step) => stepLineOf(db, step));
+  );
+  const slots = slotViewsOf(db, rows.filter((step) => step.status === "pending").map((step) => step.id));
+  const steps = rows.flatMap((step) => stepLineOf(db, step, slots) ?? []);
   return {
     graphId: row.id, title: row.title, stepCount: row.steps, doneCount: row.done, pendingCount: row.pending,
     readyToFinish: ready, steps, doneKeys: parseJsonOr<string[]>(row.done_keys, []), watchId: null, needsPm: oldestNeedsPmSince !== null, oldestNeedsPmSince,

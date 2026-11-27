@@ -99,9 +99,16 @@ export interface ProgressResult {
   dispatched: Array<{ key: TaskNodeKey; title: string; workerId: WorkerId }>;
   dispatchFailed: Array<{ key: TaskNodeKey; title: string; index: number; total: number; reason: string }>;
   userBlocked: Array<{ key: TaskNodeKey; note: string }>;
+  queued: Array<{
+    key: TaskNodeKey;
+    slot: string;
+    position: number;
+    holder: { graphId: TaskGraphId; nodeKey: TaskNodeKey; workerId: WorkerId | null };
+    then: "start" | "pm";
+  }>;
 }
 
-export const emptyProgress = (): ProgressResult => ({ turned: [], dispatched: [], dispatchFailed: [], userBlocked: [] });
+export const emptyProgress = (): ProgressResult => ({ turned: [], dispatched: [], dispatchFailed: [], userBlocked: [], queued: [] });
 
 export type StepWorkspacePlan =
   | { kind: "inherit"; fromWorkerId: WorkerId; worktreePath: string; branch: string; baseCommit: string }

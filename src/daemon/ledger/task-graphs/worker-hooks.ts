@@ -13,9 +13,13 @@ import {
   formatStepWaitingPmMessage,
 } from "../task-graph-handoff.ts";
 import { userBlockedPmNote } from "../user-blockers.ts";
+import { wakeGraphPmIn } from "../pm-notices.ts";
 import { stopQueuedDeliveryNotesIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
+import { slotHeldText } from "./text.ts";
 import { artifactWithoutCheckpoint, decisionOf, toTaskNode, workerIdsOf } from "./rows.ts";
+import { assertSlotFreeForWorkerIn } from "./slot-queue.ts";
+import { slotConflictOf, stepSlotOf } from "./slots.ts";
 import { validateNodeKey } from "./spec.ts";
 import {
   buildGraphMaps,
@@ -42,10 +46,17 @@ function activeStepOfWorker(g: TaskGraphCtx, workerId: WorkerId): { node: TaskNo
   return { node, graphRow };
 }
 
+function isReadyForSlot(g: TaskGraphCtx, node: TaskNodeDbRow, maps: ReturnType<typeof buildGraphMaps>): boolean {
+  if (node.status !== "pending" || stepSlotOf(g.db, node.id) === null) return false;
+  return (maps.incoming.get(node.node_key) ?? []).every((u) => maps.byKey.get(u)?.status === "done");
+}
+
 function assertDispatchable(g: TaskGraphCtx, node: TaskNodeDbRow, nodeKey: TaskNodeKey, maps: ReturnType<typeof buildGraphMaps>): void {
   const replacing = node.active_worker_id !== null;
   const dispatchable =
-    node.status === "done" ? node.skipped === 0 : node.status === "waiting" && (node.waiting_for === "pm" || isUserBlocked(g.db, node.id));
+    node.status === "done" ? node.skipped === 0
+      : node.status === "pending" ? isReadyForSlot(g, node, maps)
+        : node.status === "waiting" && (node.waiting_for === "pm" || isUserBlocked(g.db, node.id));
   if (!replacing && !dispatchable) {
     throw fail(
       "conflict",
@@ -228,6 +239,14 @@ export function notifyUserBlockedStepsIn(g: TaskGraphCtx, p: Pending, blockerId:
   for (const { graph_id } of graphIds) pushSlimGraphIn(g, p, graph_id);
 }
 
+/** A released step whose Worker is attached but whose slot another step now holds goes to the PM instead of resuming. */
+function slotHeldReleaseNote(g: TaskGraphCtx, row: TaskNodeDbRow): string | null {
+  const conflict = row.active_worker_id === null ? null : slotConflictOf(g.db, row.id);
+  if (conflict === null) return null;
+  const wid = row.active_worker_id!;
+  return `${slotHeldText(row.node_key, conflict, { kind: "resume", workerId: wid })}，步骤转给你。名额空出来后用 ${HUB_COMMAND} worker send ${wid} 让它接着做。`;
+}
+
 export function releaseUserBlockedStepsIn(g: TaskGraphCtx, p: Pending, blockerId: UserBlockerId): void {
   const rows = g.db.all<TaskNodeDbRow & { worker_status: string | null }>(
     `SELECT n.*, w.status AS worker_status FROM task_graph_steps n
@@ -238,9 +257,15 @@ export function releaseUserBlockedStepsIn(g: TaskGraphCtx, p: Pending, blockerId
   );
   const t = g.now();
   const graphIds = new Set<TaskGraphId>();
+  const held = new Map<TaskGraphId, { keys: TaskNodeKey[]; notes: string[] }>();
   for (const row of rows) {
+    const note = row.worker_status === "open" ? slotHeldReleaseNote(g, row) : null;
+    if (note !== null) {
+      const entry = held.get(row.graph_id) ?? { keys: [], notes: [] };
+      held.set(row.graph_id, { keys: [...entry.keys, row.node_key], notes: [...entry.notes, note] });
+    }
     const [status, waitingFor] =
-      row.active_worker_id === null ? ["pending", null] : row.worker_status === "open" ? ["running", null] : ["waiting", "pm"];
+      row.active_worker_id === null ? ["pending", null] : row.worker_status === "open" && note === null ? ["running", null] : ["waiting", "pm"];
     g.db.run("UPDATE task_graph_steps SET status = ?, waiting_for = ?, updated_at = ? WHERE id = ?", status, waitingFor, t, row.id);
     graphIds.add(row.graph_id);
   }
@@ -248,9 +273,20 @@ export function releaseUserBlockedStepsIn(g: TaskGraphCtx, p: Pending, blockerId
     const graphRow = getGraphRow(g.db, graphId);
     if (graphRow === undefined) continue;
     if (graphRow.status === "active") recomputeGraphProgressIn(g, p, graphRow, undefined, undefined, { retractBlockedWaiting: false });
+    const entry = held.get(graphId);
+    if (entry !== undefined && graphRow.status === "active" && !g.persona.isPmArchived(graphRow.pm_id)) {
+      wakeGraphPmIn(g, p, graphRow, { kind: "graph.steps_waiting_pm", graphId, stepKeys: entry.keys, reason: `slot-held-release:${blockerId}` },
+        `【任务图 #${graphRow.id}「${graphRow.title}」】用户处理好了，但${entry.notes.join("")}`);
+    }
     touchGraph(g.db, graphId, t);
     pushSlimGraphIn(g, p, graphId);
   }
+}
+
+/** True when the Worker's step names a slot that another step holds, so a blocker release must not resume it. */
+export function isWorkerSlotHeldElsewhere(g: TaskGraphCtx, workerId: WorkerId): boolean {
+  const node = stepOfActiveWorker(g.db, workerId);
+  return node !== undefined && slotConflictOf(g.db, node.id) !== null;
 }
 
 function reopenDoneStepIn(g: TaskGraphCtx, p: Pending, workerId: WorkerId): void {
@@ -271,6 +307,7 @@ function reopenDoneStepIn(g: TaskGraphCtx, p: Pending, workerId: WorkerId): void
       `步骤「${reopened.node_key}」已完成且下游步骤「${activeDownstream}」正在执行或挂着未收工的 Worker，不能再向原 Worker #${workerId} 发消息重开上游步骤`,
     );
   }
+  assertSlotFreeForWorkerIn(g, reopened, workerId);
   g.db.run("UPDATE task_graph_steps SET status = 'running', active_worker_id = ?, updated_at = ? WHERE id = ?", workerId, g.now(), reopened.id);
   recomputeGraphProgressIn(g, p, graphRow);
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
@@ -285,6 +322,7 @@ export function onWorkerResumedIn(g: TaskGraphCtx, p: Pending, workerId: WorkerI
   }
   const graphRow = getGraphRow(g.db, attnNode.graph_id);
   if (graphRow === undefined || graphRow.status !== "active") return;
+  assertSlotFreeForWorkerIn(g, attnNode, workerId);
   const t = g.now();
   leaveStepIn(g.db, attnNode, {
     status: "running",

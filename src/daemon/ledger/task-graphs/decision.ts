@@ -24,6 +24,7 @@ import { artifactWithoutCheckpoint, hasText, isStoredCheckpoint, readStoredArtif
 import { buildGraphMaps, hasPendingStepAsk, isGraphAllSettled, loadGraph, publishGraphIn, stepPosition, touchGraph } from "./store.ts";
 import { formatCheckpointRejectionMessage, formatWorkerDecisionMessage, turnedListText } from "./text.ts";
 import { emptyProgress, type ProgressResult, type TaskGraphCtx, type TaskGraphDbRow, type TaskNodeDbRow } from "./types.ts";
+import { assertSlotFreeForWorkerIn } from "./slot-queue.ts";
 
 export const workerDecisionDedupeKey = (workerId: WorkerId, graphId: TaskGraphId, nodeKey: TaskNodeKey, dedupeId: string): string =>
   `pm:worker:${workerId}:gate-decide:${graphId}:${nodeKey}:${dedupeId}`;
@@ -132,6 +133,7 @@ function passCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): Decisi
 function rejectCheckpointIn(g: TaskGraphCtx, p: Pending, run: DecisionRun): DecisionResult {
   const { graphRow, node, input, t } = run;
   const targetWid = node.active_worker_id;
+  if (targetWid !== null) assertSlotFreeForWorkerIn(g, node, targetWid);
   settleAnsweredIn(g, p, run, input.choice ?? CONFIRM_REJECT_OPTION);
   const bridge = g.options.workers?.();
   const delivered =
@@ -174,6 +176,7 @@ function sendToWorkerIn(g: TaskGraphCtx, p: Pending, run: DecisionRun, questionT
   const bridge = g.options.workers?.();
   if (node.active_worker_id === null || bridge === undefined) return null;
   const targetWid = node.active_worker_id;
+  assertSlotFreeForWorkerIn(g, node, targetWid);
   const delivered = bridge.deliverToWorkerIn(p, {
     workerId: targetWid,
     text: formatWorkerDecisionMessage(questionText, input.choice, input.note),

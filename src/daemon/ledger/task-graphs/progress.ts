@@ -16,7 +16,8 @@ import {
   renderGraphStepTask,
 } from "../task-graph-handoff.ts";
 import { userBlockedPmNote } from "../user-blockers.ts";
-import { decisionOf, hasText, workerIdsOf } from "./rows.ts";
+import { decisionOf, hasText, readyOutcomeOf, workerIdsOf } from "./rows.ts";
+import { admitStep, queueStep, unqueueSteps } from "./slots.ts";
 import { validateDagAndOrder } from "./spec.ts";
 import { buildGraphMaps, hasPendingStepAsk, touchGraph } from "./store.ts";
 import { collectDirectUpstreams } from "./upstream.ts";
@@ -221,16 +222,24 @@ function advanceReadyStepIn(g: TaskGraphCtx, p: Pending, run: ProgressRun, node:
       return;
     }
   }
-  const hasBrief = hasText(node.brief);
+  const outcome = readyOutcomeOf(node);
+  // Settling starts nothing, so it does not wait for a slot.
+  if (outcome === "settle") {
+    setStepState(g, run, node, "done", null);
+    return;
+  }
+  const admission = admitStep(g.db, node.graph_id, node.node_key);
+  if (admission.kind === "queued") {
+    queueStep(g.db, node.id, run.t);
+    const { slot, position, holder } = admission;
+    run.result.queued.push({ key: node.node_key, slot, position, holder, then: outcome });
+    return;
+  }
   const { bridge, pm } = run;
-  if (hasBrief && bridge !== undefined && pm !== null) {
+  if (outcome === "start" && bridge !== undefined && pm !== null) {
     const { nodeRows } = run.maps;
     const pos = { index: nodeRows.findIndex((r) => r.node_key === node.node_key) + 1 || orderIdx + 1, total: nodeRows.length };
     autoDispatchIn(g, p, run, node, pos, bridge, pm);
-    return;
-  }
-  if (!hasBrief && node.decision_json !== null) {
-    setStepState(g, run, node, "done", null);
     return;
   }
   setStepState(g, run, node, "waiting", "pm");
@@ -265,14 +274,17 @@ export function recomputeGraphProgressIn(
     callerSession,
     context,
   };
+  const notReady: number[] = [];
   for (let idx = 0; idx < order.length; idx++) {
     const key = order[idx]!;
     const node = maps.byKey.get(key)!;
     const upsDone = (maps.incoming.get(key) ?? []).every((u) => maps.byKey.get(u)?.status === "done");
     if (retractBlockedWaiting && !upsDone && retractIfUpstreamReopened(g, run, node)) continue;
+    if (node.status === "pending" && !upsDone) notReady.push(node.id);
     if (node.status !== "pending" || !upsDone) continue;
     advanceReadyStepIn(g, p, run, node, idx);
   }
+  unqueueSteps(g.db, notReady);
   touchGraph(g.db, graphRow.id, run.t);
   return run.result;
 }
