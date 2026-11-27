@@ -120,6 +120,11 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
     }
     // 包进去的进程不能再开自带的沙箱：agy 在命令行上关（claude 在设置文件、codex 在 sandboxPolicy 里关）
     expect(WRITE_SCOPE_ENFORCERS.agy.ownSandboxOffArgs).toEqual(["--sandbox=false"]);
+    expect(
+      WRITE_SCOPE_ENFORCERS.agy
+        .spawnCommand({ command: "/bin/agy", args: ["acp", "--sandbox=false", "--dangerously-skip-permissions"] }, scope, "darwin", darwinOpts)
+        .args.filter((a) => a === "--sandbox=false"),
+    ).toHaveLength(1);
     expect(WRITE_SCOPE_ENFORCERS.claude.ownSandboxOffArgs).toEqual([]);
     expect(WRITE_SCOPE_ENFORCERS.codex.ownSandboxOffArgs).toEqual([]);
   });

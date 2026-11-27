@@ -2,7 +2,7 @@ import { acpChecklistFromSessionUpdate, acpChecklistFromToolUpdate } from "./che
 import { positiveContextTokens } from "../../../daemon/driver/usage.ts";
 import type { SessionNotification, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk/unstable";
 import { pickStepInput, toolStepSignature } from "../../../daemon/driver/protocol.ts";
-import { MAX_MESSAGE_BYTES, SESSION_STEPS_KEEP, type ChecklistUpdate } from "../../../shared/index.ts";
+import { MAX_MESSAGE_BYTES, SESSION_STEPS_KEEP, vendorSpec, type ChecklistUpdate } from "../../../shared/index.ts";
 import { toolResultOutputs } from "../tool-output.ts";
 import { ZERO_USAGE, type AcpDriverHost, type AcpProc, type AcpSessionState } from "./driver-state.ts";
 import {
@@ -195,10 +195,20 @@ function handleToolUpdate(
     (toolCall.status === "completed" || toolCall.status === "failed")
   ) {
     tracked.resultEmitted = true;
+    const signals = vendorSpec(host.vendor).skillSignals;
+    const emptyCompletedReadByPath =
+      toolCall.status === "completed" &&
+      toolCall.content === undefined &&
+      toolCall.rawOutput === undefined &&
+      signals.readByPath !== undefined &&
+      Object.hasOwn(signals.readByPath, tracked.name);
+    const resultPayload = emptyCompletedReadByPath
+      ? { ...toolCall, [signals.outputField]: "completed" }
+      : toolCall;
     host.emit(st.id, {
       type: "agent.tool_result",
       toolUseIds: [toolUseId],
-      ...toolResultOutputs(host.vendor, [[toolUseId, toolCall]]),
+      ...toolResultOutputs(host.vendor, [[toolUseId, resultPayload]]),
       at,
     });
   }

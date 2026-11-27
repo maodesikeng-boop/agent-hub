@@ -118,9 +118,9 @@ export default defineVendor({
   },
   checklist: { sources: ["todo_tool"], promptTool: `\`${AGY_CHECKLIST_TOOL}\`` },
   skillSignals: {
-    outputField: "output",
-    // read_file output has no body ('14 lines, 310 bytes'), so match on the Path argument.
-    readByPath: { read_file: { ok: /^\d+ lines?, \d+ bytes?$/u, fromStart: { StartLine: 1, ByteOffset: 0 } } },
+    outputField: "content",
+    // agy ACP read_file omits content/rawOutput on success (status: "completed"), so match on Path when completed.
+    readByPath: { read_file: { ok: /^completed$/u, fromStart: { StartLine: 1, ByteOffset: 0 } } },
   },
   capabilities: {
     builtInSandbox: {

@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,7 @@ import {
   type SessionCapabilities,
   type SessionId,
 } from "../../shared/index.ts";
+import { createSkillCatalog, skillHeads, skillsOfToolResult } from "../../shared/skill-loads.ts";
 import { decideAcpPermission, type AcpLaunchContext } from "../_common/acp/index.ts";
 import type { FakeAcpLogEntry, FakeAcpScript } from "../_common/acp/fixtures/fake-acp-agent.ts";
 import {
@@ -205,19 +206,18 @@ describe("agy ACP pure helpers", () => {
     const callRule = mcpGroup.PreToolUse[1]!;
     expect(callRule.matcher).toBe("^call_mcp_tool$");
     const cmd = callRule.hooks[0]!.command;
-    const match = /^node -e "(.+)"$/.exec(cmd);
-    expect(match).not.toBeNull();
+    expect(cmd).toContain(process.execPath);
 
-    const deniedOut = execFileSync(process.execPath, ["-e", match![1]!], {
-      input: JSON.stringify({ tool_input: { ServerName: "github", ToolName: "create_issue" } }),
-      encoding: "utf8",
-    });
+    const deniedOut = runHookCommand(
+      cmd,
+      JSON.stringify({ toolCall: { name: "call_mcp_tool", args: { ServerName: "github", ToolName: "create_issue" } } }),
+    );
     expect(JSON.parse(deniedOut)).toMatchObject({ decision: "deny" });
 
-    const allowedOut = execFileSync(process.execPath, ["-e", match![1]!], {
-      input: JSON.stringify({ tool_input: { ServerName: "slack", ToolName: "list_channels" } }),
-      encoding: "utf8",
-    });
+    const allowedOut = runHookCommand(
+      cmd,
+      JSON.stringify({ toolCall: { name: "call_mcp_tool", args: { ServerName: "slack", ToolName: "list_channels" } } }),
+    );
     expect(allowedOut.trim()).toBe("");
   });
 
@@ -638,6 +638,353 @@ describe("createAgyDriver ACP integration", () => {
 
       expect(existsSync(join(launchDir, "agy-rules", ".agents", "hooks.json"))).toBe(true);
       expect(events.filter((e) => e.type === "agent.checklist")).toHaveLength(0);
+    } finally {
+      await driver.shutdown();
+    }
+  });
+});
+
+function runHookCommand(command: string, stdin: string): string {
+  const res = spawnSync(command, {
+    shell: true,
+    input: stdin,
+    encoding: "utf8",
+  });
+  expect(res.status, `hook command failed: ${res.stderr}`).toBe(0);
+  return res.stdout;
+}
+
+describe("PR #501 round-1 review regression tests", () => {
+  it("mcpCallGuardCommand reads real agy 1.5.18 PreToolUse toolCall.args and invokes process.execPath", () => {
+    const caps: SessionCapabilities = {
+      deny: { mcp: ["dummy", "github"], skills: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
+      allow: { skills: [], mcp: [] },
+    };
+    const hooks = buildAgyWorkspaceHooks({ readonly: false, capabilities: caps, platform: process.platform });
+    const mcpGroup = hooks["bellwood-mcp-deny"] as {
+      PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }>;
+    };
+    const callRule = mcpGroup.PreToolUse.find((r) => r.matcher === "^call_mcp_tool$")!;
+    const cmd = callRule.hooks[0]!.command;
+    expect(cmd).toContain(process.execPath);
+    expect(cmd.startsWith("node ")).toBe(false);
+
+    // Exact stdin shape captured from real agy 1.5.18 PreToolUse hook.
+    const realAgyDeniedStdin = JSON.stringify({
+      hookEventName: "PreToolUse",
+      cwd: "/tmp/proj",
+      modelName: "gemini-3.8-flash-low",
+      stepIdx: 2,
+      toolCall: {
+        args: { Arguments: { q: "hi" }, ServerName: "dummy", ToolName: "ro_get" },
+        id: "call_3275037376225581699",
+        name: "call_mcp_tool",
+      },
+    });
+    expect(JSON.parse(runHookCommand(cmd, realAgyDeniedStdin))).toMatchObject({ decision: "deny" });
+
+    const realAgyAllowedStdin = JSON.stringify({
+      hookEventName: "PreToolUse",
+      toolCall: {
+        args: { Arguments: {}, ServerName: "slack", ToolName: "list_channels" },
+        id: "call_3275037376225581700",
+        name: "call_mcp_tool",
+      },
+    });
+    expect(runHookCommand(cmd, realAgyAllowedStdin).trim()).toBe("");
+  });
+
+  it("recognizes loaded skills from real agy ACP read_file (completed without content) and run_command (content text)", async () => {
+    const root = tempDir("agy-skill-reg-");
+    const projectDir = join(root, "proj");
+    const launchDir = join(root, "launch");
+    const skillDir = join(projectDir, ".agents", "skills", "probe-skill");
+    const skillPath = join(skillDir, "SKILL.md");
+    const skillBody = "---\nname: probe-skill\ndescription: probe\n---\n\n# Probe Skill\nFirst body line.\n";
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(launchDir, { recursive: true });
+    writeFileSync(skillPath, skillBody, "utf8");
+
+    const { env } = makeFakeAcpEnv(root, {
+      additionalDirectoriesCapability: true,
+      turns: [
+        {
+          customUpdates: [
+            {
+              sessionUpdate: "tool_call",
+              payload: {
+                toolCallId: "tc-read-ok",
+                name: "read_file",
+                title: "File .agents/skills/probe-skill/SKILL.md",
+                kind: "read",
+                status: "in_progress",
+                locations: [{ path: skillPath }],
+                rawInput: { Path: skillPath },
+              },
+            },
+            {
+              sessionUpdate: "tool_call_update",
+              payload: {
+                toolCallId: "tc-read-ok",
+                name: "read_file",
+                kind: "read",
+                status: "completed",
+                locations: [{ path: skillPath }],
+                rawInput: { Path: skillPath },
+              },
+            },
+            {
+              sessionUpdate: "tool_call",
+              payload: {
+                toolCallId: "tc-read-fail",
+                name: "read_file",
+                title: "File missing.md",
+                kind: "read",
+                status: "in_progress",
+                rawInput: { Path: skillPath },
+              },
+            },
+            {
+              sessionUpdate: "tool_call_update",
+              payload: {
+                toolCallId: "tc-read-fail",
+                name: "read_file",
+                kind: "read",
+                status: "failed",
+                rawOutput: "file does not exist",
+                content: [{ type: "content", content: { type: "text", text: "file does not exist" } }],
+              },
+            },
+            {
+              sessionUpdate: "tool_call",
+              payload: {
+                toolCallId: "tc-cmd",
+                name: "run_command",
+                title: `cat ${skillPath}`,
+                kind: "execute",
+                status: "in_progress",
+                rawInput: { CommandLine: `cat ${skillPath}` },
+              },
+            },
+            {
+              sessionUpdate: "tool_call_update",
+              payload: {
+                toolCallId: "tc-cmd",
+                name: "run_command",
+                kind: "execute",
+                status: "completed",
+                rawOutput: { output: `Command exited with code 0.\n\nCommand output:\n${skillBody.replaceAll("\n", "\r\n")}`, exit_code: 0 },
+                content: [
+                  {
+                    type: "content",
+                    content: {
+                      type: "text",
+                      text: `Created At: 2026-11-28T03:08:49+08:00\nCommand exited with code 0.\n\nCommand output:\n${skillBody.replaceAll("\n", "\r\n")}`,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          textChunks: ["done"],
+        },
+      ],
+    });
+
+    const store = new MemorySessionStore();
+    const row = makeRow({ id: 21 as SessionId, cwd: projectDir });
+    store.add(row);
+    const events: DriverEvent[] = [];
+    const driver = createAgyDriver({
+      executablePath: FAKE_ACP_AGENT,
+      homeDir: root,
+      store,
+      prepareLaunch: async () => makeLaunchFiles(launchDir, { env }),
+      log: () => {},
+    });
+    driver.onEvent((_id, ev) => events.push(ev));
+
+    try {
+      const done = waitForEventCount(driver, events, "turn.ended", 1);
+      await driver.send(row.id, { messageIds: [1], source: "user", text: "load skill" });
+      await done;
+
+      const tools = events.filter((e): e is Extract<DriverEvent, { type: "agent.tool" }> => e.type === "agent.tool");
+      const results = events.filter((e): e is Extract<DriverEvent, { type: "agent.tool_result" }> => e.type === "agent.tool_result");
+      const catalog = createSkillCatalog(
+        [{ name: "probe-skill", path: skillPath, key: skillPath, fileId: skillPath, heads: skillHeads(skillBody) }],
+        (p) => (p === skillPath ? skillPath : null),
+      );
+
+      const outputOf = (suffix: string) => {
+        const tool = tools.find((t) => t.toolUseId.endsWith(`:${suffix}`))!;
+        const res = results.find((r) => r.toolUseIds.includes(tool.toolUseId))!;
+        return { tool, output: res.outputs?.[tool.toolUseId] };
+      };
+
+      const readOk = outputOf("tc-read-ok");
+      expect(readOk.output).toBeDefined();
+      expect(skillsOfToolResult("agy", { name: readOk.tool.name, input: readOk.tool.input }, readOk.output, catalog).map((s) => s.name)).toEqual([
+        "probe-skill",
+      ]);
+
+      const readFail = outputOf("tc-read-fail");
+      expect(skillsOfToolResult("agy", { name: readFail.tool.name, input: readFail.tool.input }, readFail.output, catalog)).toEqual([]);
+
+      const cmdOk = outputOf("tc-cmd");
+      expect(cmdOk.output).toContain("name: probe-skill");
+      expect(skillsOfToolResult("agy", { name: cmdOk.tool.name, input: cmdOk.tool.input }, cmdOk.output, catalog).map((s) => s.name)).toEqual([
+        "probe-skill",
+      ]);
+    } finally {
+      await driver.shutdown();
+    }
+  });
+
+  it("readonly hooks block non-allowlisted MCP calls, block all agy 1.5.18 delegation tools, and decideAcpPermission respects extraAllow without readOnlyHint", async () => {
+    // 3(a): readonly hooks.json blocks non-allowlisted MCP calls (overrides user/project settings.json allow).
+    const roPolicy = buildReadonlyPolicy({
+      homeDir: "/tmp/home",
+      stateDir: "/tmp/state",
+      connectors: { extraAllow: ["dummy/ro_get"], deny: ["dummy/rw_post"] },
+    });
+    const hooks = buildAgyWorkspaceHooks({
+      readonly: true,
+      readonlyPolicy: roPolicy,
+      platform: process.platform,
+    });
+    expect(JSON.stringify(hooks)).not.toContain('"decision":"allow"');
+
+    const roGroup = hooks["bellwood-readonly"] as {
+      PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }>;
+    };
+    // 3(b): all agy 1.5.18 multi-agent delegation tools blocked in hooks.json
+    const toolDenyRule = roGroup.PreToolUse[0]!;
+    const toolDenyRe = new RegExp(toolDenyRule.matcher);
+    for (const tool of ["invoke_subagent", "define_subagent", "run_workflow", "swarm"]) {
+      expect(toolDenyRe.test(tool), `expected readonly hook to block ${tool}`).toBe(true);
+    }
+
+    // Read-only MCP hook denies unapproved MCP calls and abstains only for extraAllow
+    const mcpGuardRule = roGroup.PreToolUse.find((r) => new RegExp(r.matcher).test("call_mcp_tool"));
+    expect(mcpGuardRule).toBeDefined();
+    const roMcpCmd = mcpGuardRule!.hooks[0]!.command;
+    expect(roMcpCmd).toContain(process.execPath);
+
+    const callStdin = (server: string, tool: string) =>
+      JSON.stringify({ hookEventName: "PreToolUse", toolCall: { name: "call_mcp_tool", args: { ServerName: server, ToolName: tool } } });
+    expect(JSON.parse(runHookCommand(roMcpCmd, callStdin("dummy", "rw_post")))).toMatchObject({ decision: "deny" });
+    expect(JSON.parse(runHookCommand(roMcpCmd, callStdin("github", "create_issue")))).toMatchObject({ decision: "deny" });
+    expect(runHookCommand(roMcpCmd, callStdin("dummy", "ro_get")).trim()).toBe("");
+    expect(JSON.parse(runHookCommand(roMcpCmd, "not-json"))).toMatchObject({ decision: "deny" });
+
+    // 3(c): real agy 1.5.18 ACP permission request omits _meta/annotations; extraAllow must work while default/deny fail closed.
+    const realAgyMcpPerm = {
+      sessionId: "c777efb1-11c2-48ca-b251-2ff17ffe8f95",
+      toolCall: {
+        toolCallId: "call_15419478563907037333",
+        name: "call_mcp_tool",
+        kind: "execute",
+        title: "MCP Tool ro_get",
+        rawInput: { Arguments: { q: "hi" }, ServerName: "dummy", ToolName: "ro_get" },
+      },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    } as unknown as RequestPermissionRequest;
+
+    const defaultPolicy = buildReadonlyPolicy({ homeDir: "/tmp/home", stateDir: "/tmp/state" });
+    expect(
+      await decideAcpPermission(
+        { request: realAgyMcpPerm, readonlyPolicy: defaultPolicy, closing: false, signal: new AbortController().signal },
+        { extractMcpTool: extractAgyAcpMcpTool, writeToolNames: AGY_ACP_WRITE_TOOL_NAMES },
+      ),
+    ).toEqual({ outcome: "selected", optionId: "deny" });
+
+    expect(
+      await decideAcpPermission(
+        { request: realAgyMcpPerm, readonlyPolicy: roPolicy, closing: false, signal: new AbortController().signal },
+        { extractMcpTool: extractAgyAcpMcpTool, writeToolNames: AGY_ACP_WRITE_TOOL_NAMES },
+      ),
+    ).toEqual({ outcome: "selected", optionId: "allow" });
+
+    const denyOverridePolicy = buildReadonlyPolicy({
+      homeDir: "/tmp/home",
+      stateDir: "/tmp/state",
+      connectors: { extraAllow: ["dummy/*"], deny: ["dummy/ro_get"] },
+    });
+    expect(
+      await decideAcpPermission(
+        { request: realAgyMcpPerm, readonlyPolicy: denyOverridePolicy, closing: false, signal: new AbortController().signal },
+        { extractMcpTool: extractAgyAcpMcpTool, writeToolNames: AGY_ACP_WRITE_TOOL_NAMES },
+      ),
+    ).toEqual({ outcome: "selected", optionId: "deny" });
+  });
+
+  it("readonly driver rejects run_workflow, swarm, define_subagent, deduplicates --sandbox=false, and normalizes custom homeDir realpath", async () => {
+    const root = tempDir("agy-ro-full-");
+    const realHome = join(root, "real-home");
+    const linkHome = join(root, "link-home");
+    const projectDir = join(root, "proj");
+    const launchDir = join(root, "launch");
+    for (const d of [realHome, projectDir, launchDir]) mkdirSync(d, { recursive: true });
+    symlinkSync(realHome, linkHome);
+
+    const { logFile, env } = makeFakeAcpEnv(root, {
+      additionalDirectoriesCapability: true,
+      turns: [
+        {
+          toolCalls: [
+            { toolCallId: "t-wf", name: "run_workflow", title: "run_workflow", kind: "execute", requestPermission: { kind: "execute", name: "run_workflow" } },
+            { toolCallId: "t-sw", name: "swarm", title: "swarm", kind: "execute", requestPermission: { kind: "execute", name: "swarm" } },
+            { toolCallId: "t-def", name: "define_subagent", title: "define_subagent", kind: "execute", requestPermission: { kind: "execute", name: "define_subagent" } },
+          ],
+          textChunks: ["done"],
+        },
+      ],
+    });
+
+    const policy = buildReadonlyPolicy({ homeDir: realHome, stateDir: join(root, "state") });
+    const capturedInputs: ReadonlySandboxInput[] = [];
+    const store = new MemorySessionStore();
+    const row = makeRow({ id: 22 as SessionId, role: "worker", pmId: null, workerId: 22, cwd: projectDir });
+    store.add(row);
+    const events: DriverEvent[] = [];
+    const driver = createAgyDriver({
+      executablePath: FAKE_ACP_AGENT,
+      homeDir: linkHome,
+      store,
+      prepareLaunch: async () => makeLaunchFiles(launchDir, { env, readonly: policy }),
+      readonlySpawn: (base, input) => {
+        capturedInputs.push(input);
+        return { command: base.command, args: base.args, osSandboxed: true };
+      },
+      log: () => {},
+    });
+    driver.onEvent((_id, ev) => events.push(ev));
+
+    try {
+      const done = waitForEventCount(driver, events, "turn.ended", 1);
+      await driver.send(row.id, { messageIds: [1], source: "user", text: "inspect" });
+      await done;
+
+      const logs = readJsonLog<FakeAcpLogEntry>(logFile);
+      const outcomes = Object.fromEntries(
+        logs
+          .filter((e) => e.event === "permission_outcome")
+          .map((e) => [e.toolCallId as string, (e.outcome as { optionId?: string }).optionId]),
+      );
+      expect(outcomes["t-wf"]).toBe("reject-once");
+      expect(outcomes["t-sw"]).toBe("reject-once");
+      expect(outcomes["t-def"]).toBe("reject-once");
+
+      // Nit 1: --sandbox=false appears once, not duplicated.
+      const spawn = logs.find((e) => e.event === "spawn");
+      expect((spawn?.argv as string[] | undefined)?.filter((a) => a === "--sandbox=false")).toHaveLength(1);
+
+      // Nit 2: custom homeDir is realpath-normalized in writableFileGlobs.
+      expect(capturedInputs[0]!.writableFileGlobs?.every((g) => g.startsWith(realHome))).toBe(true);
     } finally {
       await driver.shutdown();
     }

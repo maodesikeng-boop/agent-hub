@@ -12,6 +12,7 @@ import {
   type Driver,
   type DriverEvent,
   type LaunchFiles,
+  type ReadonlyPolicy,
   type SessionCapabilities,
   type SessionId,
 } from "../../shared/index.ts";
@@ -27,6 +28,7 @@ import {
   type AcpLaunchContext,
   type AcpPermissionDecisionContext,
 } from "../_common/acp/index.ts";
+import { realpathOrSelf } from "../_common/acp/driver-state.ts";
 import { extractDefaultMcpTool } from "../_common/acp/protocol.ts";
 import { agyChecklistFromStep } from "./checklist.ts";
 import { agyComposerBase } from "./composer.ts";
@@ -48,9 +50,17 @@ export interface AgyAcpDriverOptions extends Omit<AcpDriverOptions, "executableP
 
 export interface AgyWorkspaceHooksOptions {
   readonly: boolean;
+  readonlyPolicy?: ReadonlyPolicy;
   capabilities?: SessionCapabilities;
   platform?: NodeJS.Platform;
 }
+
+const AGY_ACP_SUBAGENT_TOOL_NAMES: readonly string[] = [
+  "invoke_subagent",
+  "define_subagent",
+  "run_workflow",
+  "swarm",
+];
 
 export const AGY_ACP_WRITE_TOOL_NAMES: readonly string[] = [
   "write_to_file",
@@ -108,7 +118,13 @@ function readPermissionAnnotations(request: RequestPermissionRequest): Connector
   );
 }
 
-function mcpCallGuardCommand(servers: readonly string[]): string {
+function nodeEvalHookCommand(script: string, platform: NodeJS.Platform = process.platform): string {
+  const execPath = process.execPath;
+  if (platform === "win32") return `"${execPath}" -e "${script}"`;
+  return `'${execPath.replaceAll("'", "'\\''")}' -e '${script.replaceAll("'", "'\\''")}'`;
+}
+
+function mcpCallGuardCommand(servers: readonly string[], platform: NodeJS.Platform = process.platform): string {
   const cfgB64 = Buffer.from(
     JSON.stringify({
       servers,
@@ -119,10 +135,45 @@ function mcpCallGuardCommand(servers: readonly string[]): string {
   const script =
     `const c=JSON.parse(Buffer.from('${cfgB64}','base64').toString('utf8'));` +
     `let d={};try{d=JSON.parse(require('fs').readFileSync(0,'utf8')||'{}')}catch{}` +
-    `const i=d.tool_input||d.input||d.parameters||{};` +
+    `const i=(d.toolCall&&d.toolCall.args)||d.tool_input||d.input||d.parameters||{};` +
     `const s=String(i.ServerName||i.serverName||i.server||'').trim();` +
     `if(c.servers.includes(s))console.log(JSON.stringify(c.reply));`;
-  return `node -e "${script}"`;
+  return nodeEvalHookCommand(script, platform);
+}
+
+// Overrides user/project settings.json MCP allow rules for read-only workers; fails closed without ever emitting allow.
+function readonlyMcpGuardCommand(
+  options: { extraAllow: readonly string[]; deny: readonly string[] },
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const cfgB64 = Buffer.from(
+    JSON.stringify({
+      extraAllow: options.extraAllow,
+      deny: options.deny,
+      reply: { decision: "deny", reason: "Read-only workers can only invoke allowlisted MCP tools." },
+    }),
+    "utf8",
+  ).toString("base64");
+  const script =
+    `const c=JSON.parse(Buffer.from('${cfgB64}','base64').toString('utf8'));` +
+    `let d=null;try{d=JSON.parse(require('fs').readFileSync(0,'utf8')||'')}catch{}` +
+    `const tc=(d&&typeof d==='object'&&d.toolCall&&typeof d.toolCall==='object')?d.toolCall:{};` +
+    `const n=String(tc.name||(d&&(d.tool_name||d.toolName))||'').trim();` +
+    `const a=tc.args||(d&&(d.tool_input||d.input||d.parameters))||{};` +
+    `let s='',t='';` +
+    `if(n==='call_mcp_tool'||(!n&&(a.ServerName||a.serverName||a.server))){` +
+    `s=String(a.ServerName||a.serverName||a.server||'').trim();` +
+    `t=String(a.ToolName||a.toolName||a.tool||'').trim();` +
+    `}else if(n.startsWith('mcp__')){` +
+    `const r=n.slice(5),k=r.indexOf('__');if(k>0&&k+2<r.length){s=r.slice(0,k);t=r.slice(k+2);}` +
+    `}else if(/^mcp[:/][^/\\s]+\\/[^\\s]+$/i.test(n)){` +
+    `const m=/^mcp[:/]([^/\\s]+)\\/([^\\s]+)$/i.exec(n);s=m[1];t=m[2];` +
+    `}else if(n.startsWith('mcp_')){` +
+    `const r=n.slice(4),k=r.indexOf('_');if(k>0&&k+1<r.length){s=r.slice(0,k);t=r.slice(k+1);}` +
+    `}` +
+    `const hit=(r)=>{const k=r.indexOf('/');const rs=k<0?r:r.slice(0,k),rt=k<0?'*':r.slice(k+1);return (rs==='*'||rs===s)&&(rt==='*'||rt===t);};` +
+    `if(!d||!s||!t||c.deny.some(hit)||!c.extraAllow.some(hit))console.log(JSON.stringify(c.reply));`;
+  return nodeEvalHookCommand(script, platform);
 }
 
 export function buildAgyAcpLaunchArgs(context: AcpLaunchContext): string[] {
@@ -149,8 +200,14 @@ export function buildAgyWorkspaceHooks(options: AgyWorkspaceHooksOptions): Recor
   const platform = options.platform ?? process.platform;
   const hooks: Record<string, unknown> = { ...defaultAgyScheduleHooks(platform) };
 
+  const deniedServers = [...new Set((options.capabilities?.deny.mcp ?? []).map((s) => s.trim()).filter(Boolean))].sort();
+
   if (options.readonly) {
-    const blockedTools = [...AGY_ACP_WRITE_TOOL_NAMES, "invoke_subagent"];
+    const blockedTools = [...AGY_ACP_WRITE_TOOL_NAMES, ...AGY_ACP_SUBAGENT_TOOL_NAMES];
+    const readonlyDeny = [
+      ...(options.readonlyPolicy?.connectors.deny ?? []),
+      ...deniedServers.map((s) => `${s}/*`),
+    ];
     hooks["bellwood-readonly"] = {
       PreToolUse: [
         {
@@ -162,11 +219,22 @@ export function buildAgyWorkspaceHooks(options: AgyWorkspaceHooksOptions): Recor
             },
           ],
         },
+        {
+          matcher: "^(?:call_mcp_tool|mcp(?:__|_|[:/]).*)$",
+          hooks: [
+            {
+              type: "command",
+              command: readonlyMcpGuardCommand(
+                { extraAllow: options.readonlyPolicy?.connectors.extraAllow ?? [], deny: readonlyDeny },
+                platform,
+              ),
+            },
+          ],
+        },
       ],
     };
   }
 
-  const deniedServers = [...new Set((options.capabilities?.deny.mcp ?? []).map((s) => s.trim()).filter(Boolean))].sort();
   if (deniedServers.length > 0) {
     const serverPatterns = [
       ...new Set(
@@ -186,7 +254,7 @@ export function buildAgyWorkspaceHooks(options: AgyWorkspaceHooksOptions): Recor
         },
         {
           matcher: "^call_mcp_tool$",
-          hooks: [{ type: "command", command: mcpCallGuardCommand(deniedServers) }],
+          hooks: [{ type: "command", command: mcpCallGuardCommand(deniedServers, platform) }],
         },
       ],
     };
@@ -203,7 +271,7 @@ export function extractAgyAcpMcpTool(
   const rawTitle = typeof request.toolCall.title === "string" ? request.toolCall.title.trim() : "";
 
   if (rawName === "call_mcp_tool" || /^call_mcp_tool(?:\b|:|\()/i.test(rawTitle)) {
-    const input = asRecord(request.toolCall.rawInput);
+    const input = asRecord(request.toolCall.rawInput) ?? asRecord((request.toolCall as Record<string, unknown>).args);
     let server =
       typeof input?.ServerName === "string" && input.ServerName.trim() !== ""
         ? input.ServerName.trim()
@@ -352,9 +420,12 @@ export function createAgyAcpDriver(options: AgyAcpDriverOptions): Driver {
     for (const listener of listeners) listener(sessionId, event);
   };
 
+  const effectiveHome = (fallback: string): string => (homeDir !== undefined ? realpathOrSelf(homeDir) : fallback);
+
   const prepareWorkspace = (ctx: AcpLaunchContext): string => {
     const hooks = buildAgyWorkspaceHooks({
       readonly: ctx.files.readonly !== undefined,
+      readonlyPolicy: ctx.files.readonly,
       capabilities: ctx.files.capabilities,
     });
     const workspace = prepareAgyLaunchWorkspace(ctx.files.promptFile, ctx.files.skillsDir, hooks);
@@ -362,7 +433,7 @@ export function createAgyAcpDriver(options: AgyAcpDriverOptions): Driver {
 
     let warning: string | null;
     try {
-      warning = agyRuleBudgetWarning(homeDir ?? homedir(), [ctx.row.cwd, ...ctx.row.addDirs, workspace]);
+      warning = agyRuleBudgetWarning(effectiveHome(homedir()), [ctx.row.cwd, ...ctx.row.addDirs, workspace]);
     } catch (error) {
       warning = `agy 规则预算检查失败：${errorMessage(error)}。无法确认规则是否会被截断。`;
     }
@@ -403,7 +474,7 @@ export function createAgyAcpDriver(options: AgyAcpDriverOptions): Driver {
       decide: (ctx) => {
         const name = (ctx.request.toolCall.name ?? "").trim();
         if (name === "schedule") return rejectPermission(ctx);
-        if (ctx.readonlyPolicy !== null && name === "invoke_subagent") return rejectPermission(ctx);
+        if (ctx.readonlyPolicy !== null && AGY_ACP_SUBAGENT_TOOL_NAMES.includes(name)) return rejectPermission(ctx);
         return null;
       },
     },
@@ -412,8 +483,7 @@ export function createAgyAcpDriver(options: AgyAcpDriverOptions): Driver {
     },
     readonlySandbox: {
       writableDirs: (resolvedHome) => {
-        const effectiveHome = homeDir ?? resolvedHome;
-        const { cliDir } = agyHomePaths(effectiveHome);
+        const { cliDir } = agyHomePaths(effectiveHome(resolvedHome));
         const dirs = AGY_RUNTIME_DIRS.map((sub) => join(cliDir, sub));
         for (const dir of dirs) {
           try {
@@ -424,7 +494,7 @@ export function createAgyAcpDriver(options: AgyAcpDriverOptions): Driver {
         return dirs;
       },
       writableFileGlobs: (resolvedHome) => {
-        const { cliDir, legacyDir } = agyHomePaths(homeDir ?? resolvedHome);
+        const { cliDir, legacyDir } = agyHomePaths(effectiveHome(resolvedHome));
         return [
           ...AGY_RUNTIME_FILES.map((file) => join(cliDir, file)),
           ...AGY_RUNTIME_FILES_LEGACY.map((file) => join(legacyDir, file)),
@@ -432,8 +502,8 @@ export function createAgyAcpDriver(options: AgyAcpDriverOptions): Driver {
       },
       readableFiles: (resolvedHome) => {
         if (process.platform !== "darwin") return [];
-        const effectiveHome = homeDir ?? resolvedHome;
-        return AGY_READABLE_SECRET_HOME_PATHS.map((rel) => join(effectiveHome, rel));
+        const resolved = effectiveHome(resolvedHome);
+        return AGY_READABLE_SECRET_HOME_PATHS.map((rel) => join(resolved, rel));
       },
     },
     errors: {
