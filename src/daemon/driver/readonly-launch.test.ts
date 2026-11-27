@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE, buildReadonlyPolicy, type AgentSessionRow, type LaunchFiles } from "../../shared/index.ts";
-import { buildAgyArgs } from "../../vendors/agy/protocol.ts";
+import { buildAgyAcpLaunchArgs } from "../../vendors/agy/acp-config.ts";
 import { readCodexLaunchConfig } from "../../vendors/codex/protocol.ts";
 
 let dir: string;
@@ -47,21 +47,28 @@ function files(defaultMode: string, readonly: boolean): LaunchFiles {
   return readonly ? { ...base, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state" }), tmpDir: dir } : base;
 }
 
-const mode = (args: string[]): string => args[args.indexOf("--mode") + 1]!;
-
 describe("agy：只读看 LaunchFiles.readonly，不看设置文件", () => {
-  it("有 readonly → plan；设置文件里的档名叫什么都一样", () => {
+  it("有 readonly → 不传 --dangerously-skip-permissions；设置文件里的档名叫什么都一样", () => {
     for (const defaultMode of ["dontAsk", "renamed-readonly-mode", "auto"]) {
-      const args = buildAgyArgs(session("agy"), files(defaultMode, true), false);
-      expect(mode(args)).toBe("plan");
+      const args = buildAgyAcpLaunchArgs({
+        row: session("agy"),
+        files: files(defaultMode, true),
+        resume: false,
+        executablePath: "agy",
+      });
+      expect(args).toEqual(["acp", "--sandbox=false"]);
       expect(args).not.toContain("--dangerously-skip-permissions");
     }
   });
 
-  it("没有 readonly → auto；设置文件里写 dontAsk 也不算只读", () => {
-    const args = buildAgyArgs(session("agy"), files("dontAsk", false), false);
-    expect(mode(args)).toBe("auto");
-    expect(args).toContain("--dangerously-skip-permissions");
+  it("没有 readonly → 传 --dangerously-skip-permissions；设置文件里写 dontAsk 也不算只读", () => {
+    const args = buildAgyAcpLaunchArgs({
+      row: session("agy"),
+      files: files("dontAsk", false),
+      resume: false,
+      executablePath: "agy",
+    });
+    expect(args).toEqual(["acp", "--sandbox=false", "--dangerously-skip-permissions"]);
   });
 });
 

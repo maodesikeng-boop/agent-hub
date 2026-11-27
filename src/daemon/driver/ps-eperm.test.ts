@@ -8,8 +8,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
   },
 }));
 
+import { EMPTY_TOKEN_USAGE, type AgentSessionRow } from "../../shared/index.ts";
+import { identifyAcpStaleProcess } from "../../vendors/_common/acp/protocol.ts";
+import { matchesAgyAcpStaleProcess } from "../../vendors/agy/acp-config.ts";
 import { probePr } from "../git/pr.ts";
-import { agyOfSession } from "../../vendors/agy/protocol.ts";
 import { codexOfSession } from "../../vendors/codex/protocol.ts";
 import { claudeOfSession } from "../../vendors/claude/protocol.ts";
 import { forceKillTree } from "./process.ts";
@@ -29,10 +31,34 @@ describe.skipIf(process.platform === "win32")("execFile 同步抛 EPERM", () => 
     expect(kill).toHaveBeenCalledWith(424243, "SIGKILL");
   });
 
-  it("claudeOfSession / codexOfSession / agyOfSession 返回 null", async () => {
+  it("claudeOfSession / codexOfSession / identifyAcpStaleProcess(agy) 返回 null", async () => {
     await expect(claudeOfSession(424242, "sid")).resolves.toBeNull();
     await expect(codexOfSession(424242)).resolves.toBeNull();
-    await expect(agyOfSession(424242, "sid")).resolves.toBeNull();
+    const agyRow: AgentSessionRow = {
+      id: 1,
+      role: "pm",
+      conversationId: 1,
+      pmId: 1,
+      workerId: null,
+      vendor: "agy",
+      vendorSessionId: "sid",
+      cwd: "/tmp",
+      addDirs: [],
+      generation: 1,
+      model: null,
+      effort: null,
+      pid: 424242,
+      status: "idle",
+      hasCompletedTurn: false,
+      lastEventAt: null,
+      rateLimit: null,
+      usage: EMPTY_TOKEN_USAGE,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    await expect(
+      identifyAcpStaleProcess(424242, agyRow, "agy", "agy", [], matchesAgyAcpStaleProcess),
+    ).resolves.toBeNull();
   });
 
   it("probePr 当没有，不抛", async () => {

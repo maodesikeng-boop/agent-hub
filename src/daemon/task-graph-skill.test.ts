@@ -27,7 +27,7 @@ import {
 } from "../shared/index.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { sessionLaunchDir } from "../shared/paths.ts";
-import { buildAgyArgs } from "../vendors/agy/protocol.ts";
+import { buildAgyAcpAdditionalDirs } from "../vendors/agy/acp-config.ts";
 import { writeAgyPromptRules } from "../vendors/agy/rules.ts";
 import { buildClaudeArgs } from "../vendors/claude/protocol.ts";
 import { claudePluginDirOf, ensureClaudeSkillPlugin } from "../vendors/claude/skills.ts";
@@ -251,9 +251,11 @@ describe("六家怎么挂（spec 的 capabilities.skills）：挂上的都是同
     const linked = join(workspace, ".agents", "skills", TASK_GRAPH_SKILL_NAME, "SKILL.md");
     expect(lstatSync(linked).isSymbolicLink()).toBe(false);
     expect(statSync(linked).ino).toBe(statSync(real).ino);
-    const args = buildAgyArgs(row(dir), files, false, undefined, workspace);
-    expect(args.filter((a) => a === "--add-dir")).toHaveLength(1);
-    expect(args[args.indexOf("--add-dir") + 1]).toBe(workspace);
+    const extraDirs = buildAgyAcpAdditionalDirs(
+      { row: row(dir), files, resume: false, executablePath: "agy" },
+      workspace,
+    );
+    expect(extraDirs).toEqual([workspace]);
     // 守护进程升级换了正文（原子替换成新 inode）：下次起进程重新链上
     rmSync(real);
     writeFileSync(real, "新正文");
