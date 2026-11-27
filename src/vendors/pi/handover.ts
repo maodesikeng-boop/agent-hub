@@ -90,7 +90,14 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
       const child = spawnProcess(src.executablePath, args, { cwd: src.cwd, env: childEnv });
       child.once("exit", () => termGroupAfterExit(child));
 
-      return runPiForkTurn(child, src, fork, prompt, signal);
+      return runPiForkTurn(
+        child,
+        src,
+        fork,
+        prompt,
+        signal,
+        options.killWaitMs !== undefined ? { killWaitMs: options.killWaitMs } : undefined,
+      );
     },
 
     async remove(fork: ForkHandle): Promise<void> {
