@@ -1,9 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isBranchSquashMergedToMain } from "./index.ts";
+
+const fsPromises = vi.hoisted(() => ({ rmFails: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      if (fsPromises.rmFails) throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+      return actual.rm(...args);
+    },
+  };
+});
 
 let root: string;
 let emptyGitConfig: string;
@@ -20,8 +32,11 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "squash 检测 "));
   emptyGitConfig = join(root, ".empty-gitconfig");
   writeFileSync(emptyGitConfig, "");
+  vi.stubEnv("GIT_CONFIG_GLOBAL", emptyGitConfig);
+  vi.stubEnv("GIT_CONFIG_SYSTEM", emptyGitConfig);
 });
 afterEach(() => {
+  fsPromises.rmFails = false;
   vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
@@ -171,5 +186,159 @@ describe("isBranchSquashMergedToMain judges by content", () => {
     expect(await isBranchSquashMergedToMain(repo, "hub/20-simple", base)).toBe(true);
     expect(await isBranchSquashMergedToMain(repo, "hub/21-wip", base)).toBe(false);
     expect(readFileSync(refused, "utf8")).not.toBe("");
+  });
+});
+
+describe("isBranchSquashMergedToMain only trusts a containing ref that carried the branch to main", () => {
+  it("does not vouch for a branch through a later branch that reverted its work", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-unmerged");
+    const work = commitFiles(repo, { "secret.txt": "only copy\n" }, "unmerged work");
+    git(repo, "checkout", "-q", "-b", "hub/2-reverted");
+    git(repo, "revert", "--no-edit", work);
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "other.txt": "unrelated\n" }, "unrelated main work");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-unmerged", base)).toBe(false);
+
+    // The reverting branch also carried other work that did reach main.
+    git(repo, "checkout", "-q", "hub/2-reverted");
+    commitFiles(repo, { "kept.txt": "kept\n" }, "kept work");
+    squashInto(repo, "hub/2-reverted", "kept work (#2)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-unmerged", base)).toBe(false);
+  });
+
+  it("does not vouch for a branch through an integration branch that merged and then reverted it", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-open");
+    commitFiles(repo, { "open.txt": "open PR\n" }, "open PR work");
+    git(repo, "checkout", "-q", "-b", "x-side", base);
+    commitFiles(repo, { "x.txt": "x\n" }, "change X");
+    git(repo, "checkout", "-q", "-b", "staging", base);
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "hub/1-open");
+    git(repo, "revert", "--no-edit", "-m", "1", "HEAD");
+    git(repo, "update-ref", "refs/remotes/origin/staging", git(repo, "rev-parse", "HEAD"));
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "m2.txt": "m2\n" }, "main moves on");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-open", base)).toBe(false);
+
+    // Staging also carries change X, which main took on its own.
+    git(repo, "checkout", "-q", "staging");
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "x-side");
+    git(repo, "update-ref", "refs/remotes/origin/staging", git(repo, "rev-parse", "HEAD"));
+    squashInto(repo, "x-side", "change X (#3)");
+    git(repo, "branch", "-q", "-D", "x-side", "staging");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-open", base)).toBe(false);
+  });
+
+  it("still vouches for relay branches when the PR head merged main before its squash merge", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/2-impl");
+    commitFiles(repo, { "README.md": readme({ 9: "impl" }), "g.txt": "v1\n" }, "impl");
+    git(repo, "checkout", "-q", "-b", "hub/4-fix");
+    commitFiles(repo, { "g.txt": "v2\n" }, "fix review findings");
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "README.md": readme({ 1: "meanwhile" }) }, "meanwhile on main");
+    git(repo, "checkout", "-q", "hub/4-fix");
+    git(repo, "merge", "-q", "--no-edit", "main");
+    git(repo, "update-ref", "refs/remotes/origin/hub/2-impl", git(repo, "rev-parse", "HEAD"));
+    squashInto(repo, "hub/4-fix", "impl (#2)");
+    git(repo, "branch", "-q", "-D", "hub/4-fix");
+    expect(await isBranchSquashMergedToMain(repo, "hub/2-impl", base)).toBe(true);
+  });
+});
+
+describe("isBranchSquashMergedToMain never runs repository merge drivers", () => {
+  function conflictingBranch(repo: string, base: string, branch: string): void {
+    git(repo, "checkout", "-q", "-b", branch, base);
+    commitFiles(repo, { "README.md": readme({ 5: "branch" }) }, "branch edit");
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "README.md": readme({ 5: "main" }) }, "main edit");
+  }
+
+  it("treats a conflict that merge=ours would hide as not merged", async () => {
+    const { repo } = makeRepo();
+    commitFiles(repo, { ".gitattributes": "README.md merge=ours\n" }, "attributes");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "config", "merge.ours.driver", "true");
+    conflictingBranch(repo, base, "hub/1-ours");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-ours", base)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("does not execute a custom merge driver command", async () => {
+    const { repo } = makeRepo();
+    commitFiles(repo, { ".gitattributes": "README.md merge=custom\n" }, "attributes");
+    const base = git(repo, "rev-parse", "HEAD");
+    const marker = join(root, "driver-ran");
+    git(repo, "config", "merge.custom.driver", `touch '${marker}'`);
+    conflictingBranch(repo, base, "hub/1-custom");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-custom", base)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("does not let merge.default pick a custom driver for unattributed files", async () => {
+    const { repo, base } = makeRepo();
+    const marker = join(root, "default-driver-ran");
+    git(repo, "config", "merge.default", "custom");
+    git(repo, "config", "merge.custom.driver", process.platform === "win32" ? "true" : `touch '${marker}'`);
+    conflictingBranch(repo, base, "hub/1-default");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-default", base)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("does not let the built-in union driver drop a line the branch deleted", async () => {
+    const { repo } = makeRepo();
+    commitFiles(repo, { ".gitattributes": "README.md merge=union\n" }, "attributes");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-q", "-b", "hub/1-union");
+    commitFiles(repo, { "README.md": LINES.filter((_, i) => i !== 4).join("\n") + "\n" }, "delete line 5");
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "README.md": readme({ 5: "main" }) }, "main edit");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-union", base)).toBe(false);
+  });
+});
+
+describe("isBranchSquashMergedToMain edge cases", () => {
+  it("skips a candidate commit from an unrelated history instead of failing", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-edit");
+    commitFiles(repo, { "README.md": readme({ 1: "branch" }) }, "branch edit");
+    git(repo, "checkout", "-q", "--orphan", "imported");
+    git(repo, "rm", "-rqf", ".");
+    commitFiles(repo, { "README.md": "imported\n" }, "imported project");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--allow-unrelated-histories", "-s", "ours", "--no-edit", "imported");
+    commitFiles(repo, { "README.md": readme({ 1: "main" }) }, "main edit");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-edit", base)).toBe(false);
+  });
+
+  it("returns its verdict even when the scratch object directory cannot be removed", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-feat");
+    commitFiles(repo, { "README.md": readme({ 5: "feature" }) }, "feat");
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "README.md": readme({ 3: "other PR" }) }, "other PR");
+    squashInto(repo, "hub/1-feat", "feat (#1)");
+    fsPromises.rmFails = true;
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-feat", base)).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("checks the target itself before scanning its history", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-feat");
+    commitFiles(repo, { "README.md": readme({ 5: "feature" }) }, "feat");
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "README.md": readme({ 3: "other PR" }) }, "other PR");
+    squashInto(repo, "hub/1-feat", "feat (#1)");
+
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const bin = join(root, "logging-git-bin");
+    const calls = join(root, "git-calls.log");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$*" >> "${calls}"\nexec "${realGit}" "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-feat", base)).toBe(true);
+    expect(readFileSync(calls, "utf8").split("\n").filter((line) => / log /.test(line))).toEqual([]);
   });
 });
