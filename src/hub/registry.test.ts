@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { HUB_USAGE_PROMPT, WORKER_HUB_USAGE_PROMPT } from "../daemon/prompt.ts";
@@ -200,5 +202,57 @@ describe("S10: prompt cache stability and clean copy", () => {
     expect(HUB_USAGE_PROMPT).not.toContain("hub caps");
     expect(WORKER_HUB_USAGE_PROMPT).not.toContain("hub caps");
     expect(buildRouterSystemPrompt()).not.toContain("hub caps");
+  });
+});
+
+function walkProductionTsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walkProductionTsFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+describe("S11: shipped hub command hints match valid CLI commands", () => {
+  it("every ${HUB_COMMAND} <group> <action> hint in src/daemon and src/shared resolves to a real command", () => {
+    const validActionsByGroup = new Map<string, Set<string>>();
+    for (const command of HUB_COMMANDS) {
+      const [group, action] = command.split(".");
+      if (group && action) {
+        let actions = validActionsByGroup.get(group);
+        if (!actions) {
+          actions = new Set<string>();
+          validActionsByGroup.set(group, actions);
+        }
+        actions.add(action);
+      }
+    }
+    const groupsWithActions = [...validActionsByGroup.keys()].join("|");
+    const pattern = new RegExp(`\\$\\{HUB_COMMAND\\} (${groupsWithActions}) ([a-z][a-z-]*)`, "g");
+
+    const invalid: string[] = [];
+    for (const root of ["src/daemon", "src/shared"]) {
+      for (const file of walkProductionTsFiles(join(process.cwd(), root))) {
+        const lines = readFileSync(file, "utf8").split("\n");
+        for (let idx = 0; idx < lines.length; idx++) {
+          const line = lines[idx]!;
+          for (const match of line.matchAll(pattern)) {
+            const group = match[1]!;
+            const action = match[2]!;
+            if (!validActionsByGroup.get(group)?.has(action)) {
+              const rel = file.slice(process.cwd().length + 1);
+              invalid.push(`${rel}:${idx + 1}: "${group} ${action}"`);
+            }
+          }
+        }
+      }
+    }
+
+    expect(invalid, `found invalid hub subcommand hints: ${invalid.join(", ")}`).toEqual([]);
   });
 });

@@ -18,7 +18,8 @@ This plan audits Bellwood's `hub` CLI and daemon handlers against Claude Code's 
 
 ### Project Manager plan review
 
-- **User sentences to scenarios.** Every quoted sentence in Section 1 maps to S1 through S10 in Section 8.
+- **User sentences to scenarios.** Every quoted sentence in Section 1 maps to S1 through S11 in Section 8.
+- **Subsystem understanding (`how`).** Section 2 documents the real end-to-end architecture, data flow, ownership boundaries, and verified gotchas across POSIX/Windows shims, `agent-api/server.ts`, `launch.ts`, `hub-commands.ts`, `sessions.ts`, `turn-background-waits.ts`, and `router/dispatcher.ts`.
 - **Verification categories.** Section 8 covers all nine categories from `docs/plan-standard.md`, and addresses every matching rule in `REVIEW.md` on `main`.
 - **Structurally distinct designs.** Section 3 compares three distinct structures: a unified CLI command metadata registry with layered diagnostics (Design A, chosen), a full schema-first tool compiler with an optional native MCP bridge (Design B, day-one design), and minimal point patches on the current layout (Design C).
 
@@ -82,7 +83,68 @@ Quoted from the user's request and task graph goal (`/tmp/hub-cli-claude-audit/c
 
 Intended outcome: `hub` exposes progressive, bounded help and clear recovery diagnostics modeled after mature agent tool interfaces, closes every verified field gap (`help` scoping, `caps` visibility, `graph show` execution flags, PM memory file sharing, `self-reload` cancel and busy visibility, strict graph JSON errors, and receipt/copy consistency), and preserves prompt caching across every vendor.
 
-## 2. Current state and history
+## 2. How the `hub` subsystem works and current state
+
+### Overview
+
+`hub` is Bellwood's authenticated command-line bridge between eight vendor agent CLIs and the local daemon (`src/daemon/`). Instead of registering separate MCP tools per vendor, Bellwood prepends a per-install `hub` shim onto each session's `PATH` and injects two environment variables (`HUB_SOCK` and a per-session bearer `HUB_TOKEN`). Every agent role (Project Manager, Worker, and Router) invokes `hub` through its normal shell tool; the daemon authenticates the bearer token, resolves the caller's role, executes any async I/O outside the SQLite lock, mutates the ledger synchronously, logs the call to `hub_calls`, and returns concise Chinese text on stdout (or an error on stderr with exit code `1` or `2`).
+
+### Key concepts
+
+- **Per-session bearer tokens and role gating.** `createLaunchPreparer` (`src/daemon/launch.ts:288-292`) issues one revocable token per active session via `SessionTokens.issue(session.id)`. `agent-api/server.ts:690-696` resolves the token on every HTTP request before reading the body, and re-verifies it after async preparation (`server.ts:735-741`). Role enforcement splits cleanly: Workers may call only `status` and `checklist` (`HUB_COMMAND_ROLES` in `src/shared/hub.ts:84-123`); Router dispatch sessions (`role === "assistant"`) are blocked from all regular `HUB_COMMANDS` (`server.ts:728-732`) and allowed only `POST /v1/dispatch`; Project Managers may call all `HUB_COMMANDS` plus `POST /v1/self.reload`, subject to `feishuGuestTurnBlockReason` (`hub-commands.ts:382-392,421`).
+- **Two-tier endpoint architecture (`HUB_COMMANDS` vs sidecar routes).** The 37 standard commands live in `HUB_COMMANDS` (`src/shared/hub.ts:44-82`), mount at `POST /v1/<command>` (`server.ts:723-746`), and flow through `ledger.hubCall` (which wraps synchronous `write(...)` and inserts every success/failure into `hub_calls`). Two commands sit outside `HUB_COMMANDS` as sidecar routes: `hub self-reload` (`POST /v1/self.reload`, `server.ts:749`) and `hub dispatch` (`POST /v1/dispatch`, `server.ts:789`), routed to `SelfReloadController` and `RouterDispatcher.handleAgentDispatch` respectively.
+- **Sync SQLite ledger lock vs async `createPreparation`.** SQLite transactions in `ledger.write(...)` are strictly synchronous. Slow or network-bound work (`git` workspace probes, `gh` PR probes, `models.list()`, `quota.get()`, `capabilityInventory.get()`, and `shareHubFiles()`) runs ahead of the transaction inside `createPreparation` (`server.ts:535-609`), controlled by a shutdown `AbortController` (`closing.signal`) and passed into `ledger.hubCall(..., context)` via `HubCallContext`.
+- **Prompt-cache fingerprint pinning and `HUB_HELP_ONLY_COMMANDS`.** `createLaunchPreparer` hashes `buildFingerprintPrompt`, vendor base settings, readonly policy, and `taskGraphSkillCatalogEntry()` (`launch.ts:298-303`), and `src/daemon/launch-fingerprint.test.ts` pins those SHA-256 digests. Adding a command to `HUB_HELP_ONLY_COMMANDS` (`src/shared/hub.ts:129-133`) exposes it in `hub help` and error hints without changing any system prompt or invalidating live vendor prompt caches.
+- **Live session memory vs persisted background waits.** Active session status lives in two places: in-memory `LiveSession` maps inside `src/daemon/ledger/sessions.ts` (holding `activity`, `currentTool`, `backgroundTasks`, and `backgroundTaskList`), and the SQLite table `turn_background_waits` (`src/daemon/ledger/turn-background-waits.ts:118-121`) storing held post-reply background commands and reminder schedules. `SessionState` (`sessions.ts:231-252`) intentionally projects a summary without `backgroundTaskList`, and `SelfReloadController`'s `busySessions` helper (`self-reload.ts:249-264`) tracks only a `Set<SessionId>`.
+- **Role-scoped file-sharing boundary (`ShareScope`).** `shareFilePaths` (`src/daemon/sent-files.ts:116-120`) validates user-attached files after `realpathSync` and `openRegularFileNoFollow`. Currently it enforces `DATA_DIR_READABLE_ENTRIES` (`["worktrees", "uploads", "tools"]`) uniformly for every session inside `dataHome`, even though PM memory lives under `state/pm-memory/<pmId>`.
+
+### How it works
+
+```mermaid
+flowchart LR
+  Agent["Agent shell tool (8 vendors)"] --> Shim{"Platform shim"}
+  Shim -->|"macOS / Linux"| NodeCli["hub shell script -> node src/hub/main.ts"]
+  Shim -->|"Windows: help / --help / -h"| NodeCli
+  Shim -->|"Windows: direct_pipe"| Pipe["hub.exe -> POST /hub/cli"]
+  Pipe --> RunHub["runHubSafely (in daemon)"]
+  NodeCli --> RunHub
+  RunHub -->|"help / usage error (exit 0 or 2)"| Out["stdout / stderr + exit code"]
+  RunHub -->|"POST /v1/<cmd> + Bearer HUB_TOKEN"| Auth["agent-api/server.ts: onRequest auth + Ajv + checkFields"]
+  Auth -->|"HUB_COMMANDS"| Prep["createPreparation (async git/PR/caps/files)"]
+  Prep --> Ledger["ledger.hubCall (sync SQLite tx + hub_calls)"]
+  Auth -->|"POST /v1/self.reload"| Reload["SelfReloadController"]
+  Auth -->|"POST /v1/dispatch"| Dispatch["RouterDispatcher.handleAgentDispatch"]
+  Ledger --> Out
+  Reload --> Out
+  Dispatch --> Out
+```
+
+1. **Launch wiring.** Before spawning a vendor CLI, `createLaunchPreparer` (`src/daemon/launch.ts:178-325`) writes `prompt.md`, vendor settings, and (for PMs) the Task Graph skill file, then injects `ENV_HUB_TOKEN`, `ENV_HUB_SOCK`, and `PATH=<hubBinDir>:...`.
+2. **Shim execution.** On macOS and Linux, `src/daemon/agent-api/shim.ts:62-70` installs a `#!/bin/sh` wrapper executing `node src/hub/main.ts "$@"`. On Windows, `shim.ts:40-59` installs `hub.exe` (`apps/windows/crates/fusa-win-helper/src/bin/hub.rs`) beside `hub.json` (`direct_pipe: true`). For non-help invocations, `hub.exe` reads `--stdin` up to `HUB_MAX_STDIN_BYTES + 1` and POSTs `{ argv, cwd, msystem, exepath, stdinUtf8 }` over the local named pipe or loopback socket to `POST /hub/cli` (`server.ts:841-877`), which runs `runHubSafely` inside the daemon process to avoid Node cold-start overhead.
+3. **CLI parse and help short-circuit.** `runHub` (`src/hub/cli.ts:39-121`) parses `argv` via `parse.ts` and `parse-{worker,graph,ask,dispatch}.ts`. Help requests exit immediately with no daemon round-trip; usage errors exit `2`; valid commands POST JSON to `HUB_SOCK` over HTTP/1.1 (`src/hub/http.ts`).
+4. **Daemon validation, preparation, and execution.** `agent-api/server.ts` authenticates `Bearer <token>`, enforces `BODY_SCHEMAS` (Ajv with `removeAdditional: false, coerceTypes: false`), runs `checkFields` (`HUB_LIMITS`, path absoluteness, control characters), runs `createPreparation` outside SQLite, re-checks token validity, and invokes `ledger.hubCall` (or `selfReload` / `onRouterDispatch`).
+5. **Response and persistence.** `hub-commands.ts:440-460` commits state and appends a truncated summary to `hub_calls`. `cli.ts` writes `result.text` to stdout (exit `0`) or error message to stderr (exit `1` on daemon rejection, `2` on CLI usage error).
+
+### Where things live
+
+| Layer | Files | Responsibility |
+|---|---|---|
+| Platform shims | `src/daemon/agent-api/shim.ts`, `apps/windows/crates/fusa-win-helper/src/bin/hub.rs`, `.../src/pipe_http.rs` | POSIX shell wrapper, Windows `hub.exe` `direct_pipe` client, `is_help_invocation` check |
+| CLI parser & help | `src/hub/{main,cli,args,parse,parse-worker,parse-graph,parse-ask,parse-dispatch,usage,http}.ts` | Argument parsing, Git Bash path-mangle detection, help output, HTTP client |
+| Shared contracts | `src/shared/{hub,hub-limits,limits,domain,api,sandbox-approval,task-graph-skill}.ts` | `HUB_COMMANDS`, `HUB_COMMAND_ROLES`, `HUB_HELP_ONLY_COMMANDS`, `HUB_LIMITS`, sandbox rules |
+| Launch & prompts | `src/daemon/launch.ts`, `src/daemon/prompt.ts`, `src/daemon/router/prompt.ts` | Token injection, prompt-cache fingerprint, pinned PM/Worker/Router prompts |
+| Agent HTTP API | `src/daemon/agent-api/{server,tokens}.ts` | Bearer auth, Ajv schemas, `checkFields`, async `createPreparation`, `/hub/cli` proxy |
+| Ledger & domain | `src/daemon/ledger/{hub-commands,sessions,turn-background-waits,sent-files,capability-rows,worker-view,router}.ts`, `src/daemon/ledger/task-graphs/{spec,rows,store,text,step-agent-label,gate}.ts` | Synchronous SQLite transactions, `hub_calls` log, Task Graph specs, file sharing, live session state |
+| Reload & Router | `src/daemon/self-reload.ts`, `src/daemon/daemon.ts`, `src/daemon/router/dispatcher.ts`, `src/daemon/pm-capabilities/inventory.ts` | Drain/build/restart controller, `busyReasons` wiring, Track A/B dispatch, cached capability scan |
+
+### Gotchas discovered from the code
+
+1. **Dead command shipped in a live PM reminder (`src/daemon/ledger/turn-background-waits.ts:113`).** When a Worker finishes writing a reply while background commands are still running, `reminderText` tells the PM: ``用 hub worker show <id> 看现场，需要时用 hub worker send <id> 或 hub worker stop <id> 处理。`` **`hub worker stop` does not exist**: a PM only has `hub worker end <id>` (while `worker-stop` is a Router-only `hub dispatch` op). No static guard previously verified that `${HUB_COMMAND} <group> <action>` hints in `src/` resolve to real commands.
+2. **Windows `hub.exe` dual-path help handling (`apps/windows/crates/fusa-win-helper/src/pipe_http.rs:214-219`).** `is_help_invocation` only checks `args[0]` (`help`, `--help`, `-h`). So `hub help worker` falls back to spawning Node, while `hub worker start --help` travels over `direct_pipe` -> `POST /hub/cli` -> `runHubSafely` inside the daemon. Intercepting help in `src/hub/cli.ts` before `HUB_TOKEN`/`HUB_SOCK` validation guarantees identical scoped output on both paths.
+3. **`busySessions` and `SessionState` cannot see background command labels (`src/daemon/self-reload.ts:249-264`, `src/daemon/ledger/sessions.ts:231-252`).** `SessionState` omits `backgroundTaskList`, and `busySessions` reduces `session.status` notifications to a `Set<SessionId>`. Detailed reload diagnostics in `daemon.ts:940-951` must query a ledger snapshot that joins `sessions.workingSessionIds()`, `sessions.liveOf(id).backgroundTaskList`, `turn_background_waits`, and worker/PM titles.
+4. **Sidecar routes bypass `HUB_COMMANDS` and `hub_calls` (`src/daemon/agent-api/server.ts:748-825`).** `/v1/self.reload` and `/v1/dispatch` live outside `HUB_COMMANDS`, which caused `SELF_RELOAD_USAGE` and `DISPATCH_USAGE` to drift out of `HUB_COMMAND_SPECS` and left `self-reload` outside `hub_calls` logging.
+5. **Async preparation boundary (`server.ts:535-609`).** `capabilityInventory.get({ projectDir })` is async filesystem I/O and already runs in `prepareWorkerStart` (`server.ts:505-511`). `hub caps` must preload `context.capabilityInventory` in `createPreparation` (never inside `ledger.write(...)`) and respect `closing.signal` plus post-prepare token re-validation.
+6. **Three-layer validation asymmetry (`server.ts:438-465` vs `task-graphs/spec.ts:331-332` and `router.ts:410`).** Fastify's `describeIssue` gives clear Chinese field-level errors for top-level JSON fields, but `graph.create` and `graph.patch` pass a nested `specJson` string that bypasses Ajv and hits Zod schemas that omit `.strict()` and discard `parsed.error.issues` into fixed opaque strings.
 
 ### Design history
 
@@ -122,6 +184,7 @@ All `[Measured]` CLI probes ran on `59358e6e` via `node src/hub/main.ts <argv>` 
 - `[Measured]` **`hub self-reload` cannot cancel and hides busy Workers (`P0`).** `SelfReloadController` (`src/daemon/self-reload.ts:42-46`) has only `request`, `status`, and `close`. `POST /v1/self.reload` (`src/daemon/agent-api/server.ts:748-758`) accepts only `{ build?: boolean }`. `busyReasons` (`src/daemon/daemon.ts:940-951`) reports only `${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令`, never naming which Workers are running or waiting on long background commands.
 - `[Measured]` **Prompt and manual sizes on `59358e6e`.** `HUB_USAGE_PROMPT`: 3,744 bytes; `WORKER_HUB_USAGE_PROMPT`: 533 bytes; `buildRouterSystemPrompt()`: 6,726 bytes; `HUB_USAGE`: 17,582 bytes; `taskGraphSkillBody()`: 11,715 bytes; bundled models across 8 vendors: 40 models.
 - `[Measured]` **Status of items 2 and 3 from `/tmp/hub-cli-claude-audit/context.md` (`P2` residuals).** Plain `hub ask` already prints `，卡 #${item.id}` (`src/daemon/ledger/hub-commands.ts:332`, from PR #463), and `hub worker show` already separates `这一轮跑了` from `时间预算（从派活时起算，重启不重置）` (`src/daemon/ledger/worker-view.ts:165-169`, from PR #480). Two residuals remain: `hub ask --node` (`src/daemon/ledger/task-graphs/gate.ts:153`) prints `拍板卡 #${askMsg.id}` without telling the PM to pass `--message ${askMsg.id}` to `ask show` or `ask close`; and `src/hub/usage.ts:107,124,131` plus `src/daemon/ledger/workers/timers.ts:61` still describe `max-time` as a per-turn limit.
+- `[Measured]` **Dead `hub worker stop` hint shipped in live PM background-wait reminders (`P1`, discovered via full-repo `how` audit).** `src/daemon/ledger/turn-background-waits.ts:113` emits `需要时用 ${HUB_COMMAND} worker send ${worker.id} 或 ${HUB_COMMAND} worker stop ${worker.id} 处理`, even though `worker` only supports `start | send | max-time | end | list | show | search | log`. Executing that suggested command exits `2` (`不认识的子命令：worker stop`). Full grep across all 91 non-test `hub` references in `src/` confirmed this is the sole dead shipped command hint.
 
 ## 3. Reference designs and approach comparison
 
@@ -204,8 +267,9 @@ Delete in the implementation step so old and new paths never coexist:
 - The catch-all `if (values.help === true || group === "help") return "help"` and `if (group === "help" && action === "graph") return "help-graph"` shortcuts in `src/hub/parse.ts:57-58` (replaced by `resolveHelpTarget`).
 - The `full = true` flag on missing `HUB_TOKEN`/`HUB_SOCK` usage errors in `src/hub/cli.ts:73-79`.
 - The opaque `badShape` error discard in `src/daemon/ledger/task-graphs/spec.ts:331-332` (replaced by `formatGraphSpecIssues`).
-- The anonymous `${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令` string in `src/daemon/daemon.ts:943` (replaced by `describeBusySessionsForReload`).
+- The anonymous `${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令` string in `src/daemon/daemon.ts:943` (replaced by a ledger busy-session snapshot joining `sessions.liveOf` + `turn_background_waits`, formatted via `describeBusySessionsForReload`).
 - The outdated `本轮最大容忍时间` and `当前一轮已运行` wording in `src/hub/usage.ts:107,124,131` and `src/daemon/ledger/workers/timers.ts:61` (aligned with `时间预算` / `从派活时起算，重启不重置`).
+- The invalid `${HUB_COMMAND} worker stop ${worker.id}` hint in `src/daemon/ledger/turn-background-waits.ts:113` (replaced with `${HUB_COMMAND} worker end ${worker.id}` and locked down by the S11 static guard).
 
 ## 7. Skeleton files
 
@@ -227,7 +291,7 @@ Additive contract updates in existing files (preserving all current runtime beha
 
 Acceptance test files (every new-behavior test fails before implementation; every unchanged-rule regression test passes):
 
-- `src/hub/registry.test.ts`: acceptance tests for S1, S2, and S10.
+- `src/hub/registry.test.ts`: acceptance tests for S1, S2, S10, and S11.
 - `src/daemon/ledger/task-graphs/spec-errors.test.ts`: acceptance tests for S3.
 - `src/daemon/ledger/hub-caps.test.ts`: acceptance tests for S4, S5, and S6.
 - `src/daemon/self-reload-audit.test.ts`: acceptance tests for S7, S8, and S9.
@@ -298,6 +362,12 @@ Every scenario states what happens first, what happens next, and what the agent 
   - Expected: all four pinned prompt/skill hashes remain byte-for-byte identical; no reference product name appears in code comments, help text, or UI copy; no repo-specific or POSIX-only instruction leaks into shipped text.
   - Test: `src/hub/registry.test.ts` plus existing guard suites.
 
+- **S11. Every shipped `hub` command hint in `src/` resolves to a real CLI command.**
+  - First: scan every non-test TypeScript file under `src/daemon/` and `src/shared/` for `${HUB_COMMAND} <group> <action>` hints.
+  - Next: validate each `(group, action)` pair against the canonical `HUB_COMMANDS` action set.
+  - Expected: zero invalid hints remain (specifically replacing the dead `hub worker stop` hint in `src/daemon/ledger/turn-background-waits.ts:113` with `hub worker end`), and any future dead command hint fails CI immediately.
+  - Test: `src/hub/registry.test.ts`.
+
 ### Verification categories coverage
 
 | Category (`docs/plan-standard.md`) | Covered by | Notes |
@@ -326,7 +396,7 @@ Every scenario states what happens first, what happens next, and what the agent 
 | Hub error codes change on both sides | `src/hub/**`, `src/shared/hub.ts` | No new error code; existing codes and `HUB_EXIT` values are reused consistently on both CLI and daemon. |
 | Persisted fields have a reader and dual retention bounds | `src/daemon/ledger/**` | No new DB columns or tables; reads existing `task_graph_step_capabilities` and `task_graph_step_sandbox_modes`. |
 | Text shipped to agents holds in any project | `src/daemon/ledger/**`, `src/hub/**` | All new help, error, and receipt strings are project-agnostic and POSIX/PowerShell portable, verified by `src/prompt-portability.test.ts` (S10). |
-| Planned acceptance scenarios cover every requirement and pass real tests | `**` | Every quoted user sentence and settled rule maps to S1–S10 with runnable tests and a recorded failing baseline below. |
+| Planned acceptance scenarios cover every requirement and pass real tests | `**` | Every quoted user sentence and settled rule maps to S1–S11 with runnable tests and a recorded failing baseline below. |
 | A result is matched to its request by an id both carry | `src/daemon/**` | No new request/round matching logic; `ask --node` receipt now echoes its exact `--message <messageId>` identifier (S9). |
 
 ### Real-environment and real-CLI verification
@@ -358,10 +428,10 @@ Command:
 pnpm exec vitest run --reporter=verbose src/hub/registry.test.ts src/daemon/ledger/task-graphs/spec-errors.test.ts src/daemon/ledger/hub-caps.test.ts src/daemon/self-reload-audit.test.ts
 ```
 
-Result: **4 files, 25 tests: 20 failed, 5 passed.**
+Result: **4 files, 26 tests: 21 failed, 5 passed.**
 
-- **Fail as expected (20), new or changed behavior:**
-  - `src/hub/registry.test.ts` (7 failed): `HUB_CLI_REGISTRY` is empty; `resolveHelpTarget`, `renderHelpIndex`, and `suggestSubcommands` throw `Not implemented`; `hub help router` dumps full `HUB_USAGE`; `hub help nonexistent` exits 0; bare `hub worker` says `不认识的子命令：worker`.
+- **Fail as expected (21), new or changed behavior:**
+  - `src/hub/registry.test.ts` (8 failed): `HUB_CLI_REGISTRY` is empty; `resolveHelpTarget`, `renderHelpIndex`, and `suggestSubcommands` throw `Not implemented`; `hub help router` dumps full `HUB_USAGE`; `hub help nonexistent` exits 0; bare `hub worker` says `不认识的子命令：worker`; S11 catches the dead `"worker stop"` command hint at `src/daemon/ledger/turn-background-waits.ts:113`.
   - `src/daemon/ledger/task-graphs/spec-errors.test.ts` (3 failed): `formatGraphSpecIssues` throws `Not implemented`; `graph create` silently accepts unknown step key `no_outer_sandbox`; wrong field type returns opaque `任务图规格字段格式不正确` without `steps[0].readonly`.
   - `src/daemon/ledger/hub-caps.test.ts` (6 failed): both `formatHubCapabilities` tests throw `Not implemented`; `hub graph show` omits `readonly`/`caps`/`noOuterSandbox`/`maxTime` and fails to hydrate corrupt capability JSON; both `validateNoOuterSandboxRequest` error tests return static messages without `mcp:cua_repl` or `hub caps`.
   - `src/daemon/self-reload-audit.test.ts` (4 failed): `describeBusySessionsForReload` and `SelfReloadController.cancel` throw `Not implemented`; PM `shareHubFiles` returns `not_allowed` for its own `pm-memory/<pmId>/plan.md`; `hub ask --node` receipt omits `--message <id>` and `HUB_USAGE` still says `本轮最大容忍时间`.
