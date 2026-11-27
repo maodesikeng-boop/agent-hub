@@ -24,6 +24,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { describeFailure } from "../../shared/errors.ts";
+import type { PmNoticeSubject } from "../../shared/pm-notice.ts";
 import { errorLine, errorTitle, formatTime, workerLineParts } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { workedForMsOf, type TurnItem } from "../selectors.ts";
@@ -495,12 +496,17 @@ function ScheduleRun({ text }: { text: string }) {
   );
 }
 
-function WakeupNotice({ text, source, inTurn }: { text: string; source: PmWakeupSource; inTurn: boolean }) {
+function wakeupTag(source: PmWakeupSource, subject: PmNoticeSubject | undefined): string {
+  if (source === "router") return "Router";
+  return subject?.kind === "watch.settled" ? "Watch" : "Task graph";
+}
+
+function WakeupNotice({ text, tag, inTurn }: { text: string; tag: string; inTurn: boolean }) {
   const match = /^【([^】]*)】\s*([\s\S]*)$/.exec(text);
   const title = match?.[1] ?? text;
   const body = (match?.[2] ?? "").trim();
   return (
-    <CollapsibleEvent icon={Bell} tag={source === "router" ? "Router" : "Task graph"} text={title} event="pm.wakeup" singleLine className={inTurn ? "" : "mt-6"}>
+    <CollapsibleEvent icon={Bell} tag={tag} text={title} event="pm.wakeup" singleLine className={inTurn ? "" : "mt-6"}>
       {body === "" ? null : <p className={cn("leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>}
     </CollapsibleEvent>
   );
@@ -578,7 +584,7 @@ function SystemNotice({
   const event = systemEventOf(message);
   const text = systemNoticeText(message);
   if (event?.event === "schedule.run") return <ScheduleRun text={text} />;
-  if (event?.event === "pm.wakeup") return <WakeupNotice text={text} source={event.source} inTurn={inTurn} />;
+  if (event?.event === "pm.wakeup") return <WakeupNotice text={text} tag={wakeupTag(event.source, event.subject)} inTurn={inTurn} />;
   if (event?.event === "session.renewed") return <SessionRenewed text={text} handover={message.text} />;
   const danger = event?.event === "schedule.failed" || event?.event === "handover.failed";
   return (

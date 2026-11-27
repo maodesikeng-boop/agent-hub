@@ -13,7 +13,7 @@ import { enqueuePmNoticeIn } from "./pm-notices.ts";
 import { WORKER_REPORT_STATUS_LABELS, parseWorkerReport } from "../../shared/worker.ts";
 import { lastWorkerIdOf, parseJsonOr, readStoredArtifact } from "./task-graphs/rows.ts";
 import { slotViewsOf, type StepSlotView } from "./task-graphs/slots.ts";
-import { graphWatchesOf, watchingPmWatchesOf, workerWatchesOf } from "./pm-watches.ts";
+import { GRAPH_WATCHED_SQL, graphWatchesOf, watchingPmWatchesOf, workerWatchesOf } from "./pm-watches.ts";
 import type { PmWatchId } from "../../shared/pm-watch.ts";
 
 const graphSteps = `SELECT s.id, s.node_key, s.title, s.status, s.waiting_for, s.active_worker_id, s.worker_ids_json, s.artifact_json, s.gate_question,
@@ -117,7 +117,7 @@ function graphBlockOf(db: Db, row: GraphSummaryRow, watchId: PmWatchId | null): 
   return {
     graphId: row.id, title: row.title, stepCount: row.steps, doneCount: row.done, pendingCount: row.pending,
     readyToFinish: ready, steps, doneKeys: parseJsonOr<string[]>(row.done_keys, []), watchId,
-    needsPm: oldestNeedsPmSince !== null && watchId === null, oldestNeedsPmSince,
+    needsPm: ready ? (row.latest_step !== null && watchId === null) : row.oldest_wait !== null, oldestNeedsPmSince,
   };
 }
 
@@ -170,8 +170,8 @@ export function pmAgendaOf(db: Db, pmId: PmId, now: number): PmAgenda {
             json_group_array(s.node_key) FILTER (WHERE s.status = 'done') AS done_keys
        ${activeGraphSummaries}
       GROUP BY g.id
-      ORDER BY coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done THEN latest_step END) IS NULL,
-               coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done THEN latest_step END),
+      ORDER BY coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done AND NOT ${GRAPH_WATCHED_SQL} THEN latest_step END) IS NULL,
+               coalesce(oldest_wait, CASE WHEN steps > 0 AND steps = done AND NOT ${GRAPH_WATCHED_SQL} THEN latest_step END),
                g.updated_at DESC, g.id DESC
       LIMIT ?`,
     pmId, PM_AGENDA_GRAPHS_MAX,
@@ -191,7 +191,10 @@ export function graphReadySince(db: Db, pmId: PmId, graphId: TaskGraphId): numbe
 
 export function isPmAgendaItemOpen(db: Db, pmId: PmId, ref: string): boolean {
   const ready = /^graph:(\d+):ready@(\d+)$/u.exec(ref);
-  if (ready !== null) return graphReadySince(db, pmId, Number(ready[1])) === Number(ready[2]);
+  if (ready !== null) {
+    const graphId = Number(ready[1]);
+    return graphReadySince(db, pmId, graphId) === Number(ready[2]) && !graphWatchesOf(db, [graphId]).has(graphId);
+  }
   const step = /^graph:(\d+):step:(.+):waiting_pm@(\d+)$/u.exec(ref);
   if (step !== null) return db.get(
     `SELECT 1 FROM task_graphs g JOIN task_graph_steps s ON s.graph_id = g.id
@@ -200,7 +203,7 @@ export function isPmAgendaItemOpen(db: Db, pmId: PmId, ref: string): boolean {
     Number(step[1]), pmId, step[2]!, Number(step[3]),
   ) !== undefined;
   const worker = /^worker:(\d+)@(\d+)$/u.exec(ref);
-  return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some((item) => item.since === Number(worker[2]));
+  return worker !== null && openWorkerItems(db, pmId, Number(worker[1])).some((item) => item.since === Number(worker[2]) && item.watchId === undefined);
 }
 
 const cursorLines = z.array(z.object({ ref: z.string(), needsPm: z.boolean(), text: z.string() }));

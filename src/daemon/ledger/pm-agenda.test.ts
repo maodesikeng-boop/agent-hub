@@ -10,6 +10,7 @@ import {
   diffAgendaLines,
   formatPmAgenda,
   nextAgendaFooter,
+  readyAgendaRef,
   type AgendaCursor,
   type AgendaLine,
   type PmAgenda,
@@ -18,7 +19,7 @@ import { createSessionStore } from "../store/index.ts";
 import { openDatabase } from "../store/db.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate } from "../store/migrate.ts";
 import { writeMigrationManifest } from "../store/test-helpers.ts";
-import { pmAgendaOf } from "./pm-agenda.ts";
+import { isPmAgendaItemOpen, pmAgendaOf } from "./pm-agenda.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
 
 const MINUTE = 60_000;
@@ -96,6 +97,30 @@ describe("S1 and S2: the per-graph list and the delivery row", () => {
     expect(agenda.graphs.map((g) => g.graphId)).toEqual([ready, braked]);
     expect(agenda.graphs[0]).toMatchObject({ readyToFinish: true, needsPm: true, steps: [] });
     expect(agenda.graphs[1]!.steps).toEqual([expect.objectContaining({ key: "fix", state: expect.objectContaining({ kind: "waiting_pm" }) })]);
+  });
+
+  it("S2.1: a graph or Worker waiting on a watch is neither sorted with nor kept open as an item that needs the PM", async () => {
+    const ready = await readyGraph(f, "检查后交付");
+    f.clock.now += 5 * MINUTE;
+    const braked = await brakedGraph(f, "后停下的图");
+    const solo = f.ledger.hubCall(f.lin.sessionId, "worker.start", { title: "等发布", task: "等发布", noWorktree: true }).data.worker;
+    f.workerTurn(solo.id, reportBlock({ status: "做完了", summary: "发好了" }));
+    const before = pmAgendaOf(f.db, f.lin.pmId, f.clock.now);
+    expect(before.graphs.map((g) => g.graphId)).toEqual([ready, braked]);
+    const readyRef = readyAgendaRef(ready, before.graphs[0]!.oldestNeedsPmSince!);
+    const workerSince = before.outside.find((item) => item.kind === "worker_report")!.since;
+    const note = f.pmSystemMessages().find(isGraphReadyNotice)!;
+    expect(isPmAgendaItemOpen(f.db, f.lin.pmId, readyRef)).toBe(true);
+    expect(isPmAgendaItemOpen(f.db, f.lin.pmId, `worker:${solo.id}@${workerSince}`)).toBe(true);
+
+    f.ledger.hubCall(f.lin.sessionId, "watch.add", { until: "check-ready", everyMs: 15_000, graphId: ready, body: "检查通过后交付" });
+    f.ledger.hubCall(f.lin.sessionId, "watch.add", { until: "check-release", everyMs: 15_000, workerId: solo.id, body: "发布完再验收" });
+
+    const after = pmAgendaOf(f.db, f.lin.pmId, f.clock.now);
+    expect(after.graphs.map((g) => g.graphId)).toEqual([braked, ready]);
+    expect(isPmAgendaItemOpen(f.db, f.lin.pmId, readyRef)).toBe(false);
+    expect(isPmAgendaItemOpen(f.db, f.lin.pmId, `worker:${solo.id}@${workerSince}`)).toBe(false);
+    expect(f.ledger.isSystemMessageCurrent!(note.id)).toBe(false);
   });
 
   it("S1.1: a finished graph ends with a delivery row and its note says the graph only knows its drawn steps", async () => {
