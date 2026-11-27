@@ -24,6 +24,7 @@ import {
   createBaseSessionState,
   entryParts,
   flatEntryText,
+  formatStartupExitDetail,
   launchChanged,
   takePendingBatch,
   within,
@@ -34,6 +35,7 @@ import {
   type PendingEntry,
 } from "./base-driver.ts";
 import { claudeComposerBase } from "../../vendors/claude/composer.ts";
+import { MACOS_NESTED_SANDBOX_MESSAGE } from "../../shared/errors.ts";
 
 interface DummyBatch extends BaseBatch {
   text: string;
@@ -547,5 +549,27 @@ describe("BaseSessionDriver 公共状态机", () => {
     expect(st.pending).toEqual([]);
     await expect(driver.send(1, { messageIds: [100], source: "user", text: "late" })).rejects.toThrow(/session_ended/);
     await driver.end(1);
+  });
+
+  it("acceptance S2/S11: formatStartupExitDetail returns actionable nested macOS sandbox message for exit 71 sandbox_apply and standard message otherwise", () => {
+    expect(
+      formatStartupExitDetail({
+        vendorLabel: "agy",
+        phase: "init",
+        exitCode: 71,
+        signal: null,
+        stderr: "sandbox-exec: sandbox_apply: Operation not permitted\n",
+      }),
+    ).toBe(MACOS_NESTED_SANDBOX_MESSAGE);
+
+    expect(
+      formatStartupExitDetail({
+        vendorLabel: "claude",
+        phase: "system/init",
+        exitCode: 71,
+        signal: null,
+        stderr: "unrelated os error",
+      }),
+    ).toBe("claude exited before system/init (exit code 71): unrelated os error");
   });
 });

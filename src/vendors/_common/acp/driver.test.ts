@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readJsonLog } from "../../../../test/append-log.ts";
+import { readJsonLog, waitForJsonLogEvent } from "../../../../test/append-log.ts";
 import { isAlive, waitForExit } from "../../../daemon/driver/process.ts";
 import { MemorySessionStore, realSleep } from "../../../daemon/driver/test-helpers.ts";
 import {
@@ -49,6 +49,7 @@ interface AcpTestHarness {
   dir: string;
   cwd: string;
   logDir: string;
+  logFile: string;
   stateDir: string;
   promptFile: string;
   store: MemorySessionStore;
@@ -68,11 +69,23 @@ interface AcpTestHarness {
   cleanup(): Promise<void>;
 }
 
-async function waitForLog(h: AcpTestHarness, event: string): Promise<void> {
-  const deadline = Date.now() + 5000;
-  while (!h.logs().some((e) => e.event === event)) {
-    if (Date.now() >= deadline) throw new Error(`Missing fake ACP event: ${event}`);
-    await realSleep(10);
+async function waitForLog(h: AcpTestHarness, event: string, timeoutMs = 10_000): Promise<void> {
+  const controller = new AbortController();
+  const unsub = h.driver.onEvent((_id, ev) => {
+    if (ev.type === "session.exited") {
+      controller.abort(new Error(`ACP process exited (${ev.reason}, code=${ev.exitCode}) before log event: ${event}`));
+    }
+  });
+  try {
+    await waitForJsonLogEvent<FakeAcpLogEntry>({
+      file: h.logFile,
+      match: (e) => e.event === event,
+      timeoutMs,
+      signal: controller.signal,
+      label: event,
+    });
+  } finally {
+    unsub();
   }
 }
 
@@ -208,6 +221,7 @@ function makeAcpHarness(options: {
     dir,
     cwd,
     logDir,
+    logFile,
     stateDir,
     promptFile,
     store,
@@ -747,7 +761,7 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     expect(h.logs().filter((e) => e.event === "session/prompt")).toEqual([]);
   });
 
-  it("空闲预热在 initialize 挂起时也能停止；end 在启动超时后可结束", async () => {
+  it("空闲预热在 initialize 挂起时也能停止", async () => {
     const h = track(makeAcpHarness({ script: { hangOnInitialize: true }, driverOptions: { interruptGraceMs: 40 } }));
     const row = h.addSession();
     const starting = h.driver.start(row.id).catch((error: unknown) => error);
@@ -755,15 +769,17 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     await h.driver.interrupt(row.id);
     expect(await starting).toBeInstanceOf(DriverError);
     expect(h.of("message.delivered")).toHaveLength(0);
+  });
 
-    const ending = track(makeAcpHarness({ script: { hangOnInitialize: true }, driverOptions: { startTimeoutMs: 1000 } }));
+  it("end 在启动超时后可结束", async () => {
+    const ending = track(makeAcpHarness({ script: { hangOnInitialize: true }, driverOptions: { startTimeoutMs: 2_000 } }));
     const pending = ending.addSession();
     const sending = ending.driver.send(pending.id, { messageIds: [311 as never], source: "user", text: "init" }).catch((error: unknown) => error);
     await waitForLog(ending, "initialize");
     await ending.driver.end(pending.id);
     expect(await sending).toBeInstanceOf(DriverError);
     expect(ending.store.get(pending.id)!.status).toBe("ended");
-  });
+  }, 15_000);
 
   it("取消响应晚于 SIGINT 时仍强杀忽略信号的进程，送达早于轮末", async () => {
     const h = track(makeAcpHarness({

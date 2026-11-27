@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST } from "../../src/shared/index.ts";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../../src/vendors/agy/paths.ts";
 import * as sandboxProbes from "../sandbox-probes.ts";
 import { assertNotProduction, assertTestAccount, benchRoot, BenchConfigError, openBench, parseBenchConfig, ProductionGuardError, TESTER_HOME_ENV, type BenchConfig, type InstanceClient } from "./bench.ts";
 import { localDaemonEnv } from "./local-instance.ts";
@@ -252,6 +253,14 @@ describe("openBench", () => {
     expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     local(c).env.CLAUDE_CODE_OAUTH_TOKEN = "@secrets/claude-oauth-token";
     expect(localDaemonEnv(input).CLAUDE_CODE_OAUTH_TOKEN).toBe("bench-only-token");
+  });
+
+  it("acceptance S3: sets AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 in macOS localDaemonEnv so isolated HOME never triggers Keychain popup", () => {
+    const c = config(scratch());
+    const macEnv = localDaemonEnv({ config: c, instance: local(c), codeDir: "/code", mode: "real", platform: "darwin", baseEnv: {} });
+    expect(macEnv[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBe("1");
+    const linuxEnv = localDaemonEnv({ config: c, instance: local(c), codeDir: "/code", mode: "real", platform: "linux", baseEnv: {} });
+    expect(linuxEnv[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBeUndefined();
   });
 });
 
