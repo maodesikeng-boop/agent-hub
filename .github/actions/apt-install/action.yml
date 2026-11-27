@@ -60,7 +60,7 @@ runs:
 
         debs=("$DEBS"/*.deb)
         if [[ "${CACHE_HIT:-}" == true ]] && (( ${#debs[@]} > 0 )); then
-          if sudo timeout --kill-after=5s 60 env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-download --no-install-recommends "${debs[@]}" && timeout 15 bash -c "$PROBE"; then
+          if sudo timeout --kill-after=5s 60 env DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=- install -y --no-download --no-install-recommends "${debs[@]}" && timeout 15 bash -c "$PROBE"; then
             echo "Installed packages from cached debs"
             exit 0
           fi
