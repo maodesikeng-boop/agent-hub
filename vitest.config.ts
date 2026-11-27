@@ -28,7 +28,14 @@ export default defineConfig({
           exclude: [
             "**/node_modules/**",
             "src/relay/cloudflare/**",
-            ...(process.platform === "win32" ? ["test/eval/**"] : []),
+            ...(process.platform === "win32"
+              ? [
+                  "test/eval/isolation.test.ts",
+                  "test/eval/cli.test.ts",
+                  "test/eval/selftest.test.ts",
+                  "test/eval/fakes.test.ts",
+                ]
+              : []),
           ],
         },
       },

@@ -1,4 +1,4 @@
-// 被测版本就是一个 git 引用（设计第 6 节）：守护进程从那个提交的源码起。用 git archive 导出到评测目录（不在真仓库里建 worktree、
+// Exports evaluated git refs via git archive into the isolated eval workspace without mutating the source repo.
 // 不动它的 .git），按提交号缓存；依赖和当前仓库一样时软链当前的 node_modules，不一样时离线装一份。
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";

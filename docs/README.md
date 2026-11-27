@@ -48,6 +48,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 ## Testing
 
 - [AI tester](ai-tester-design.md): The resident test bench (a Mac and a server on a test account, a test Feishu bot, all eight vendor CLIs), nightly script flows, the AI tester handbook in `.agents/skills/tester/`, vendor coverage reporting, and the `pnpm verify` round-trip and restart checks.
+- [Product capability evaluation](product-eval-design.md): The unified three-tier product capability evaluation framework (`harness`, `replay`, and `canary`), five non-collapsed capability dimensions, loopback mock model server with prompt-cache prefix verification, multi-trial `pass@k` and `pass^k` gating, holdout anti-overfitting guards, and CI and release-gate integration.
 
 ## Desktop and distribution
 
