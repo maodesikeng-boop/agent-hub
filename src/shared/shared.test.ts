@@ -1099,6 +1099,7 @@ describe("Router 与任务图同源待决模型（decisions.ts & limits.ts）", 
           createdAt: 100,
           updatedAt: 100,
           completedAt: null,
+          readySince: null,
           nodes: [
             {
               key: "gate-api",

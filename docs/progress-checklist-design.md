@@ -96,7 +96,7 @@ Use the append-only `checklist` message. Drivers emit checklist changes; the led
 | `CHECKLIST_TITLE_MAX_CHARS` | 200 | Fits one long sentence; the row shows one line. |
 | `CHECKLIST_PENDING_CALLS_MAX` | 64 | Claude checklist calls awaiting results per session. |
 
-`src/web/limits.ts` gains `ACTION_ELAPSED_TICK_MS = 1_000` for the live time.
+The live time ticks every `SECOND_TICK_MS` (`src/web/limits.ts`) through `useNow`.
 
 ### 5. Cross-vendor and cross-platform unification
 

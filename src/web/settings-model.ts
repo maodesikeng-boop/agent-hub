@@ -51,6 +51,7 @@ import { COPIED_RESET_MS, copyText } from "./components/CodeBlock.tsx";
 import { useClient } from "./device-scope.tsx";
 import { LOCAL_DEVICE, isReadOnly, type DeviceKey, type DeviceView } from "./devices.ts";
 import { errorText, nameError, type ErrorLike } from "./format.ts";
+import { SECOND_TICK_MS } from "./limits.ts";
 import { modelsQueryKey } from "./models.tsx";
 import type { NotifySettings } from "./notify.ts";
 import { ACCOUNT_QUERY_KEY, accountQueryFn, claimAccountTicket, commitAccountStatus, useHubQueryClient } from "./query-client.ts";
@@ -66,6 +67,7 @@ import {
   subscribeUiScale,
   type UiScale,
 } from "./ui-scale.ts";
+import { useNow } from "./useNow.ts";
 
 export { COPIED_RESET_MS };
 
@@ -278,7 +280,6 @@ export function movePriority(priority: readonly DeviceId[], id: DeviceId, delta:
 
 export const SESSIONS_POLL_MS = 3000;
 export const CONFIRM_TIMEOUT_MS = 5000;
-export const COUNTDOWN_TICK_MS = 1000;
 
 export const BROWSER_SESSIONS_QUERY_KEY = ["browser-sessions"] as const;
 
@@ -301,18 +302,11 @@ export function useSignInLink(sessions?: readonly BrowserSessionInfo[] | null) {
   const [link, setLink] = useState<LoginLinkResponse | null>(null);
   const [baseline, setBaseline] = useState<ReadonlySet<string> | null>(null);
   const minUpdateCountRef = useRef(0);
-  const [now, setNow] = useState(() => Date.now());
+  const now = useNow(SECOND_TICK_MS, link?.expiresAt ?? null);
   const { copied, copy } = useCopyFeedback();
 
   const expired = link !== null && now >= link.expiresAt;
   const polling = link !== null && !expired;
-
-  useEffect(() => {
-    if (link === null || expired) return;
-    setNow(Date.now());
-    const tick = setInterval(() => setNow(Date.now()), COUNTDOWN_TICK_MS);
-    return () => clearInterval(tick);
-  }, [link, expired]);
 
   const updateCount = qc.getQueryState(BROWSER_SESSIONS_QUERY_KEY)?.dataUpdateCount ?? 0;
 
@@ -349,10 +343,7 @@ export function useSignInLink(sessions?: readonly BrowserSessionInfo[] | null) {
           setBaseline(null);
         }
       },
-      onSuccess: (created) => {
-        setNow(Date.now());
-        setLink(created);
-      },
+      onSuccess: (created) => setLink(created),
     },
     qc,
   );
@@ -365,7 +356,6 @@ export function useSignInLink(sessions?: readonly BrowserSessionInfo[] | null) {
 
   return {
     link,
-    now,
     expired,
     polling,
     remainingMs: link === null ? 0 : link.expiresAt - now,

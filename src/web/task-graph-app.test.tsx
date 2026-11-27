@@ -81,6 +81,7 @@ function graph(): TaskGraph {
     createdAt: 1_000,
     updatedAt: 1_000,
     completedAt: null,
+    readySince: null,
   };
 }
 
@@ -345,6 +346,7 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
       createdAt: 1_000,
       updatedAt: 2_000,
       completedAt: null,
+      readySince: null,
     };
     const snap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
@@ -426,6 +428,7 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
       createdAt: 1_000,
       updatedAt: 2_000,
       completedAt: null,
+      readySince: null,
     };
     const snap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
@@ -838,6 +841,7 @@ describe("Task Graph delivery row", () => {
         data: {
           graph: {
             ...graph(),
+            readySince: 2_000,
             nodes: [
               makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
               makeNode({ key: "gate", title: "确认上线", status: "done", waitingFor: null, skipped: true, sortOrder: 1 }),
@@ -876,7 +880,7 @@ describe("Task Graph delivery row", () => {
     act(() => ws.push({
       seq: 30,
       type: "task_graph.updated",
-      data: { graph: { ...graph(), deliveryWatch: { watchId: 3, body: "检查通过后交付" }, nodes: [
+      data: { graph: { ...graph(), readySince: 2_000, deliveryWatch: { watchId: 3, body: "检查通过后交付" }, nodes: [
         makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0 }),
         makeNode({ key: "gate", title: "确认上线", status: "done", sortOrder: 1 }),
       ] } },
@@ -915,6 +919,7 @@ describe("Task Graph delivery row", () => {
         data: {
           graph: {
             ...graph(),
+            readySince: 2_000,
             nodes: [
               makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
               makeNode({
