@@ -153,6 +153,8 @@ None. The picker walks the eight registered vendors without caching. `ensureFirs
    - *A rewrite keeps what the old code guaranteed* (`src/web/**`): the unknown-vendor fallback, `Add provider…`, and the zero-provider expansion of `More settings` stay.
    - *Interface changes come with a real-browser render*: screenshots below.
    - *A result is matched to its request by an id both carry*: no new request-result matching.
+   - *PM-owned queues and background jobs handle archive, unarchive, and owner teardown* (`ledger/persona.ts`): only the default vendor picked during `createPmIn` changes; no queue, schedule, or background runner is added or altered.
+   - *Ledger state invariants hold across every transition and reader path* (`ledger/**`): every PM creation path (`createPmIn`, `POST /api/pms`, Router `project-create`, and `ensureFirstRunPm`) shares `defaultPmVendor` and `checkAgentSetting`; existing PM rows and `editPersona` keep their stored vendor.
    - *Tests wait for events, not for time*: the probe-budget tests use fake timers.
    - *Planned acceptance scenarios cover every requirement*: this section.
 10. **Reopening a stale view.** The user opens the dialog before `/api/models` returns, while the bundled catalogs are all `unknown`. The dialog shows the first vendor, then switches to Codex when the reply lands, because the user has not touched Provider. Covered by scenario 1's test, which starts from the bundled catalogs, and by the real-browser capture.
