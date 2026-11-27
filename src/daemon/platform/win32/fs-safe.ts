@@ -237,6 +237,25 @@ export async function renameWithWindowsRetry(
   }
 }
 
+export interface WriteExecutableFileOptions {
+  mode?: number;
+  platform?: NodeJS.Platform;
+  delaysMs?: readonly number[];
+  renameImpl?: (src: string, dst: string) => void;
+}
+
+/**
+ * Precondition: `targetPath` is a file path whose parent directory exists; `mode` (when given) is a POSIX permission mask (defaults to `0o755`).
+ * Postcondition: `targetPath` is a regular file containing `content` with exact `mode` on POSIX, published via a closed same-directory temp file and atomic rename (with Windows retry) so concurrent Linux `execve` callers never observe `ETXTBSY` or partial content. Returns `false` without rewriting when `targetPath` is already a regular file with matching content and mode, and `true` when written or replaced. Never follows an existing symlink at `targetPath`, and leaves no temp file on failure.
+ */
+export function writeExecutableFileAtomicSync(
+  _targetPath: string,
+  _content: string,
+  _options?: WriteExecutableFileOptions,
+): boolean {
+  throw new Error("Not implemented");
+}
+
 export function writeFileAtomicSyncWithRetry(
   targetPath: string,
   content: string,
