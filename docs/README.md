@@ -42,6 +42,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Project Manager friction with `hub`](pm-friction-design.md): Plan reviews paused for the PM with `"confirm": "pm"`, `doneSteps` in `graph patch`, one text-limit table, `hub ask list/show`, `hub schedule show`, `hub worker wait`, the first typed PM notice entry, and help-only commands that keep the system prompt and every vendor cache unchanged.
 - [Hub limits visible before they bite](hub-limits-visibility-design.md): One table of every length, size, and count limit an agent can hit through `hub`, rendered into `hub help`, per-command usage, and one rejection message, and `hub ask` rejecting over-limit text instead of cutting it.
 - [Project Manager awareness of finished work](pm-awareness-design.md): A per-graph status list computed from the ledger and delivered to the PM as a snapshot plus changes on every wake, one decision chain from Worker to PM to user for `"confirm": true`, `hub watch` for outside conditions, step slots shared on one computer, and a delivery row for finished graphs.
+- [Handover byte budget and lightweight skill carryover](handover-budget-and-skills-design.md): Lightweight verified skill-index carryover, declarative per-vendor single-message byte caps, delivery-time priority-tiered preamble budgeting protecting the latest user message, and prompt-cache preservation across all eight vendors.
 
 ## Testing
 

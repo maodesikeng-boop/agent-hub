@@ -1,3 +1,4 @@
+import { AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
@@ -91,7 +92,7 @@ export default defineVendor({
     // agy runs Claude and GPT models, so its errors often name other vendors' models.
     rawHintPriority: 2,
   },
-  handover: { transcriptPortable: false },
+  handover: { transcriptPortable: false, maxSingleMessageBytes: AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES },
   tools: {
     actions: {
       run_command: "command",

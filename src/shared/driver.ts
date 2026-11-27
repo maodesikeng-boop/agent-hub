@@ -341,12 +341,17 @@ export interface PersonaNote {
   note: string | null;
 }
 
+export interface SessionPreambleOptions {
+  /** UTF-8 bytes already committed to the turn outside the preamble (triggering message, system prompt, other prefixes, delivery suffix). */
+  readonly reservedBytes?: number;
+}
+
 export interface DriverOptions {
   executablePath: string | (() => string);
   store: SessionStore;
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
-  sessionPreamble?: (sessionId: SessionId) => string | null;
+  sessionPreamble?: (sessionId: SessionId, options?: SessionPreambleOptions) => string | null;
   /** `preamble` is the opening brief carried by the same input, if any. */
   deliverySuffix?: (sessionId: SessionId, messageIds: readonly MessageId[], preamble?: string) => DeliverySuffix;
   canDeliverSystemMessage?: (sessionId: SessionId, messageId: MessageId) => boolean;

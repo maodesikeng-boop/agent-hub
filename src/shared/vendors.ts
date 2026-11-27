@@ -293,6 +293,14 @@ export function handoverTokenThresholdOf(vendor: string): number {
   return (isAgentVendor(vendor) ? SPECS[vendor].handover?.tokenThreshold : undefined) ?? HANDOVER_TOKEN_THRESHOLD;
 }
 
+/**
+ * Precondition: vendor is any vendor id string (registered or unknown).
+ * Postcondition: returns the vendor's declared handover.maxSingleMessageBytes or DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES.
+ */
+export function handoverMaxSingleMessageBytesOf(_vendor: string): number {
+  throw new Error("Not implemented");
+}
+
 export const VENDOR_AVAILABILITIES = ["available", "not_installed", "signed_out", "unknown"] as const;
 export type VendorAvailability = (typeof VENDOR_AVAILABILITIES)[number];
 

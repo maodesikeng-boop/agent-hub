@@ -9,7 +9,7 @@ import { pendingAsksOfPm } from "./pending-asks.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import { systemEventOf, systemMessageDedupeKey, workerEventOf } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
-import type { DriverEvent } from "../../shared/driver.ts";
+import type { DriverEvent, SessionPreambleOptions } from "../../shared/driver.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { ForkRef, ForkerKind, HandoverCleanJob, HandoverFailure, HandoverId, HandoverJob, HandoverStatus } from "../../shared/handover.ts";
 import {
@@ -919,7 +919,7 @@ export function createLedgerHandover(
     if (message !== null && message.sessionId === action.params.sessionId) settleInSession(p, message.conversationId);
   };
 
-  const sessionPreamble = (sessionId: SessionId): string | null => {
+  const sessionPreamble = (sessionId: SessionId, _options?: SessionPreambleOptions): string | null => {
     const session = getAgentSession(db, sessionId);
     if (session === null || session.role !== "pm" || session.conversationId === null || session.generation <= 1) return null;
     if (db.get("SELECT 1 AS x FROM session_preamble_seen WHERE session_id = ?", sessionId) !== undefined) return null;

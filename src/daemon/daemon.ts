@@ -478,7 +478,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sessionTmp: sessionScope.tmp, sessionTagNonce: sessionScope.tagNonce, parentSessionTag: sessionScope.parentTag,
     });
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
-    const launch = { appApprovals: ledger.appApprovals, canDeliverSystemMessage: canDeliverSystemMessage.bind(null, ledger), store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId), deliverySuffix: ledger.deliverySuffix, onSessionQuiescent: (sessionId: number) => ledger.onSessionQuiescent?.(sessionId) };
+    const launch = { appApprovals: ledger.appApprovals, canDeliverSystemMessage: canDeliverSystemMessage.bind(null, ledger), store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number, options?: { readonly reservedBytes?: number }) => ledger.sessionPreamble(sessionId, options), deliverySuffix: ledger.deliverySuffix, onSessionQuiescent: (sessionId: number) => ledger.onSessionQuiescent?.(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: createVendorDrivers(

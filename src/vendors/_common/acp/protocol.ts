@@ -130,15 +130,18 @@ export function normalizeAcpUserBlocks(rawBlocks: readonly unknown[]): Array<{ t
   return out;
 }
 
-export function checkAcpUserBlocks(blocks: ReadonlyArray<{ type: "text"; text: string }>): string | null {
+export function checkAcpUserBlocks(
+  blocks: ReadonlyArray<{ type: "text"; text: string }>,
+  maxBytes: number = MAX_MESSAGE_BYTES,
+): string | null {
   if (blocks.length === 0 || blocks.every((b) => b.text.trim() === "")) {
     return "empty message text";
   }
   let totalBytes = 0;
   for (const block of blocks) {
     totalBytes += Buffer.byteLength(block.text, "utf8");
-    if (totalBytes > MAX_MESSAGE_BYTES) {
-      return `message exceeds ${MAX_MESSAGE_BYTES} bytes (${totalBytes} bytes)`;
+    if (totalBytes > maxBytes) {
+      return `message exceeds ${maxBytes} bytes (${totalBytes} bytes)`;
     }
   }
   return null;
