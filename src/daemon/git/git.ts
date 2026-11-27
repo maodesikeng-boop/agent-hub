@@ -437,17 +437,6 @@ export async function resolveCommit(folder: string, ref: string, options: GitOpt
   throw failed("git rev-parse", run);
 }
 
-export async function remoteBranchHead(repoFolder: string, branch: string, options: GitOptions = {}): Promise<string | null | undefined> {
-  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const remoteRun = await runGit(repoFolder, ["remote"], timeoutMs);
-  if (remoteRun.code !== 0) throw failed("git remote", remoteRun);
-  if (!remoteRun.stdout.split("\n").some((line) => line.trim() === "origin")) return undefined;
-  const run = await runGit(repoFolder, ["ls-remote", "origin", `refs/heads/${branch}`], timeoutMs, { LC_ALL: "C" });
-  if (run.code !== 0) throw failed("git ls-remote", run);
-  const line = run.stdout.split("\n").find((l) => l.endsWith(`\trefs/heads/${branch}`));
-  return line === undefined ? null : line.split("\t")[0]!;
-}
-
 export async function isCommitMergedToMain(repoFolder: string, commit: string, options: GitOptions = {}): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const refsRun = await runGit(repoFolder, ["for-each-ref", "--format=%(objectname)", ...MAIN_TARGET_REFS], timeoutMs);

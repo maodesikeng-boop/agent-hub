@@ -1,6 +1,7 @@
 // 设置里“已登录的浏览器”的文字：User-Agent 显示成“iPhone Safari”这样的名字，最后活动显示成“3 分钟前”，登录链接剩余时间显示成“4:32”。
 import { describe, expect, it } from "vitest";
-import { describeUserAgent, formatAgo, formatCountdown, userAgentDevice, userAgentKind } from "./browser-sessions.ts";
+import { describeUserAgent, formatCountdown, userAgentDevice, userAgentKind } from "./browser-sessions.ts";
+import { formatAgo } from "./format.ts";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const IPHONE_CHROME = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1";

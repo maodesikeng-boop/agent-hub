@@ -73,6 +73,17 @@ function reaperFor(scope: DaemonSessionScope, platform: ListTaggedProcessesOptio
 }
 
 describe("session process reaper", () => {
+  it.skipIf(process.platform === "win32")("lists a watch command as left behind only once the runner no longer runs that watch", async () => {
+    const ledgerFile = join(root, "state", "session-tmp.json");
+    mkdirSync(join(root, "state"));
+    const scope = createDaemonSessionScope({ ledgerFile, env: {} });
+    const tag = `watch7:${scope.tagNonce}`;
+    const probe = spawnTagged(tag);
+    const reaper = reaperFor(scope, fakeProcessTable([{ pid: probe, envTag: tag, cwd: worktree }]));
+
+    expect(await reaper.listEnded(new Set(), new Set([7]))).toEqual([]);
+    expect((await reaper.listEnded(new Set(), new Set([8])))?.map((p) => [p.pid, p.tag])).toEqual([[probe, tag]]);
+  });
   it.skipIf(process.platform === "win32")("reaps a descendant tagged before a daemon restart when its session ends afterwards", async () => {
     const ledgerFile = join(root, "state", "session-tmp.json");
     mkdirSync(join(root, "state"));
@@ -81,7 +92,7 @@ describe("session process reaper", () => {
     const table = fakeProcessTable([{ pid: devServer, envTag: before.ownerEnv(5), cwd: worktree }]);
 
     const after = reaperFor(createDaemonSessionScope({ ledgerFile, env: {} }), table);
-    expect((await after.listEnded(new Set()))?.map((p) => [p.pid, p.sessionId, p.sessionPrivate])).toEqual([[devServer, 5, true]]);
+    expect((await after.listEnded(new Set(), new Set()))?.map((p) => [p.pid, p.sessionId, p.sessionPrivate])).toEqual([[devServer, 5, true]]);
     expect(await after.reapSession(5)).toEqual([devServer]);
     expect(await waitForExit(devServer, 2_000)).toBe(true);
   });
@@ -99,9 +110,9 @@ describe("session process reaper", () => {
     ]);
     const reaper = reaperFor(scope, table);
 
-    const listed = await reaper.listEnded(new Set());
+    const listed = await reaper.listEnded(new Set(), new Set());
     expect(listed?.map((p) => [p.pid, p.sessionPrivate]).sort()).toEqual([[inTmp, true], [shared, false]].sort());
-    expect(await reaper.listEnded(new Set([5]))).toEqual([]);
+    expect(await reaper.listEnded(new Set([5]), new Set())).toEqual([]);
 
     expect(await reaper.reapSession(5)).toEqual([inTmp]);
     expect(await waitForExit(inTmp, 2_000)).toBe(true);
@@ -116,6 +127,6 @@ describe("session process reaper", () => {
   it("returns null instead of an empty list when the process table cannot be read", async () => {
     const scope = createDaemonSessionScope({ ledgerFile: join(root, "state", "session-tmp.json"), env: {} });
     const reaper = reaperFor(scope, { platform: "darwin", runPs: async () => null });
-    expect(await reaper.listEnded(new Set())).toBeNull();
+    expect(await reaper.listEnded(new Set(), new Set())).toBeNull();
   });
 });
