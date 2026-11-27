@@ -10,6 +10,7 @@ import { readLedgerFile } from "../src/daemon/process-ledger.ts";
 import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
 import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
 import { digestOf, lostAfterRestart, sendAndAwaitReply, type RoundTrip } from "./verify-steps.ts";
 import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
@@ -61,6 +62,7 @@ function daemonEnv(home: string, scratch: string): Record<string, string> {
     LANG: "en_US.UTF-8",
     HOME: userHome,
     USERPROFILE: userHome,
+    ...(process.platform === "darwin" ? { [AGY_FORCE_FILE_TOKEN_STORAGE_ENV]: "1" } : {}),
     [ENV_HOME]: home,
     [ENV_PORT]: "0",
     ...Object.fromEntries(
