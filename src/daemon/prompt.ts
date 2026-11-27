@@ -24,6 +24,7 @@ import {
 } from "../shared/index.ts";
 import type { AgentVendor, LaunchContext, PersonaUpdate, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
 import { HUB_CHECKLIST_COMMAND } from "../shared/hub-checklist.ts";
+import type { BranchTipFinding, FastForwardOutcome, WorkspaceCheckoutNote } from "../shared/ledger.ts";
 import { checklistPromptTool } from "../vendors/_common/checklist.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
@@ -435,6 +436,55 @@ function fenced(text: string): string {
   const longest = Math.max(0, ...[...clean.matchAll(/`+/g)].map((m) => m[0].length));
   const fence = "`".repeat(Math.max(3, longest + 1));
   return `${fence}\n${clean}\n${fence}`;
+}
+
+const shortSha = (sha: string): string => sha.slice(0, 12);
+
+function branchTipFindingText(f: BranchTipFinding): string {
+  switch (f.kind) {
+    case "remote_ahead":
+      return `本地分支停在 ${shortSha(f.local)}，落后于远端 ${f.remote}，用的是远端上的最新提交。`;
+    case "local_ahead":
+      return `本地分支比远端 ${f.remote} 上的 ${shortSha(f.remoteSha)} 多了没推送的提交，用的是本地分支。`;
+    case "remote_rewound":
+      return `上一步交的是远端 ${f.remote} 上的 ${shortSha(f.remoteSha)}，本地分支 ${shortSha(f.local)} 上有远端没有的提交（远端可能被强推过），以远端为准。`;
+    case "diverged":
+      return `本地分支（${shortSha(f.local)}）和远端 ${f.remote} 上的（${shortSha(f.remoteSha)}）分叉了，开工前先核对该用哪个。`;
+    case "fetch_failed":
+      return `没能从远端 ${f.remote} 取这个分支的最新提交（${f.error}），用的是本地分支，可能不是最新。`;
+    case "no_remote":
+      return "仓库没有配远端，用的是本地分支。";
+    case "ambiguous_remote":
+      return `仓库有多个远端（${f.remotes.join("、")}），没配这个分支对应哪个，用的是本地分支。`;
+    case "expected_missing":
+      return `上游交棒写的提交 ${f.expected} 不在这个提交的历史里，先核对上游有没有推到这个分支。`;
+  }
+}
+
+function fastForwardText(o: FastForwardOutcome): string | null {
+  switch (o.kind) {
+    case "up_to_date":
+      return null;
+    case "fast_forwarded":
+      return `本地分支落后远端，已从 ${shortSha(o.from)} 快进到 ${shortSha(o.to)}。`;
+    case "dirty":
+      return `远端上有更新的提交 ${shortSha(o.to)}，但工作目录有没提交的改动，没有快进。`;
+    case "failed":
+      return `想快进到远端的 ${shortSha(o.to)} 没成功（${o.error}），还停在原来的提交。`;
+  }
+}
+
+/** Tells a Worker how its starting commit was chosen when that was not simply the local branch. */
+export function workspaceCheckoutNote(note: WorkspaceCheckoutNote): string | null {
+  const synced = note.sync === undefined ? null : fastForwardText(note.sync);
+  const findings = note.findings.filter((f) => note.sync === undefined || f.kind !== "remote_ahead").map(branchTipFindingText);
+  const lines = [...(synced === null ? [] : [synced]), ...findings];
+  if (lines.length === 0) return null;
+  return [`【系统】开工前核对了分支 ${note.branch}，现在在提交 ${shortSha(note.commit)}：`, ...lines.map((l) => `- ${l}`)].join("\n");
+}
+
+export function workspaceSyncFailedNote(branch: string, error: string): string {
+  return `【系统】开工前没能核对分支 ${branch} 是否落后远端（${error}），按工作目录现状开工。`;
 }
 
 export function setupNote(outcome: SetupOutcome): string {

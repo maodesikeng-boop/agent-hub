@@ -17,7 +17,6 @@ export {
   probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
-  remoteBranchHead,
   resolveCommit,
 } from "./git.ts";
 export {
@@ -29,6 +28,8 @@ export {
   resolveMainTargetCommits,
 } from "./branches.ts";
 export { probePr, probePrByUrl } from "./pr.ts";
+export { remoteBranchHead, resolveBranchTip, syncWorktreeBranch } from "./branch-tip.ts";
+export type { BranchTip, ResolveBranchTip, WorktreeSyncResult } from "./branch-tip.ts";
 export type {
   AddWorktreeOptions,
   AddWorktreeResult,

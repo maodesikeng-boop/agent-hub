@@ -75,7 +75,7 @@ import {
   createMultiVendorDriver,
   type ModelCatalogs,
 } from "./driver/index.ts";
-import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
+import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveBranchTip, resolveCommit, syncWorktreeBranch } from "./git/index.ts";
 import { createWorktreeBranchProbe } from "./git/worktree-branch.ts";
 import { createObservedQuotaStore, observeDriverQuota } from "./quota/observed-quota.ts";
 import { createProviderQuota } from "./quota/provider-quota.ts";
@@ -89,6 +89,7 @@ import {
   createReviewVerifyHandler,
   canDeliverSystemMessage,
   createWorktreeCreateHandler,
+  createWorktreeSyncHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
 import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
@@ -561,8 +562,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.end", createSessionEndHandler(deps));
     const observeReview = createReviewObserver({ resolveCommit, remoteBranchHead, probePr });
     executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
+    executor.register("worktree.sync", createWorktreeSyncHandler({ ledger, syncWorktree: syncWorktreeBranch }));
     executor.register("worktree.create", createWorktreeCreateHandler({
-        ledger, observeReview, addWorktree, setup,
+        ledger, resolveTip: resolveBranchTip, probePr, addWorktree, setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
         sessionTmp: sessionScope.tmp,
         sessionTagEnv: sessionScope.ownerEnv,

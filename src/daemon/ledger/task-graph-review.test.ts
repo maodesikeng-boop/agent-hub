@@ -15,7 +15,7 @@ import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf } from "../../shared/domain.ts";
 import { REVIEW_CHECKLIST, parseReviewTarget } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
-import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
+import { addWorktree, remoteBranchHead, resolveBranchTip, resolveCommit } from "../git/index.ts";
 import { createReviewObserver, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -62,7 +62,7 @@ describe("审查步骤只查不修", () => {
   let lin: { pmId: PmId; conversationId: ConversationId; sessionId: SessionId };
   const observeReview = createReviewObserver({
     resolveCommit: (f, r) => resolveCommit(f, r),
-    remoteBranchHead: (r, b) => remoteBranchHead(r, b),
+    remoteBranchHead: (r, b, name) => remoteBranchHead(r, b, name),
     probePr: async () => null,
   });
 
@@ -113,7 +113,8 @@ describe("审查步骤只查不修", () => {
   const runWorktreeCreate = (workerId: WorkerId) =>
     createWorktreeCreateHandler({
       ledger,
-      observeReview,
+      resolveTip: resolveBranchTip,
+      probePr: async () => null,
       addWorktree,
       setup: { start: () => true },
       setupLogPath: (id) => workerSetupLogPath(join(root, "logs"), id),
@@ -187,7 +188,7 @@ describe("审查步骤只查不修", () => {
     expect(row.branch).toBeNull();
     expect(row.worktree_path).not.toBe(impl.worktree_path);
     expect(row.base_commit).toBe(sha);
-    expect(parseReviewTarget(row.review_json)).toEqual({ branch: impl.branch, snapshot: { sha, remote: { sha }, pr: null } });
+    expect(parseReviewTarget(row.review_json)).toEqual({ branch: impl.branch, snapshot: { sha, local: sha, remote: { name: "origin", sha }, pr: null } });
     expect(git(row.worktree_path, "rev-parse", "HEAD")).toBe(sha);
     expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("running");
     const first = db.get<{ text: string }>("SELECT text FROM messages WHERE conversation_id = ? ORDER BY id LIMIT 1", sessionOf(wReview).conversation_id)!.text;
@@ -364,7 +365,7 @@ describe("审查步骤只查不修", () => {
     await runWorktreeCreate(w);
     const row = workerRow(w);
     expect(row.branch).toBeNull();
-    expect(parseReviewTarget(row.review_json)).toEqual({ branch: "hub/target-pr", snapshot: { sha, remote: { sha }, pr: null } });
+    expect(parseReviewTarget(row.review_json)).toEqual({ branch: "hub/target-pr", snapshot: { sha, local: sha, remote: { name: "origin", sha }, pr: null } });
     expect(git(row.worktree_path, "rev-parse", "HEAD")).toBe(sha);
     enqueued.length = 0;
 
