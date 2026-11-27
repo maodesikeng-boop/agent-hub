@@ -10,8 +10,7 @@ import type {
   VendorNpmInstallRecipe,
   VendorUpdateRecipe,
 } from "../../vendors/daemon-types.ts";
-import { killThenSettle } from "../driver/model-catalog.ts";
-import { termGroupAfterExit } from "../driver/process.ts";
+import { killChildAndWait, termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
 import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
@@ -177,7 +176,7 @@ function runLoggedOwnedProcess(options: {
       logBuffer.flush();
       if (err) {
         if (child.exitCode === null && child.signalCode === null) {
-          killThenSettle(child, () => rejectPromise(err));
+          void killChildAndWait(child).finally(() => rejectPromise(err));
         } else {
           rejectPromise(err);
         }

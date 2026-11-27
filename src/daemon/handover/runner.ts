@@ -138,7 +138,8 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
       copy = forked;
       const { forker, handle } = forked;
       if (!report(`报 #${handoverId} 复制好`, () => ledger.handoverForked(handoverId, { kind: forker.kind, ref: { forker: forker.id, handle } }))) return;
-      const result = await abortable(forker.write(src, handle, job.prompt, signal), signal);
+      const result = await forker.write(src, handle, job.prompt, signal);
+      if (signal.aborted) throw new Error("aborted");
       report(`报 #${handoverId} 写好`, () => ledger.handoverWritten(handoverId, result));
     } catch (error) {
       const failure: HandoverFailure = error instanceof ForkUnsupportedError && copy === null ? { kind: "unsupported", detail: error.message } : failureOf(error, run);

@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
-  KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
@@ -20,12 +19,11 @@ import spec from "./spec.ts";
 import {
   STDERR_TAIL_CHARS,
   effortsOf,
-  killThenSettle,
   nonEmptyString,
   parseJsonOutput,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { closeAndWaitChild, killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
@@ -112,24 +110,20 @@ export function queryClaudeControl(options: ClaudeModelQueryOptions, afterInitia
     let requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    let exitTimer: NodeJS.Timeout | undefined;
+    const rl = createInterface({ input: child.stdout });
     const finish = (error: Error | null, response?: Record<string, unknown>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(exitTimer);
       signal?.removeEventListener("abort", onAbort);
+      rl.close();
       if (error) {
-        killThenSettle(child, () => reject(error));
+        void killChildAndWait(child).finally(() => reject(error));
         return;
       }
-      child.stdin.end();
-      if (!exited()) {
-        killTimer = setTimeout(() => void forceKill(child), KILL_WAIT_MS);
-        killTimer.unref();
-        child.once("exit", () => clearTimeout(killTimer));
-      }
-      resolve(response ?? {});
+      void closeAndWaitChild(child, { signal }).finally(() => resolve(response ?? {}));
     };
     const onAbort = () => finish(new Error("cancelled"));
     signal?.addEventListener("abort", onAbort);
@@ -144,9 +138,9 @@ export function queryClaudeControl(options: ClaudeModelQueryOptions, afterInitia
     child.once("exit", (code, sig) => {
       termGroupAfterExit(child);
       // Let stdout drain before treating an exit as no reply.
-      setTimeout(() => finish(new Error(`claude 没回 initialize 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
+      exitTimer = setTimeout(() => finish(new Error(`claude 没回 initialize 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
-    createInterface({ input: child.stdout }).on("line", (line) => {
+    rl.on("line", (line) => {
       let obj: unknown;
       try {
         obj = JSON.parse(line);
@@ -198,8 +192,11 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      if (child.exitCode === null && child.signalCode === null) killThenSettle(child, () => resolve(result));
-      else resolve(result);
+      if (child.exitCode === null && child.signalCode === null) {
+        void killChildAndWait(child).finally(() => resolve(result));
+      } else {
+        resolve(result);
+      }
     };
     const onAbort = () => finish("unknown");
     signal?.addEventListener("abort", onAbort);

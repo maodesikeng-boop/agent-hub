@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
-  KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
@@ -23,11 +22,10 @@ import { vendorConfigHome } from "../../shared/paths.ts";
 import {
   STDERR_TAIL_CHARS,
   effortsOf,
-  killThenSettle,
   nonEmptyString,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { closeAndWaitChild, killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
@@ -151,29 +149,25 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
     trackChild(child, "probe:codex-app-server", { detached });
     let stderr = "";
     let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
+    let exitTimer: NodeJS.Timeout | undefined;
+    const rl = createInterface({ input: child.stdout });
     const results: unknown[] = new Array(calls.length);
     let pending = calls.length;
     let requiredPending = calls.filter((c) => !c.optional).length;
     let graceTimer: NodeJS.Timeout | undefined;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
     const finish = (error: Error | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(graceTimer);
+      clearTimeout(exitTimer);
       signal?.removeEventListener("abort", onAbort);
+      rl.close();
       if (error) {
-        killThenSettle(child, () => reject(error));
+        void killChildAndWait(child).finally(() => reject(error));
         return;
       }
-      child.stdin.end();
-      if (!exited()) {
-        killTimer = setTimeout(() => void forceKill(child), KILL_WAIT_MS);
-        killTimer.unref();
-        child.once("exit", () => clearTimeout(killTimer));
-      }
-      resolve(results);
+      void closeAndWaitChild(child, { signal }).finally(() => resolve(results));
     };
     const onAbort = () => finish(new Error("cancelled"));
     signal?.addEventListener("abort", onAbort);
@@ -192,9 +186,9 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
     });
     child.once("exit", (code, sig) => {
       termGroupAfterExit(child);
-      setTimeout(() => finish(new Error(`codex 没回 ${label} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
+      exitTimer = setTimeout(() => finish(new Error(`codex 没回 ${label} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
-    createInterface({ input: child.stdout }).on("line", (line) => {
+    rl.on("line", (line) => {
       let obj: unknown;
       try {
         obj = JSON.parse(line);
