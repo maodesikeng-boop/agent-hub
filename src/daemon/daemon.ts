@@ -21,6 +21,7 @@ import {
   MAX_VENDOR_SYNC_PROJECT_FOLDERS,
   MESH_DEFAULT_RELAY_URL,
   MESH_GITHUB_CLIENT_ID,
+  PM_AGENDA_REMINDER_TICK_MS,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   AUTO_RENEW_TICK_MS,
@@ -98,6 +99,7 @@ import { resolveRouterModel } from "./router/model-resolver.ts";
 import { createRouterTurnPurposes, createRouterTurnRunner } from "./router/single-turn.ts";
 import { createLedger, type SqliteLedger } from "./ledger/index.ts";
 import { ensureFirstRunPm } from "./first-run-pm.ts";
+import { startAgendaReminderLoop, type AgendaReminderLoop } from "./ledger/pm-agenda-reminders.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
 import { createWatchCommandRunner } from "./watches/launch.ts";
@@ -198,6 +200,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   // Setup commands stop first because they never call back into the ledger; the agent API closes after all agents exit because a last turn may still call hub.
   const parts: {
     scheduler?: NodeJS.Timeout;
+    agendaReminders?: AgendaReminderLoop;
     autoRenew?: NodeJS.Timeout;
     archiveCleanup?: NodeJS.Timeout;
     worktreeCleanup?: WorktreeCleanup;
@@ -244,6 +247,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.selfReload?.close();
     parts.quota?.close();
     if (scheduler) clearInterval(scheduler);
+    parts.agendaReminders?.stop();
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
     if (worktreeCleanup) await step("worktree 自动清理", () => worktreeCleanup.stop());
@@ -645,6 +649,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     runSchedulerTick();
     parts.scheduler = setInterval(runSchedulerTick, SCHEDULER_TICK_MS);
+    parts.agendaReminders = startAgendaReminderLoop({
+      run: (now) => ledger.runDueAgendaReminders(now),
+      tickMs: PM_AGENDA_REMINDER_TICK_MS,
+      log,
+    });
     const purgeArchivedPms = () => {
       try {
         const purged = ledger.purgeExpiredArchivedPms(Date.now());

@@ -277,3 +277,11 @@ export function commandMayWriteOutsideScope(command: string, scope: WriteBounds,
   }
   return false;
 }
+
+export function prependMissingArgs(prefix: readonly string[], args: readonly string[]): string[] {
+  if (prefix.length === 0) return [...args];
+  for (let i = 0; i + prefix.length <= args.length; i++) {
+    if (prefix.every((token, offset) => args[i + offset] === token)) return [...args];
+  }
+  return [...prefix, ...args];
+}

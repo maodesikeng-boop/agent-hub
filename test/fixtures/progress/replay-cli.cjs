@@ -14,21 +14,14 @@ const replay = () => {
 };
 const acpId = frames.find((frame) => frame.method === "session/update")?.params?.sessionId;
 const codexTurn = frames.find((frame) => frame.method === "turn/started")?.params;
-const agyId = frames[0]?.step_update?.conversation_id;
 const reply = (msg, result) => send({ jsonrpc: "2.0", id: msg.id, result });
 
 if (vendor === "claude") send({ type: "system", subtype: "init", tools: [] });
-if (vendor === "agy") send({ event: "init", init: { conversation_id: agyId } });
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
   if (vendor === "claude") {
     if (msg.type === "user") replay();
-    return;
-  }
-  if (vendor === "agy") {
-    replay();
-    send({ event: "result", result: { status: "SUCCESS", response: "Probe complete." } });
     return;
   }
   if (vendor === "pi") {

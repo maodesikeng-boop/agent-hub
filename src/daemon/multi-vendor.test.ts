@@ -172,54 +172,100 @@ if (argv.includes("/skills")) {
   process.exit(0);
 }
 
-const convIdx = argv.indexOf("--conversation");
-const convId = convIdx !== -1 ? argv[convIdx + 1] : "agy-conv-" + randomUUID();
-// 是不是 Worker 看 --add-dir 里的常驻规则：P4 起 Worker 专用的环境变量只有 claude 的 Worker 才设（A15）
 const { readFileSync, readdirSync, existsSync } = require("node:fs");
 const { join } = require("node:path");
-let isWorker = argv.some((arg, i) => {
-  if (arg !== "--add-dir") return false;
-  const dir = join(argv[i + 1], ".agents", "rules");
-  return existsSync(dir) && readdirSync(dir).some((name) => readFileSync(join(dir, name), "utf8").includes(${JSON.stringify(WORKER_PROMPT_MARK)}));
-});
-let inited = false;
+let sessionId = "agy-conv-" + randomUUID();
+let isWorker = false;
+
+const checkWorkerDirs = (dirs) => {
+  if (!Array.isArray(dirs)) return;
+  for (const base of dirs) {
+    const dir = join(base, ".agents", "rules");
+    if (existsSync(dir) && readdirSync(dir).some((name) => readFileSync(join(dir, name), "utf8").includes(${JSON.stringify(WORKER_PROMPT_MARK)}))) {
+      isWorker = true;
+    }
+  }
+};
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   if (!line.trim()) return;
-  const msg = JSON.parse(line);
-  if (msg.event !== "user" && msg.type !== "user") return;
-  if (!inited) {
-    inited = true;
-    out({ event: "init", init: { conversation_id: convId, model: "gemini-4-argon" } });
+  const req = JSON.parse(line);
+  if (req.method === "initialize") {
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        protocolVersion: 1,
+        agentInfo: { name: "fake-agy", version: "1.5.18" },
+        agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {}, additionalDirectories: {} } },
+      },
+    });
+    return;
   }
-  out({ event: "step_update", step_update: { step_index: 0, step_type: "user_input", state: "DONE" } });
-  const blocks = Array.isArray(msg.message?.content) ? msg.message.content.map((c) => c.text || "") : [];
-  const lastText = blocks[blocks.length - 1] || "";
-  if (blocks.join("\\n").includes(${JSON.stringify(WORKER_PROMPT_MARK)})) isWorker = true;
-  const reply = isWorker
-    ? "Agy Worker 执行完毕\\n\\n${REPORT_START}\\n状态: 做完了\\n摘要: Agy Worker 顺利完成\\n提交: 无\\n测试: 通过\\n问题: 无\\n${REPORT_END}"
-    : "Agy PM 收到：" + lastText;
-  const stepId = "step-" + randomUUID();
-  out({
-    event: "step_update",
-    step_update: {
-      step_id: stepId,
-      step_index: 1,
-      step_type: "agent_response",
-      state: "DONE",
-      text_delta: reply,
-    },
-  });
-  out({
-    event: "result",
-    result: {
-      status: "SUCCESS",
-      conversation_id: convId,
-      response: reply,
-      usage: { input_tokens: 12, output_tokens: 6, thinking_tokens: 0, cache_read_tokens: 0 },
-    },
-  });
+  if (req.method === "session/new" || req.method === "session/resume" || req.method === "session/load") {
+    if (req.params?.sessionId) sessionId = req.params.sessionId;
+    checkWorkerDirs(req.params?.additionalDirectories);
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        ...(req.method === "session/new" ? { sessionId } : {}),
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "gemini-4-argon",
+            options: [
+              { value: "gemini-4-argon", name: "Gemini 4 Argon" },
+              { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+            ],
+          },
+          {
+            id: "thought_level",
+            name: "Thinking Level",
+            category: "thought_level",
+            type: "select",
+            currentValue: "high",
+            options: [
+              { value: "low", name: "Low" },
+              { value: "medium", name: "Medium" },
+              { value: "high", name: "High" },
+            ],
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "session/set_config_option") {
+    out({ jsonrpc: "2.0", id: req.id, result: { configOptions: [] } });
+    return;
+  }
+  if (req.method === "session/close" || req.method === "session/set_mode") {
+    out({ jsonrpc: "2.0", id: req.id, result: {} });
+    return;
+  }
+  if (req.method === "session/prompt") {
+    const blocks = Array.isArray(req.params?.prompt) ? req.params.prompt.map((b) => b.text || "") : [];
+    const lastText = blocks[blocks.length - 1] || "";
+    if (blocks.join("\\n").includes(${JSON.stringify(WORKER_PROMPT_MARK)})) isWorker = true;
+    const reply = isWorker
+      ? "Agy Worker 执行完毕\\n\\n${REPORT_START}\\n状态: 做完了\\n摘要: Agy Worker 顺利完成\\n提交: 无\\n测试: 通过\\n问题: 无\\n${REPORT_END}"
+      : "Agy PM 收到：" + lastText;
+    out({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } } },
+    });
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { stopReason: "end_turn", usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 } },
+    });
+  }
 });
 `,
     );
