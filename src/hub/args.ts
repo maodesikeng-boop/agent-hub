@@ -6,6 +6,7 @@ import { parseHubFileArg, type HubFileArg } from "../shared/deliverables.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { parseWorkerMaxTime } from "../shared/schedule.ts";
 import { ALL_EFFORTS, isAgentVendor, normalizeEffortInput } from "../shared/vendors.ts";
+import { findRegistryEntry, formatPositionalCountError, suggestFlags } from "./registry.ts";
 
 const hub = HUB_COMMAND;
 
@@ -13,11 +14,15 @@ export type HubEnv = Record<string, string | undefined>;
 
 export class UsageError extends Error {}
 
-export function describeParseError(err: unknown): string {
+export function describeParseError(err: unknown, allowedFlags?: readonly string[]): string {
   const code = (err as { code?: unknown }).code;
   const message = err instanceof Error ? err.message : "";
   const quoted = /'(-[^'\s<]+)/.exec(message)?.[1] ?? "";
-  if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") return `不认识的参数 ${quoted}`;
+  if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+    const suggestions = allowedFlags !== undefined && quoted !== "" ? suggestFlags(quoted, allowedFlags) : [];
+    const hint = suggestions.length > 0 ? `（你是不是想写 ${suggestions.join("、")}？）` : "";
+    return `不认识的参数 ${quoted}${hint}`;
+  }
   if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
     return message.includes("does not take an argument") ? `${quoted} 不带值` : `${quoted} 后面要跟一个值`;
   }
@@ -82,6 +87,8 @@ export type Options = {
   verbatim?: boolean;
   "pm-name"?: string;
   build?: boolean;
+  cancel?: boolean;
+  kind?: string;
   help?: boolean;
 };
 
@@ -151,6 +158,8 @@ export const HUB_ARG_OPTIONS = {
   verbatim: { type: "boolean" },
   "pm-name": { type: "string" },
   build: { type: "boolean" },
+  cancel: { type: "boolean" },
+  kind: { type: "string" },
   help: { type: "boolean", short: "h" },
 } as const satisfies NonNullable<ParseArgsConfig["options"]>;
 
@@ -198,12 +207,28 @@ export function fileArgsOf(raw: string[] | undefined, env: HubEnv, cwd: string):
 
 export function allowOnly(values: Options, allowed: (keyof Options)[], what: string): void {
   for (const key of Object.keys(values) as (keyof Options)[]) {
-    if (values[key] !== undefined && !allowed.includes(key)) throw new UsageError(`${hub} ${what} 不认 --${key}`);
+    if (values[key] !== undefined && !allowed.includes(key)) {
+      const suggestions = suggestFlags(`--${key}`, allowed);
+      const hint = suggestions.length > 0 ? `（你是不是想写 ${suggestions.join("、")}？）` : "";
+      throw new UsageError(`${hub} ${what} 不认 --${key}${hint}`);
+    }
   }
 }
 
 export function expectPositionals(positionals: string[], count: number, what: string): void {
-  if (positionals.length !== count) throw new UsageError(`${hub} ${what} 的参数个数不对`);
+  if (positionals.length !== count) {
+    const [group, action] = what.split(" ");
+    const hint = findRegistryEntry(group, action)?.positionalHint;
+    throw new UsageError(formatPositionalCountError(what, { min: count, max: count, ...(hint !== undefined ? { hint } : {}) }, positionals.length));
+  }
+}
+
+export function expectOptionalPositional(positionals: string[], what: string): void {
+  if (positionals.length > 1) {
+    const [group, action] = what.split(" ");
+    const hint = findRegistryEntry(group, action)?.positionalHint;
+    throw new UsageError(formatPositionalCountError(what, { min: 0, max: 1, ...(hint !== undefined ? { hint } : {}) }, positionals.length));
+  }
 }
 
 export function idOf(raw: string | undefined, what: string, label: string): number {

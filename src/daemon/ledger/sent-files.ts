@@ -2,7 +2,7 @@ import type { HubFileArg } from "../../shared/deliverables.ts";
 import type { AgentTextMeta, SentFile } from "../../shared/sent-files.ts";
 import type { AgentSessionRow } from "../../shared/domain.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
-import { projectWorktreesDir } from "../../shared/paths.ts";
+import { pmMemoryDirPath, projectWorktreesDir } from "../../shared/paths.ts";
 import { normalizePathForComparison } from "../platform/index.ts";
 import {
   createSentFileIoSlots,
@@ -21,6 +21,7 @@ export interface SentFilesOptions {
   worktreesDir: string;
   extraWorktreeRoots?: () => readonly string[];
   dataHome: string;
+  pmMemoryDir?: string;
   userHome: string;
   tmpDirs: string[];
 }
@@ -55,6 +56,10 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
         }
       }
     }
+    const privateDataExceptions =
+      session.role === "pm" && session.pmId !== null && opts.pmMemoryDir !== undefined
+        ? [pmMemoryDirPath(opts.pmMemoryDir, session.pmId)]
+        : undefined;
     return {
       sentFilesDir: opts.sentFilesDir,
       cwd: session.cwd,
@@ -62,6 +67,7 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
       roots: [...folders, ...worktrees, session.cwd, ...session.addDirs, opts.uploadsDir, ...opts.tmpDirs],
       dataHome: opts.dataHome,
       dataExceptions: [opts.uploadsDir, ...worktrees],
+      ...(privateDataExceptions !== undefined ? { privateDataExceptions } : {}),
       io: { slots: ioSlots, owner: session.id },
     };
   };

@@ -1,4 +1,5 @@
 import type { ConversationId, MessageId, PmId, WorkerId, WorkerStatus, WorkerWorkspace } from "./domain.ts";
+import { HUB_HELP_ONLY_COMMANDS } from "./hub.ts";
 import { capabilityEnabled } from "./pm-capabilities.ts";
 import type {
   CapabilityInventory,
@@ -153,13 +154,33 @@ export function validateNoOuterSandboxRequest(input: NoOuterSandboxValidationInp
   }
   if (!sandboxSupportsPlatform(input.vendor, input.platform)) return reject("vendor_no_builtin_sandbox", "该厂商在此平台没有可用的内置沙箱");
   const { workerCapabilities, pmPolicy, vendor, inventory } = input;
-  const known = new Set([...eligibleComputerUseCapabilities(vendor), ...eligibleComputerUseCapabilities(vendor, inventory)]);
+  const installedKeys = eligibleComputerUseCapabilities(vendor, inventory);
+  const staticKeys = eligibleComputerUseCapabilities(vendor);
+  const known = new Set([...staticKeys, ...installedKeys]);
   const mounted = workerCapabilities.mode === "custom" ? workerCapabilities.allow.filter((key) => known.has(key)) : [];
-  if (mounted.length === 0) return reject("computer_use_not_mounted", "申请取消外层沙箱必须明确挂载 Computer Use 能力");
+  if (mounted.length === 0) {
+    const candidates = installedKeys.length > 0 ? installedKeys : staticKeys;
+    const allowHint =
+      candidates.length > 0
+        ? `：请加 --caps custom --allow ${candidates[0]}（可选：${candidates.join("、")}）`
+        : "：请加 --caps custom --allow <能力键>";
+    return reject("computer_use_not_mounted", `申请取消外层沙箱必须明确挂载 Computer Use 能力${allowHint}；${HUB_HELP_ONLY_COMMANDS.caps}`);
+  }
   const enabled = mounted.filter((key) => capabilityEnabled(pmPolicy, key));
-  if (enabled.length === 0) return reject("computer_use_disabled_by_policy", "项目没有启用该 Worker 挂载的 Computer Use 能力");
-  const installed = inventory === undefined ? enabled : enabled.filter((key) => eligibleComputerUseCapabilities(vendor, inventory).includes(key));
-  if (installed.length === 0) return reject("computer_use_not_installed", "该厂商没有安装所挂载的 Computer Use 能力");
+  if (enabled.length === 0) {
+    return reject(
+      "computer_use_disabled_by_policy",
+      `项目没有启用该 Worker 挂载的 Computer Use 能力（${mounted.join("、")}），请先请用户在项目设置中开启；${HUB_HELP_ONLY_COMMANDS.caps}`,
+    );
+  }
+  const installed = inventory === undefined ? enabled : enabled.filter((key) => installedKeys.includes(key));
+  if (installed.length === 0) {
+    const alt = installedKeys.length > 0 ? `；当前已安装可用：${installedKeys.join("、")}` : "";
+    return reject(
+      "computer_use_not_installed",
+      `该厂商（${vendor}）没有安装所挂载的 Computer Use 能力（${enabled.join("、")}）${alt}；${HUB_HELP_ONLY_COMMANDS.caps}`,
+    );
+  }
   return { ok: true, matchedCapabilities: installed };
 }
 

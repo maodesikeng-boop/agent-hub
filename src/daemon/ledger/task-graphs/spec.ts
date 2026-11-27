@@ -18,6 +18,7 @@ import {
 import { STEP_SLOT_NAME_MAX_CHARS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { assertHubLimit, fail } from "../context.ts";
+import { formatGraphSpecIssues, type GraphSpecKind } from "./spec-errors.ts";
 
 const NODE_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const SLOT_NAME_RE = /^[a-z0-9-]+$/;
@@ -318,7 +319,8 @@ export function normalizeNewStep(
 export function parseSpecJson<T>(
   raw: unknown,
   schema: z.ZodType,
-  messages: { empty: string; badJson: string; badShape: string },
+  kind: GraphSpecKind,
+  messages: { empty: string; badJson: string },
 ): T {
   if (typeof raw !== "string" || raw.trim() === "") throw fail("invalid", messages.empty);
   assertHubLimit("graph.spec", raw);
@@ -329,7 +331,7 @@ export function parseSpecJson<T>(
     throw fail("invalid", messages.badJson);
   }
   const parsed = schema.safeParse(obj);
-  if (!parsed.success) throw fail("invalid", messages.badShape);
+  if (!parsed.success) throw fail("invalid", formatGraphSpecIssues(kind, parsed.error.issues));
   return parsed.data as T;
 }
 
@@ -358,9 +360,9 @@ const createStepItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   slot: z.string().optional(),
   draft: z.boolean().optional(),
   deps: z.array(z.string()).optional(),
-}));
+}).strict());
 
-const edgeSchema = z.object({ from: z.string(), to: z.string() });
+const edgeSchema = z.object({ from: z.string(), to: z.string() }).strict();
 
 export const createSpecSchema = z.object({
   title: z.string().optional(),
@@ -369,7 +371,7 @@ export const createSpecSchema = z.object({
   steps: z.array(createStepItemSchema).optional(),
   nodes: z.array(createStepItemSchema).optional(),
   edges: z.array(edgeSchema).optional(),
-});
+}).strict();
 
 const patchUpdateItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   key: z.string(),
@@ -388,7 +390,7 @@ const patchUpdateItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   base: z.string().nullable().optional(),
   slot: z.string().nullable().optional(),
   deps: z.array(z.string()).optional(),
-}));
+}).strict());
 
 export const patchSpecSchema = z.object({
   title: z.string().optional(),
@@ -404,4 +406,4 @@ export const patchSpecSchema = z.object({
   skipNodes: z.array(z.string()).optional(),
   addEdges: z.array(edgeSchema).optional(),
   removeEdges: z.array(edgeSchema).optional(),
-});
+}).strict();

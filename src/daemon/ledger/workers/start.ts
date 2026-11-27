@@ -1,7 +1,7 @@
 import { normalizeName, normalizeWorkerTitle } from "../../../shared/domain.ts";
 import { HUB_LIMITS } from "../../../shared/hub-limits.ts";
 import type { AgentSessionRow, WorkerId } from "../../../shared/domain.ts";
-import type { HubArgs, HubResult, ProjectCard, WorkerStartQueuedResult } from "../../../shared/hub.ts";
+import { HUB_HELP_ONLY_COMMANDS, type HubArgs, type HubResult, type ProjectCard, type WorkerStartQueuedResult } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { TAKEOVER_PREDECESSORS_MAX } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
@@ -268,7 +268,7 @@ function capabilitiesReceiptNote(caps: WorkerCapabilities, project: CapabilityPo
   const blocked = blockedWorkerCapabilities(project, caps);
   const mounted = caps.allow.filter((key) => !blocked.includes(key));
   const head = mounted.length === 0 ? "。点名的外接能力一项都挂不上，等于不带" : `。外接能力只挂 ${mounted.join("、")}`;
-  const blockedNote = blocked.length === 0 ? "" : `；${blocked.join("、")} 在这个项目的能力设置里是关的，挂不上，要用先请用户在项目资料页的 Capabilities 里打开`;
+  const blockedNote = blocked.length === 0 ? "" : `；${blocked.join("、")} 在这个项目的能力设置里是关的，挂不上，要用先请用户在项目资料页的 Capabilities 里打开（${HUB_HELP_ONLY_COMMANDS.caps}）`;
   return `${head}${blockedNote}`;
 }
 
