@@ -642,6 +642,23 @@ describe("system inputs and progress across turns", () => {
     expect(trigger).not.toHaveTextContent("Task graph");
   });
 
+  it("S6: an overdue agenda reminder renders collapsed with a Reminder tag and expands its items", async () => {
+    const notice = makeSystemMessage({
+      id: 1, status: "replied", text: "【这些事等你处理超过 15 分钟了】\n- 图 #141「取消残留」1 个步骤 · 全部做完，等你验收交付",
+      meta: {
+        event: "pm.wakeup", source: "task_graph", ref: "agenda:overdue:1:1-0000000000000000",
+        subject: { kind: "pm.agenda", trigger: "overdue", refs: ["graph:141:ready@1000"], round: 1 },
+      },
+    });
+    list([notice, makeMessage({ id: 2, text: "已合并并结束。" })]);
+    const trigger = screen.getByRole("button", { name: "这些事等你处理超过 15 分钟了" });
+    expect(trigger).toHaveTextContent("Reminder");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/图 #141「取消残留」/)).toBeInTheDocument();
+  });
+
   it("S7: without checklist frames, only action timing and Worked for appear", () => {
     const messages = [makeUserMessage({ id: 1 }), makeToolMessage({ id: 2 })];
     const view = list(messages, { status: running(), stepStartedAt: 10_000 });
