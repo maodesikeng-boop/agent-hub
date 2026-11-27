@@ -6,7 +6,7 @@ import {
 import type { PmNoticeSubject } from "../../shared/pm-notice.ts";
 import type { PmWatchCondition, PmWatchId, PmWatchInput, PmWatchOutcome, PmWatchRecord } from "../../shared/pm-watch.ts";
 import { formatDurationShort } from "../../shared/schedule.ts";
-import type { Db } from "../store/index.ts";
+import { CODE_TRIGGER_PREFIX, type Db } from "../store/index.ts";
 import { assertHubLimit, assertHubLimitAmount, fail } from "./context.ts";
 
 // Invariant: rows change status only from `watching`; a settle for a run other than the current one, or for a watch
@@ -91,6 +91,31 @@ export function addPmWatch(db: Db, owner: { pmId: PmId; conversationId: Conversa
   )!;
   return toRecord(row);
 }
+
+const CLOSE_LINKED = `UPDATE pm_watches SET closed_at = NEW.updated_at, next_run_at = NULL,
+    status = CASE WHEN status = 'watching' THEN 'closed' ELSE status END`;
+
+/**
+ * Postcondition: a graph leaving active or a Worker ending closes its linked watches in the same write, whichever writer
+ * made the change; the runner stops a closed watch's command on its next tick.
+ */
+export function installWatchLinkClose(db: Db): void {
+  db.exec(`DROP TRIGGER IF EXISTS ${CODE_TRIGGER_PREFIX}pm_watches_close_with_graph;
+CREATE TRIGGER ${CODE_TRIGGER_PREFIX}pm_watches_close_with_graph
+AFTER UPDATE OF status ON task_graphs WHEN OLD.status = 'active' AND NEW.status <> 'active'
+BEGIN
+  ${CLOSE_LINKED} WHERE graph_id = NEW.id AND closed_at IS NULL;
+END;
+DROP TRIGGER IF EXISTS ${CODE_TRIGGER_PREFIX}pm_watches_close_with_worker;
+CREATE TRIGGER ${CODE_TRIGGER_PREFIX}pm_watches_close_with_worker
+AFTER UPDATE OF status ON workers WHEN OLD.status <> 'ended' AND NEW.status = 'ended'
+BEGIN
+  ${CLOSE_LINKED} WHERE worker_id = NEW.id AND closed_at IS NULL;
+END;`);
+}
+
+/** True when a watching watch is linked to task graph `g`: its delivery waits on the watch instead of on the PM. */
+export const GRAPH_WATCHED_SQL = "EXISTS (SELECT 1 FROM pm_watches w WHERE w.graph_id = g.id AND w.status = 'watching')";
 
 /** Postcondition: this PM's watching rows first, then its latest settled rows not yet closed, newest first. */
 export function listPmWatches(db: Db, pmId: PmId): PmWatchRecord[] {

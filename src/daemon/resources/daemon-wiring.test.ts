@@ -46,6 +46,7 @@ describe("startDaemonResources", () => {
         worktrees: {} as WorktreeCleanup,
         sessionScope: createDaemonSessionScope({ ledgerFile: join(root, "state", "session-tmp.json"), env: {} }),
         sessionProcesses,
+        runningWatchIds: () => new Set(),
         processLedger: { size: 0 } as ProcessLedger,
         feishuPosts: { prunePosts: () => 0 },
         feishuOfflineInbox: { expire: () => [] },

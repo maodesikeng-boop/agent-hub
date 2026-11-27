@@ -45,6 +45,7 @@ import { createLedgerRouter } from "./router.ts";
 import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerPmWatches, type PmWatchRunnerLedger } from "./pm-watch-commands.ts";
+import { installWatchLinkClose } from "./pm-watches.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions, idle } from "./sessions.ts";
 import { completedWorkPage } from "./completed-work.ts";
@@ -113,6 +114,7 @@ export interface LedgerOptions {
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: LedgerContextOptions["osSandboxed"];
+  readonlyKernelSandboxed?: LedgerContextOptions["readonlyKernelSandboxed"];
   workerPlatform?: NodeJS.Platform;
   pmHomeRoot: string;
   personasDir?: string;
@@ -258,6 +260,7 @@ function createSessionStateRefresh(
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   installSlotAdmission(db);
+  installWatchLinkClose(db);
   const ctx = createLedgerContext(db, options);
   const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
   const userHome = options.userHome ?? homedir();

@@ -6,7 +6,7 @@ import { isGraphReadyNotice } from "../../shared/pm-notice.ts";
 import { pmWatchSettledText } from "../../shared/pm-watch.ts";
 import { pmAgendaOf } from "./pm-agenda.ts";
 import { createPmFrictionFixture, reportBlock, type PmFrictionFixture } from "./pm-friction-fixture.ts";
-import { addPmWatch, closePmWatch, listPmWatches, settlePmWatch, watchingPmWatches } from "./pm-watches.ts";
+import { addPmWatch, closePmWatch, getPmWatch, listPmWatches, settlePmWatch, watchingPmWatches } from "./pm-watches.ts";
 
 describe("S5: a wait on outside work survives everything", () => {
   let f: PmFrictionFixture;
@@ -189,6 +189,31 @@ describe("S5 through hub watch and the runner side of the ledger", () => {
     expect(f.ledger.isSystemMessageCurrent!(notice.id)).toBe(false);
   });
 
+  it("S5.6: finishing or cancelling the linked graph, or ending the linked Worker, closes its watches in the same write", async () => {
+    const finished = await readyGraph(f, "结束的图");
+    const poll = add({ until: "check-ready", everyMs: 15_000, graphId: finished, body: "图结束后不该再轮询" }).data.watch;
+    const timer = add({ afterMs: 3_000, graphId: finished, body: "图结束后不该触发的定时" }).data.watch;
+    const cancelled = f.createGraph({ title: "取消的图", steps: [{ key: "a", title: "甲", brief: "甲" }] }).data.graph.id;
+    const onCancelled = add({ until: "check-ready", everyMs: 15_000, graphId: cancelled, body: "图取消后不该再轮询" }).data.watch;
+    const solo = f.ledger.hubCall(f.lin.sessionId, "worker.start", { title: "等发布", task: "等发布", noWorktree: true }).data.worker;
+    const onWorker = add({ until: "check-release", everyMs: 15_000, workerId: solo.id, body: "Worker 收工后不该再轮询" }).data.watch;
+    const other = add({ until: "check-ready", everyMs: 15_000, body: "不挂图的" }).data.watch;
+    f.ledger.watches.beginRun(poll.id);
+
+    f.ledger.hubCall(f.lin.sessionId, "graph.finish", { graphId: finished, summary: "交付了", unmergedOk: true });
+    f.ledger.hubCall(f.lin.sessionId, "graph.cancel", { graphId: cancelled, reason: "不做了" });
+    f.ledger.hubCall(f.lin.sessionId, "worker.end", { workerId: solo.id });
+
+    for (const watch of [poll, timer, onCancelled, onWorker]) {
+      expect(getPmWatch(f.db, watch.id)).toMatchObject({ status: "closed", nextRunAt: null, closedAt: expect.any(Number) });
+    }
+    expect(f.ledger.watches.watching().map((w) => w.id)).toEqual([other.id]);
+    expect(f.ledger.hubCall(f.lin.sessionId, "watch.list", {}).data.watches.map((w) => w.id)).toEqual([other.id]);
+    f.clock.now += MINUTE;
+    expect(f.ledger.watches.settle(timer.id, 0, { kind: "met", exitCode: null, outputTail: "" })).toBeNull();
+    expect(watchNotices(f)).toEqual([]);
+  });
+
   it("S5.7: a timer watch runs nothing and is due once its time passes", () => {
     const watch = add({ afterMs: 30 * MINUTE, body: "明早再看" }).data.watch;
     expect(watch).toMatchObject({ condition: { kind: "timer", afterMs: 30 * MINUTE }, deadlineAt: f.clock.now + 30 * MINUTE, nextRunAt: null });
@@ -201,6 +226,15 @@ describe("S5 through hub watch and the runner side of the ledger", () => {
     f = createPmFrictionFixture({ osSandboxed: false });
     expect(() => add({ until: "check-ready", body: "检查通过后交付" })).toThrow(/沙箱/u);
     expect(add({ afterMs: 30 * MINUTE, body: "明早再看" }).data.watch.status).toBe("watching");
+  });
+
+  it("S5.8: where the read-only sandbox relies on a vendor tool layer (Windows without MXC), --until is refused and --after still works", () => {
+    f.ledger.close();
+    f.db.close();
+    f = createPmFrictionFixture({ readonlyKernelSandboxed: false });
+    expect(() => add({ until: "check-ready", body: "检查通过后交付" })).toThrow(/沙箱/u);
+    expect(add({ afterMs: 30 * MINUTE, body: "明早再看" }).data.watch.status).toBe("watching");
+    expect(f.ledger.hubCall(f.lin.sessionId, "worker.start", { title: "照常派", task: "照常派", noWorktree: true }).data.worker.status).toBe("open");
   });
 
   it("S5 validation: refused inputs name the problem", async () => {

@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sandboxAllowsNestedSandbox } from "../../../test/sandbox-probes.ts";
-import { osSandboxAvailable } from "../driver/write-scope.ts";
+import { osSandboxAvailable, win32MxcReadonlyAvailable } from "../driver/write-scope.ts";
 import { createWatchCommandRunner, watchSandboxLaunch } from "./launch.ts";
 import type { WatchRunJob } from "./runner.ts";
 
 const posixSandbox = (process.platform === "darwin" && sandboxAllowsNestedSandbox()) || (process.platform === "linux" && osSandboxAvailable("linux"));
+const win32 = process.platform === "win32";
 
 describe("S5.8: watch commands run read-only with the data directory out of reach", () => {
   let root: string;
@@ -38,7 +39,7 @@ describe("S5.8: watch commands run read-only with the data directory out of reac
     expect(result.kind === "error" ? result.reason : "").toMatch(/沙箱/u);
   });
 
-  it("macOS profile: everything is read-only except the private temp folder, and the data directory is unreadable", async () => {
+  it.skipIf(win32)("macOS profile: everything is read-only except the private temp folder, and the data directory is unreadable", async () => {
     const tmp = join(root, "tmp");
     mkdirSync(tmp);
     const launch = await watchSandboxLaunch({ dataDir, stateDir: join(dataDir, "state"), tagNonce: "test", platform: "darwin", baseEnv: { SHELL: "/bin/sh" } }, { command: "gh pr checks 7", cwd: project }, tmp);
@@ -52,7 +53,7 @@ describe("S5.8: watch commands run read-only with the data directory out of reac
     expect(rest).toEqual(["/bin/sh", "-c", "gh pr checks 7"]);
   });
 
-  it("Linux arguments: the root is bound read-only, only the temp folder is writable, and the data directory is masked", async () => {
+  it.skipIf(win32)("Linux arguments: the root is bound read-only, only the temp folder is writable, and the data directory is masked", async () => {
     const tmp = join(root, "tmp");
     mkdirSync(tmp);
     const launch = await watchSandboxLaunch({ dataDir, stateDir: join(dataDir, "state"), tagNonce: "test", platform: "linux", baseEnv: { SHELL: "/bin/sh" } }, { command: "true", cwd: project }, tmp);
@@ -63,6 +64,49 @@ describe("S5.8: watch commands run read-only with the data directory out of reac
     expect(args).not.toContain("--unshare-net");
     expect(args.join(" ")).toContain(dataDir);
     expect(args.slice(-3)).toEqual(["/bin/sh", "-c", "true"]);
+  });
+
+  it.skipIf(win32)("home folder: the read-only Worker's credential list stays unreadable, except code host logins and the keychain they use", async () => {
+    const tmp = join(root, "tmp");
+    const home = join(root, "home");
+    const codexHome = join(root, "codex-home");
+    mkdirSync(tmp);
+    mkdirSync(codexHome, { recursive: true });
+    for (const dir of [".aws", ".ssh", ".claude", ".config/gh", "Library/Keychains"]) mkdirSync(join(home, dir), { recursive: true });
+    const launch = await watchSandboxLaunch(
+      { dataDir, stateDir: join(dataDir, "state"), tagNonce: "test", platform: "darwin", homeDir: home, baseEnv: { SHELL: "/bin/sh", CODEX_HOME: codexHome } },
+      { command: "gh pr checks 7", cwd: project }, tmp,
+    );
+    const profile = launch!.args[1]!;
+    for (const secret of [".aws", ".ssh", ".zsh_history", ".bash_history", ".claude/.credentials.json", ".codex/auth.json", ".netrc", ".config/gcloud"]) {
+      expect(profile).toContain(`(deny file-read* (subpath "${join(home, secret)}"))`);
+    }
+    expect(profile).toContain(`(deny file-read* (subpath "${join(codexHome, "auth.json")}"))`);
+    for (const login of [".config/gh", ".config/hub", ".git-credentials", "Library/Keychains"]) {
+      expect(profile).not.toContain(`(subpath "${join(home, login)}")`);
+    }
+  });
+
+  it("Windows without MXC: refuses instead of falling back to the write-restricted mode that relies on a vendor tool layer", async () => {
+    const tmp = join(root, "tmp");
+    mkdirSync(tmp);
+    const options = { dataDir, stateDir: join(dataDir, "state"), tagNonce: "test", platform: "win32" as const, sandboxAvailable: () => true, wrap: { disableWin32Mxc: true }, baseEnv: { ComSpec: "C:\\Windows\\System32\\cmd.exe" } };
+    expect(await watchSandboxLaunch(options, { command: "echo hi", cwd: project }, tmp)).toBeNull();
+    const result = await createWatchCommandRunner(options)(job("echo hi"));
+    expect(result).toMatchObject({ kind: "error" });
+    expect(result.kind === "error" ? result.reason : "").toMatch(/沙箱/u);
+  });
+
+  describe.runIf(win32)("on Windows", () => {
+    it("a command runs only inside the MXC container and cannot write in the project folder", async () => {
+      const run = createWatchCommandRunner({ dataDir, stateDir: join(dataDir, "state"), tagNonce: "test" });
+      const result = await run(job("echo x> written.txt"));
+      expect(existsSync(join(project, "written.txt"))).toBe(false);
+      if (!win32MxcReadonlyAvailable()) {
+        expect(result).toMatchObject({ kind: "error" });
+        expect(result.kind === "error" ? result.reason : "").toMatch(/沙箱/u);
+      }
+    });
   });
 
   describe.skipIf(!posixSandbox)("inside the OS sandbox", () => {

@@ -119,6 +119,57 @@ describe("S5: the watch runner", () => {
     expect(watchNotices(f)).toEqual([]);
   });
 
+  it("S5.3: a run stopped while its PM was archived starts again after unarchive", async () => {
+    const watch = add({ until: "check-ready", everyMs: 15_000, body: "检查通过后交付" });
+    runner.tick();
+    expect(script.runs).toHaveLength(1);
+    f.ledger.archivePm(f.lin.pmId);
+    runner.tick();
+    await runner.idle();
+    expect(script.runs[0]!.job.signal.aborted).toBe(true);
+
+    f.ledger.unarchivePm(f.lin.pmId);
+    runner.tick();
+    expect(script.runs).toHaveLength(2);
+    expect(script.runs[1]!.job).toMatchObject({ watchId: watch.id, run: 2 });
+  });
+
+  it("S5.3: a failed read of the open watches leaves running commands alone", async () => {
+    await runner.close();
+    let failRead = false;
+    const watches = { ...f.ledger.watches, watching: () => (failRead ? (() => { throw new Error("database is locked"); })() : f.ledger.watches.watching()) };
+    runner = createWatchRunner({ ledger: { watches }, run: script.run, tickMs: 0, log: () => {} });
+    runner.start();
+    add({ until: "check-ready", everyMs: 15_000, body: "检查通过后交付" });
+    runner.tick();
+    expect(script.runs).toHaveLength(1);
+    failRead = true;
+    runner.tick();
+    expect(script.runs[0]!.job.signal.aborted).toBe(false);
+    failRead = false;
+    script.runs[0]!.finish({ kind: "exited", exitCode: 1, outputTail: "pending" });
+    await runner.idle();
+    f.clock.now += 15_000;
+    runner.tick();
+    expect(script.runs).toHaveLength(2);
+  });
+
+  it("S5.6: finishing the linked graph mid-run stops the command and sends nothing", async () => {
+    const graph = f.createGraph({ title: "检查后交付", steps: [{ key: "a", title: "甲", brief: "甲" }] }).data.graph;
+    add({ until: "check-ready", everyMs: 15_000, graphId: graph.id, body: "检查通过后交付" });
+    runner.tick();
+    expect(runner.runningIds()).toEqual(new Set([script.runs[0]!.job.watchId]));
+    f.ledger.hubCall(f.lin.sessionId, "graph.cancel", { graphId: graph.id, reason: "不做了" });
+    runner.tick();
+    await runner.idle();
+    expect(script.runs[0]!.job.signal.aborted).toBe(true);
+    expect(runner.runningIds()).toEqual(new Set());
+    f.clock.now += 15_000;
+    runner.tick();
+    expect(script.runs).toHaveLength(1);
+    expect(watchNotices(f)).toEqual([]);
+  });
+
   it("S5.7: --after 30m settles after 30 minutes without running anything", async () => {
     add({ afterMs: 30 * MINUTE, body: "明早再看" });
     runner.tick();

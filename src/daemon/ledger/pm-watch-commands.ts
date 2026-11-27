@@ -54,8 +54,8 @@ export function createLedgerPmWatches(
   const addIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"watch.add">): HubResult<"watch.add"> => {
     persona.assertPmNotArchived(caller.pmId);
     const condition = conditionOfArgs(args);
-    if (condition.kind !== "timer" && !ctx.osSandboxed()) {
-      throw fail("conflict", "这台电脑建不起只读沙箱，--until 的命令没法安全地跑；要定时叫醒自己就用 --after <时长>");
+    if (condition.kind !== "timer" && !ctx.readonlyKernelSandboxed()) {
+      throw fail("conflict", "这台电脑建不起由系统完整把关的只读沙箱（Windows 要有 MXC 容器），--until 的命令没法安全地跑；要定时叫醒自己就用 --after <时长>");
     }
     assertLinkOwned(caller.pmId, args);
     const conversationId = persona.privateConversation(caller.pmId)?.id;

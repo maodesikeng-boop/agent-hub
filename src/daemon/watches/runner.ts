@@ -31,6 +31,8 @@ export interface WatchRunner {
   /** Makes runs that were in flight at the last stop due again, then ticks once and on every interval. */
   start(): void;
   tick(): void;
+  /** Watches whose command is running now; their tagged processes are not left behind. */
+  runningIds(): ReadonlySet<PmWatchId>;
   /** Resolves once every command started so far has finished and been settled. */
   idle(): Promise<void>;
   /** Stops every command and touches the ledger no more; call before the database closes. */
@@ -70,6 +72,16 @@ export function createWatchRunner(options: WatchRunnerOptions): WatchRunner {
     }
   };
 
+  // A failed read must not look like an empty list, which would stop every running command.
+  const readOpen = (): PmWatchRecord[] | null => {
+    try {
+      return watches.watching();
+    } catch (error) {
+      log(`${LOG_PREFIX} Watch read failed: ${errorText(error)}`);
+      return null;
+    }
+  };
+
   const settle = (watch: PmWatchRecord, run: number, outcome: PmWatchOutcome) =>
     guarded(`#${watch.id} settle`, () => watches.settle(watch.id, run, outcome));
 
@@ -82,6 +94,8 @@ export function createWatchRunner(options: WatchRunnerOptions): WatchRunner {
     }
     switch (result.kind) {
       case "stopped":
+        // The runner stops a run when its watch leaves the open list; one still watching (PM unarchived) runs again.
+        guarded(`#${watch.id} reschedule`, () => watches.deferRun(watch.id, entry.run, watches.now(), { exitCode: watch.exitCode, outputTail: watch.outputTail ?? "" }));
         return;
       case "error":
         settle(watch, entry.run, { kind: "failed", exitCode: null, outputTail: [result.reason, tail].filter(Boolean).join("\n") });
@@ -147,8 +161,8 @@ export function createWatchRunner(options: WatchRunnerOptions): WatchRunner {
       prunedAt = now;
       guarded("cleanup", () => watches.prune(now));
     }
-    let open: PmWatchRecord[] = [];
-    guarded("read", () => (open = watches.watching()));
+    const open = readOpen();
+    if (open === null) return;
     const ids = new Set(open.map((watch) => watch.id));
     for (const [id, entry] of running) if (!ids.has(id)) entry.controller.abort();
     for (const watch of open) visit(watch, now);
@@ -170,6 +184,7 @@ export function createWatchRunner(options: WatchRunnerOptions): WatchRunner {
       }
     },
     tick,
+    runningIds: () => new Set(running.keys()),
     idle,
     async close() {
       closed = true;

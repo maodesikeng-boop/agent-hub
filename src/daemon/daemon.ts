@@ -624,7 +624,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // Watches belong to PMs, not sessions, so they resume before any session starts and keep their deadlines.
     const watchRunner = createWatchRunner({
       ledger,
-      run: createWatchCommandRunner({ dataDir, stateDir, protectedRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), tagNonce: sessionScope.tagNonce, baseEnv: env }),
+      run: createWatchCommandRunner({
+        dataDir, stateDir, protectedRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), tagNonce: sessionScope.tagNonce, homeDir: options.userHome, baseEnv: env,
+      }),
       log,
     });
     parts.watches = watchRunner;
@@ -661,7 +663,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const feishuPostsStore = createFeishuStore(db);
     parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: feishuPostsStore, feishuOfflineInbox, log });
     parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
-    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, sessionProcesses, processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, sessionProcesses, runningWatchIds: () => watchRunner.runningIds(), processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
     parts.resources = resources;
     const runAutoRenew = () => {
       try {

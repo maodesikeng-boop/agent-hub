@@ -1,14 +1,16 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENV_SESSION_OWNER_TAG, STDIO_DRAIN_MS, WATCH_OUTPUT_TAIL_BYTES, WATCH_OUTPUT_TAIL_LINES } from "../../shared/limits.ts";
-import { READONLY_SECRET_GLOBS } from "../../shared/readonly-policy.ts";
+import { buildReadonlyPolicy, WATCH_SECRET_HOME_PATHS } from "../../shared/readonly-policy.ts";
 import { dataDirReadScope } from "../../shared/write-scope.ts";
 import { forceKillTree, streamClosed, termGroupAfterExit } from "../driver/process.ts";
-import { osSandboxAvailable, prepareOsSandboxForLaunch, scanSecretGlobs, wrapInReadonlyOsSandbox, type ReadonlySandboxInput } from "../driver/write-scope.ts";
+import { kernelReadonlySandboxAvailable } from "../driver/kernel-readonly.ts";
+import { prepareOsSandboxForLaunch, scanSecretGlobs, wrapInReadonlyOsSandbox, type OsSandboxWrapOptions, type ReadonlySandboxInput } from "../driver/write-scope.ts";
 import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
+import { watchOwnerToken } from "../resources/session-processes.ts";
 import { credentialFreeEnv, outputTail, resolveSetupShell } from "../setup/setup.ts";
 import type { WatchRunJob, WatchRunResult } from "./runner.ts";
 
@@ -19,7 +21,9 @@ export interface WatchLaunchOptions {
   /** Stable per data directory, so the owner tag of a watch process survives a daemon restart. */
   tagNonce: string;
   platform?: NodeJS.Platform;
+  homeDir?: string;
   sandboxAvailable?: () => boolean;
+  wrap?: Pick<OsSandboxWrapOptions, "disableWin32Mxc">;
   baseEnv?: Record<string, string | undefined>;
 }
 
@@ -37,49 +41,61 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 
 /**
  * The command may read the project and reach the network, but writes only to its own temporary folder and cannot read the
- * data directory. Credentials in the home folder stay readable, because a watch exists to ask outside services with the
- * user's own tools; hub tokens and model credentials are removed from its environment.
+ * data directory or the read-only Worker's home credential list, except code host logins: a watch exists to ask outside
+ * services with the user's own tools. Hub tokens and model credentials are removed from its environment.
  */
 async function sandboxInput(options: WatchLaunchOptions, cwd: string, tmpDir: string): Promise<ReadonlySandboxInput> {
   const dataDir = realOrSelf(options.dataDir);
+  const policy = buildReadonlyPolicy({
+    homeDir: realOrSelf(options.homeDir ?? homedir()), homeSecrets: WATCH_SECRET_HOME_PATHS, stateDir: options.stateDir, env: options.baseEnv ?? process.env,
+  });
   return {
     tmpDir,
     stateDir: options.stateDir,
     protectedRoots: [dataDir, ...(options.protectedRoots?.() ?? [])],
     writableDirs: [],
     writableFileRegexes: [],
-    secretPaths: await scanSecretGlobs([cwd], [...READONLY_SECRET_GLOBS]),
-    secretGlobs: [...READONLY_SECRET_GLOBS],
+    secretPaths: [...new Set([...policy.secretPaths, ...(await scanSecretGlobs([cwd], policy.secretGlobs))])],
+    secretGlobs: policy.secretGlobs,
     dataDirScope: dataDirReadScope({ dataDir }),
   };
 }
+
+const wrapOptionsOf = (options: WatchLaunchOptions): OsSandboxWrapOptions => ({
+  ...options.wrap, env: options.baseEnv ?? process.env,
+});
 
 /** Prepares the OS sandbox and returns the wrapped shell command; null when this computer cannot build the sandbox. */
 export async function watchSandboxLaunch(
   options: WatchLaunchOptions, job: Pick<WatchRunJob, "command" | "cwd">, tmpDir: string,
 ): Promise<{ command: string; args: string[] } | null> {
   const platform = options.platform ?? process.platform;
+  const env = options.baseEnv ?? process.env;
+  const wrapOptions = { ...wrapOptionsOf(options), available: true };
+  if (!kernelReadonlySandboxAvailable(platform, wrapOptions)) return null;
   const input = await sandboxInput(options, job.cwd, tmpDir);
   const readonly = {
     secretPaths: input.secretPaths, secretGlobs: input.secretGlobs, connectors: { extraAllow: [], deny: [] },
     stateDir: options.stateDir, protectedRoots: [...(input.protectedRoots ?? [])], ...(input.dataDirScope === undefined ? {} : { dataDirScope: input.dataDirScope }),
   };
-  await prepareOsSandboxForLaunch({ dataDir: options.dataDir, stateDir: options.stateDir, writeScope: null, readonly }, platform);
-  const shell = resolveSetupShell(job.command, options.baseEnv ?? process.env, undefined, platform);
-  const launch = wrapInReadonlyOsSandbox({ command: shell.program, args: shell.args }, input, platform, { available: true });
-  return launch.osSandboxed ? { command: launch.command, args: launch.args } : null;
+  await prepareOsSandboxForLaunch({ dataDir: options.dataDir, stateDir: options.stateDir, writeScope: null, readonly }, platform, { env });
+  const shell = resolveSetupShell(job.command, env, undefined, platform);
+  const launch = wrapInReadonlyOsSandbox({ command: shell.program, args: shell.args }, input, platform, wrapOptions);
+  // The Windows fallback leaves part of its boundary to a vendor tool layer, which a shell command does not have.
+  return launch.osSandboxed && launch.readonlyMode !== "fallback_write_restricted" ? { command: launch.command, args: launch.args } : null;
 }
 
 export function createWatchCommandRunner(options: WatchLaunchOptions): (job: WatchRunJob) => Promise<WatchRunResult> {
   const baseEnv = options.baseEnv ?? process.env;
   return async (job) => {
-    if (!(options.sandboxAvailable?.() ?? osSandboxAvailable(options.platform ?? process.platform))) return { kind: "error", reason: NO_SANDBOX, outputTail: "" };
+    const available = options.sandboxAvailable?.() ?? kernelReadonlySandboxAvailable(options.platform ?? process.platform, wrapOptionsOf(options));
+    if (!available) return { kind: "error", reason: NO_SANDBOX, outputTail: "" };
     const tmpDir = realOrSelf(mkdtempSync(join(tmpdir(), `bellwood-watch-${job.watchId}-`)));
     try {
       const launch = await watchSandboxLaunch(options, job, tmpDir);
       if (launch === null) return { kind: "error", reason: NO_SANDBOX, outputTail: "" };
       const parentTag = baseEnv[ENV_SESSION_OWNER_TAG]?.trim();
-      const ownTag = `watch${job.watchId}:${options.tagNonce}`;
+      const ownTag = watchOwnerToken(job.watchId, options.tagNonce);
       const env = {
         ...credentialFreeEnv(baseEnv),
         TMPDIR: tmpDir, TEMP: tmpDir, TMP: tmpDir,
