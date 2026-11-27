@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
-import type { WorkerId } from "../../../shared/domain.ts";
+import type { TaskGraphId, TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { isPathStrictlyInside } from "../../platform/index.ts";
 import type { WorkerDbRow } from "../rows.ts";
+import { buildGraphMaps } from "../task-graphs/store.ts";
+import type { GraphMaps } from "../task-graphs/types.ts";
+import { graphStillUsesStepWorktree } from "../task-graphs/workspace.ts";
 import { workerRow } from "./ctx.ts";
 import { isWorkerInFlight } from "./lines.ts";
 import type { EndedWorktreeCandidate, WorkersCtx } from "./types.ts";
@@ -56,14 +59,20 @@ export const listEndedWorktreeWorkers = (w: WorkersCtx): EndedWorktreeCandidate[
       endedAt: r.ended_at,
     }));
 
-const inActiveGraph = (w: WorkersCtx, workerIds: readonly WorkerId[]): boolean =>
-  workerIds.length > 0 &&
-  w.db.get(
-    `SELECT 1 AS x FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
-      WHERE g.status = 'active' AND j.value IN (${workerIds.map(() => "?").join(", ")})
-      LIMIT 1`,
+const activeGraphStillUsesWorktree = (w: WorkersCtx, workerIds: readonly WorkerId[]): boolean => {
+  if (workerIds.length === 0) return false;
+  const steps = w.db.all<{ graph_id: TaskGraphId; node_key: TaskNodeKey }>(
+    `SELECT DISTINCT n.graph_id, n.node_key FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+      WHERE g.status = 'active' AND j.value IN (${workerIds.map(() => "?").join(", ")})`,
     ...workerIds,
-  ) !== undefined;
+  );
+  const graphs = new Map<TaskGraphId, GraphMaps>();
+  return steps.some(({ graph_id, node_key }) => {
+    const maps = graphs.get(graph_id) ?? buildGraphMaps(w.db, graph_id);
+    graphs.set(graph_id, maps);
+    return graphStillUsesStepWorktree(maps, node_key);
+  });
+};
 
 export function isWorkerCleanable(w: WorkersCtx, workerId: WorkerId): boolean {
   const worker = workerRow(w, workerId);
@@ -78,5 +87,5 @@ export function isWorkerCleanable(w: WorkersCtx, workerId: WorkerId): boolean {
   });
   if (busy) return false;
   // Review directories are single-use, so they do not wait for the task graph to finish.
-  return worker.review_json !== null || !inActiveGraph(w, sharing.map((x) => x.id));
+  return worker.review_json !== null || !activeGraphStillUsesWorktree(w, sharing.map((x) => x.id));
 }
