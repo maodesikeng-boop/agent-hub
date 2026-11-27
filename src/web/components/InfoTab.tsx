@@ -19,7 +19,7 @@ import {
 import { resolvePmLook, type SlimeLook } from "../../shared/slimes.ts";
 import { capabilitySections, capabilityTotals, useCapabilitiesView } from "../capabilities-model.ts";
 import { useClient } from "../device-scope.tsx";
-import { DEFAULT_CHOICE, errorLine, errorText, formatArchiveRemaining, shortPath, type ErrorLike } from "../format.ts";
+import { DEFAULT_CHOICE, errorLine, errorText, shortPath, type ErrorLike } from "../format.ts";
 import { folderBaseName, infoRowsOf, type InfoPage } from "../info-rows.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
@@ -46,6 +46,7 @@ import { WorktreeSetupGroup } from "./ProjectGroups.tsx";
 import { ScheduleGroup } from "./ScheduleGroup.tsx";
 import { INFO_ROW, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { SlimePicker } from "./SlimePicker.tsx";
+import { ArchiveRemaining } from "./TimeAgo.tsx";
 
 export interface InfoTabProps {
   pm: Pm;
@@ -147,7 +148,7 @@ function ArchiveStatusGroup({ pmId, archivedAt, disabled }: { pmId: number; arch
   };
   return (
     <SettingsGroup label="Archive status">
-      <SettingsRow label="Archived" detail={formatArchiveRemaining(archivedAt)} error={unarchiveError}>
+      <SettingsRow label="Archived" detail={<ArchiveRemaining archivedAt={archivedAt} />} error={unarchiveError}>
         {() => (
           <Button size="sm" disabled={disabled || unarchiving} onClick={() => void unarchive()}>
             {unarchiving && <Loader2 aria-hidden="true" />}

@@ -163,7 +163,7 @@ export const ACTOR_LABELS: Readonly<Record<PersonaChange["actor"], string>> = {
 };
 
 export const JUST_NOW = "just now";
-export function formatAgo(ms: number, now: number = Date.now()): string {
+export function formatAgo(ms: number, now: number): string {
   const minutes = Math.floor(Math.max(0, now - ms) / 60_000);
   if (minutes < 1) return JUST_NOW;
   if (minutes < 60) return `${minutes}m ago`;
@@ -172,7 +172,7 @@ export function formatAgo(ms: number, now: number = Date.now()): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export function formatArchiveRemaining(archivedAt: number, now: number = Date.now()): string {
+export function formatArchiveRemaining(archivedAt: number, now: number): string {
   const remainingMs = Math.max(0, archivedAt + PM_ARCHIVE_RETENTION_MS - now);
   const days = Math.max(1, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
   return `Deletes in ${days}d`;

@@ -384,7 +384,11 @@ export function useShellModel({ mobile }: { mobile: boolean }) {
     () => railGraphs.some((g) => g.nodes.some(isTaskNodeAwaitingUserAction)),
     [railGraphs],
   );
-  const { offline, link: rawLink } = deviceNotices(current);
+  const { offline: rawOffline, link: rawLink } = deviceNotices(current);
+  const offline = useMemo(
+    () => (rawOffline === null ? null : { name: rawOffline.name, lastOnlineAt: rawOffline.lastOnlineAt }),
+    [rawOffline?.name, rawOffline?.lastOnlineAt],
+  );
   const link = useMemo(
     () => (rawLink === null ? null : { readOnly: rawLink.readOnly, waiting: rawLink.waiting }),
     [rawLink?.readOnly, rawLink?.waiting],
