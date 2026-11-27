@@ -330,7 +330,7 @@ describe("runner (S1, S2, S3, S5, S13, S16)", () => {
     const outDir = makeTempDir("blind-s2-out-");
     const tempRoot = makeTempDir("blind-s2-tmp-");
     const seen: BlindObservation[] = [];
-    let phase: "open_computer" | "open_new_pm" | "type_name" | "pick_folder" | "create" | "turn1_send" | "turn1_wait" | "turn2_send" | "turn2_wait" | "done" = "open_computer";
+    let phase: "open_computer" | "open_new_pm" | "type_name" | "pick_folder" | "type_folder" | "create" | "turn1_send" | "turn1_wait" | "turn2_send" | "turn2_wait" | "done" = "open_computer";
     let sawFolderPopulated = false;
     let sawFirstReply = false;
     let sawSecondReply = false;
@@ -371,11 +371,29 @@ describe("runner (S1, S2, S3, S5, S13, S16)", () => {
           };
         }
         if (phase === "pick_folder") {
+          if (hasNode("button", /Choose/i)) {
+            phase = "create";
+            return {
+              thought: "Choosing starter folder via Browse button.",
+              confusion: null,
+              action: { kind: "click_label", role: "button", label: "Choose…" },
+            };
+          }
+          phase = "type_folder";
+          return {
+            thought: "Focusing Main folder field because no native folder picker button is shown on this platform.",
+            confusion: null,
+            action: { kind: "click_label", role: "textbox", label: "Main folder" },
+          };
+        }
+        if (phase === "type_folder") {
+          const goalEntry = observation.recentJournal[0] ?? "";
+          const match = /starter folder path is:\s*(\S+)/i.exec(goalEntry);
           phase = "create";
           return {
-            thought: "Choosing starter folder via Browse button.",
+            thought: "Entering starter folder path into Main folder field.",
             confusion: null,
-            action: { kind: "click_label", role: "button", label: "Choose…" },
+            action: { kind: "type", text: match?.[1] ?? "", submit: false },
           };
         }
         if (phase === "create") {
