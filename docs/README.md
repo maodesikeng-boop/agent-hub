@@ -30,6 +30,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Feishu integration](feishu-design.md): QR bot creation, outbound persistent WebSocket, account-wide bot lease, slime-avatar project groups, guest permission tiers, and streaming JSON 2.0 cards.
 - [Cross-hub Feishu inbound deduplication](feishu-cross-hub-dedupe-design.md): Account-wide Feishu inbound state lattice (`held_offline < claimed < handled`), Relay-fenced E2EE checkpoints, Peer mTLS mirroring, pre-execution claim persistence, and rolling-upgrade fallback.
 - [Vendor plugin architecture](vendor-plugin-design.md): Per-vendor folder contracts (`VendorSpec` and `VendorDaemon`), eight supported CLIs, ACP and RPC protocols, system-prompt channels, background session renewal, and instant vendor switching.
+- [Default vendor follows what this computer can run](vendor-default-design.md): One shared rule that picks the first usable vendor for new project managers, the first-start PM, and Router `Auto`, the sweep of every place Bellwood picks a vendor for the user, and the first-launch Providers guide.
 - [Antigravity default terminal working directory fix](agy-cwd-design.md): Real `agy` workspace-sorting experiments, cross-vendor audit of all eight drivers, migration of Antigravity from `stream-json` to `agy acp` on `src/vendors/_common/acp/`, read-only and hook boundaries, and acceptance verification plan.
 - [Resource lifecycle](resource-lifecycle-design.md): Canonical resource registry, database slimming and dual-bounded retention, detached grandchild and temp-directory reaping, squash-merge branch cleanup, and the Resources self-check panel.
 - [Ledger database](ledger-database.md): Exclusive SQLite file lock, the `migrations/manifest.sha256` completeness check, and upgrade tests on ledgers written by released versions.
@@ -48,6 +49,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 ## Testing
 
 - [AI tester](ai-tester-design.md): The resident test bench (a Mac and a server on a test account, a test Feishu bot, all eight vendor CLIs), nightly script flows, the AI tester handbook in `.agents/skills/tester/`, vendor coverage reporting, and the `pnpm verify` round-trip and restart checks.
+- [Product capability evaluation](product-eval-design.md): The unified three-tier product capability evaluation framework (`harness`, `replay`, and `canary`), five non-collapsed capability dimensions, loopback mock model server with prompt-cache prefix verification, multi-trial `pass@k` and `pass^k` gating, holdout anti-overfitting guards, and CI and release-gate integration.
 
 ## Desktop and distribution
 

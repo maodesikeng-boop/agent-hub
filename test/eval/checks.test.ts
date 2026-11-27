@@ -1,4 +1,4 @@
-// 检查里认命令的小工具：读没读 diff、看没看证据（设计 4.2 的 A1、A2）。写松了、写反了在这里暴露。
+// Unit tests for diff-read, evidence, and proportionate task-graph check helpers.
 import { describe, expect, it } from "vitest";
 import {
   checkedThenMerged,
@@ -91,7 +91,7 @@ describe("evidenceOf：看证据", () => {
   });
 });
 
-// ---- 防过度建图（docs/orchestration-skill-design.md 第 8.3 节）：T1、T2、L1、L2 和简单活的几条 ----
+// Proportionate task-graph helpers (T1, T2, L1, L2).
 
 const facts = (over: Partial<Facts> = {}): Facts => ({
   pmConversationId: 1,

@@ -937,11 +937,12 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await boot();
     serveCatalog();
     serve({ model: "claude-opus-4-6" });
+    const before = api.callsTo("GET", /^\/api\/models$/).length;
     const page = await open(user);
     await waitFor(async () => expect(await readOptions(user, combo(page, "Model"))).toEqual(["Default", "Opus 5.5", "Fable 5.1", "Haiku 4.5", "Opus 4.6", "Custom"]));
     expect(combo(page, "Model")).toHaveTextContent("Opus 4.6");
     expect(await readOptions(user, combo(page, "Effort"))).toEqual(["Default", "Low", "Medium", "High", "Max"]);
-    expect(api.callsTo("GET", /^\/api\/models$/)).toHaveLength(1);
+    expect(api.callsTo("GET", /^\/api\/models$/).length - before).toBe(1);
   });
 
   it("存着的模型不在名单里（老数据）：显示成“自定义：模型名”，不丢、不弹输入框", async () => {
@@ -1710,18 +1711,31 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     }
   });
 
-  it("选着的厂商这台用不了（换了设备、或默认那家没登录）：不悄悄换掉，标状态词，“创建”是灰的", async () => {
+  it("选着的厂商后来在这台用不了：不悄悄换掉，标状态词，“创建”是灰的", async () => {
     const user = userEvent.setup();
-    await boot();
-    api.models = () => ({ status: 200, body: { catalogs: [{ ...CLAUDE_CATALOG, availability: "not_installed" }, codex("available")] } });
-    const { dialog, group } = await openDialog(user);
-    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "小王");
-    const vendor = await within(group).findByRole("combobox", { name: "Provider" });
-    await waitFor(() => expect(vendor).toHaveTextContent("Claude Code (Not installed)"));
-    expect(await readOptions(user, vendor)).toEqual(["Claude Code (Not installed)", "Codex", "Add provider…"]);
-    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
-    await pickOption(user, vendor, "Codex");
-    expect(within(dialog).getByRole("button", { name: "Create" })).toBeEnabled();
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await boot();
+      let codexAvailability: ModelCatalog["availability"] = "available";
+      api.models = () => ({ status: 200, body: { catalogs: [{ ...CLAUDE_CATALOG, availability: "available" }, codex(codexAvailability)] } });
+      const { dialog, group } = await openDialog(user);
+      await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "小王");
+      const vendor = await within(group).findByRole("combobox", { name: "Provider" });
+      await waitFor(async () => expect(await readOptions(user, vendor)).toEqual(["Claude Code", "Codex", "Add provider…"]));
+      await pickOption(user, vendor, "Codex");
+      codexAvailability = "not_installed";
+      now += MODEL_CATALOG_REVALIDATE_MS + 1;
+      await user.click(vendor);
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(vendor).toHaveTextContent("Codex (Not installed)"));
+      expect(await readOptions(user, vendor)).toEqual(["Claude Code", "Codex (Not installed)", "Add provider…"]);
+      expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
+      await pickOption(user, vendor, "Claude Code");
+      expect(within(dialog).getByRole("button", { name: "Create" })).toBeEnabled();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 

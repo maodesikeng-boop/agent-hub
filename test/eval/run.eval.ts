@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { PlanFile } from "./cli.ts";
 import { scrubProcessEnv } from "./isolation.ts";
 import { EVAL_POLL_MS, EVAL_QUIET_MS, EVAL_SCRIPTED_POLL_MS, EVAL_SCRIPTED_QUIET_MS, EVAL_SCRIPTED_TRIAL_TIMEOUT_MS, EVAL_TRIAL_TIMEOUT_MS } from "./limits.ts";
-import { scenarioById } from "./scenarios.ts";
-import { SELF_TEST_SCRIPTS } from "./selftest-scripts.ts";
+import { resolveExecutableScenario } from "./scenarios.ts";
+import { resolveSelfTestScript } from "./selftest-scripts.ts";
 import { runTrial } from "./trial.ts";
 
 scrubProcessEnv();
@@ -18,11 +18,12 @@ const real = plan.pm.mode === "real";
 
 describe.concurrent(real ? "编排验证（真 claude 项目经理）" : "编排验证（剧本项目经理）", () => {
   for (const t of plan.trials) {
-    it(`${t.scenario} @ ${t.version.label}`, async () => {
+    const suffix = t.trialIndex === undefined ? "" : ` #${t.trialIndex}`;
+    it(`${t.scenario} @ ${t.version.label}${suffix}`, async () => {
       const r = await runTrial({
-        scenario: scenarioById(t.scenario),
+        scenario: resolveExecutableScenario(t.scenario, plan.holdoutSpecs),
         version: t.version,
-        pm: plan.pm.mode === "real" ? plan.pm : { mode: "scripted", script: SELF_TEST_SCRIPTS[t.scenario][plan.pm.kind] },
+        pm: plan.pm.mode === "real" ? plan.pm : { mode: "scripted", script: resolveSelfTestScript(t.scenario, plan.pm.kind, plan.holdoutSpecs) },
         project: real ? { kind: "real", sourceRepo: plan.sourceRepo } : { kind: "synthetic" },
         workRoot: plan.workRoot,
         resultDir: t.resultDir,
@@ -30,6 +31,7 @@ describe.concurrent(real ? "编排验证（真 claude 项目经理）" : "编排
           ? { trialMs: EVAL_TRIAL_TIMEOUT_MS, pollMs: EVAL_POLL_MS, quietMs: EVAL_QUIET_MS }
           : { trialMs: EVAL_SCRIPTED_TRIAL_TIMEOUT_MS, pollMs: EVAL_SCRIPTED_POLL_MS, quietMs: EVAL_SCRIPTED_QUIET_MS },
         keepWork: plan.keepWork,
+        ...(plan.holdoutDir ? { holdoutDir: plan.holdoutDir } : {}),
       });
       const line = r.checks.map((c) => `${c.id}:${c.status === "pass" ? "过" : c.status === "fail" ? "不过" : "不适用"}`).join(" ");
       console.log(`${t.scenario} @ ${t.version.label}：${r.envError ? `环境出错：${r.envError}` : line}`);

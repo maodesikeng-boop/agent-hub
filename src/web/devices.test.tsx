@@ -388,15 +388,15 @@ describe("新建项目经理选设备", () => {
     await userEvent.click(device);
     await userEvent.click(await screen.findByRole("option", { name: /东京/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: /More settings/ }));
-    // 东京没装 claude、codex：选着的 claude 不悄悄换掉，标状态词，“创建”是灰的；没装的 codex 不列
+    // 东京没装 claude、codex：默认跟着东京第一个可用的厂商（Antigravity），没装的不列
     const vendor = await within(dialog).findByRole("combobox", { name: "Provider" });
-    await waitFor(() => expect(vendor).toHaveTextContent("Claude Code (Not installed)"));
+    await waitFor(() => expect(vendor).toHaveTextContent("Antigravity"));
     expect(fleet.remote.callsTo("GET", /^\/api\/models$/).length).toBeGreaterThan(0);
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "东京新人");
-    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
     await userEvent.click(vendor);
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)", "Add provider…"]);
-    await userEvent.click(screen.getByRole("option", { name: "Antigravity" }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Add provider…"]);
+    await userEvent.keyboard("{Escape}");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "东京新人");
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeEnabled();
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
     expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)[0]!.body).toMatchObject({ name: "东京新人", vendor: "agy" });
