@@ -59,6 +59,13 @@ function findMatchingTagToken(envValue: string, tag: string): string | null {
   return null;
 }
 
+function appendOwnerTag(ownToken: string, parentTag?: string): string {
+  if (parentTag === undefined || parentTag.trim() === "") return ownToken;
+  const ancestors = splitTagTokens(parentTag).filter((token) => token !== ownToken);
+  const kept = ancestors.slice(0, Math.max(0, SESSION_TAG_MAX_DEPTH - 1));
+  return [...kept, ownToken].join(",");
+}
+
 /**
  * Precondition: sessionId is a positive integer and nonce is a non-empty alphanumeric token.
  * Postcondition: returns a tag string carrying this session's token, appending to parentTag up to SESSION_TAG_MAX_DEPTH ancestors when present.
@@ -70,11 +77,21 @@ export function makeSessionOwnerTag(sessionId: SessionId, nonce: string, parentT
   if (!VALID_NONCE.test(nonce)) {
     throw new Error(`Invalid nonce for owner tag: ${nonce}`);
   }
-  const ownToken = `s${sessionId}:${nonce}`;
-  if (parentTag === undefined || parentTag.trim() === "") return ownToken;
-  const ancestors = splitTagTokens(parentTag).filter((token) => token !== ownToken);
-  const kept = ancestors.slice(0, Math.max(0, SESSION_TAG_MAX_DEPTH - 1));
-  return [...kept, ownToken].join(",");
+  return appendOwnerTag(`s${sessionId}:${nonce}`, parentTag);
+}
+
+/**
+ * Precondition: watchId is a positive integer and nonce is a non-empty alphanumeric token.
+ * Postcondition: returns a tag string carrying this watch's token, appending to parentTag up to SESSION_TAG_MAX_DEPTH ancestors when present.
+ */
+export function makeWatchOwnerTag(watchId: number, nonce: string, parentTag?: string): string {
+  if (!Number.isInteger(watchId) || watchId <= 0) {
+    throw new Error(`Invalid watchId for owner tag: ${watchId}`);
+  }
+  if (!VALID_NONCE.test(nonce)) {
+    throw new Error(`Invalid nonce for owner tag: ${nonce}`);
+  }
+  return appendOwnerTag(`watch${watchId}:${nonce}`, parentTag);
 }
 
 /**

@@ -8,9 +8,8 @@ import { dataDirReadScope } from "../../shared/write-scope.ts";
 import { forceKillTree, streamClosed, termGroupAfterExit } from "../driver/process.ts";
 import { kernelReadonlySandboxAvailable } from "../driver/kernel-readonly.ts";
 import { prepareOsSandboxForLaunch, scanSecretGlobs, wrapInReadonlyOsSandbox, type OsSandboxWrapOptions, type ReadonlySandboxInput } from "../driver/write-scope.ts";
-import { spawnOwnedProcess } from "../platform/index.ts";
+import { makeWatchOwnerTag, spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
-import { watchOwnerToken } from "../resources/session-processes.ts";
 import { credentialFreeEnv, outputTail, resolveSetupShell } from "../setup/setup.ts";
 import type { WatchRunJob, WatchRunResult } from "./runner.ts";
 
@@ -94,12 +93,10 @@ export function createWatchCommandRunner(options: WatchLaunchOptions): (job: Wat
     try {
       const launch = await watchSandboxLaunch(options, job, tmpDir);
       if (launch === null) return { kind: "error", reason: NO_SANDBOX, outputTail: "" };
-      const parentTag = baseEnv[ENV_SESSION_OWNER_TAG]?.trim();
-      const ownTag = watchOwnerToken(job.watchId, options.tagNonce);
       const env = {
         ...credentialFreeEnv(baseEnv),
         TMPDIR: tmpDir, TEMP: tmpDir, TMP: tmpDir,
-        [ENV_SESSION_OWNER_TAG]: parentTag ? `${parentTag},${ownTag}` : ownTag,
+        [ENV_SESSION_OWNER_TAG]: makeWatchOwnerTag(job.watchId, options.tagNonce, baseEnv[ENV_SESSION_OWNER_TAG]),
       };
       return await runChild(launch.command, launch.args, job, env);
     } catch (error) {
