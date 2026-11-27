@@ -72,6 +72,9 @@ export type Options = {
   clear?: boolean;
   daily?: string;
   every?: string;
+  until?: string;
+  after?: string;
+  max?: string;
   last?: string;
   stats?: boolean;
   limit?: string;
@@ -93,7 +96,7 @@ export interface Parsed {
   command: HubCommand | "router.dispatch" | "self.reload";
   body: Record<string, unknown>;
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
-  textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "note" | "specJson" | "summaryMd" | "question";
+  textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "note" | "specJson" | "summaryMd" | "question" | "body";
   textOptional?: boolean;
   textPrefix?: string;
 }
@@ -140,6 +143,9 @@ export const HUB_ARG_OPTIONS = {
   clear: { type: "boolean" },
   daily: { type: "string" },
   every: { type: "string" },
+  until: { type: "string" },
+  after: { type: "string" },
+  max: { type: "string" },
   last: { type: "string" },
   stats: { type: "boolean" },
   limit: { type: "string" },

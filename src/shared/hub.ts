@@ -26,6 +26,7 @@ import type { RouterItem, RouterReportLink } from "./router.ts";
 import { hubLimitMaximum } from "./hub-limits.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { AskDetail, PendingAsk } from "./pending-asks.ts";
+import type { PmWatchId, PmWatchRecord } from "./pm-watch.ts";
 import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -71,6 +72,9 @@ export const HUB_COMMANDS = [
   "schedule.pause",
   "schedule.resume",
   "schedule.remove",
+  "watch.add",
+  "watch.list",
+  "watch.close",
   "router.report",
   "graph.create",
   "graph.show",
@@ -113,6 +117,9 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "schedule.pause": ["pm"],
   "schedule.resume": ["pm"],
   "schedule.remove": ["pm"],
+  "watch.add": ["pm"],
+  "watch.list": ["pm"],
+  "watch.close": ["pm"],
   "router.report": ["pm"],
   "graph.create": ["pm"],
   "graph.show": ["pm"],
@@ -134,6 +141,9 @@ export const HUB_HELP_ONLY_COMMANDS = {
   "ask.list": `看全部在等用户的卡：${HUB_COMMAND} ask list`,
   "ask.show": `看全文：${HUB_COMMAND} ask show <编号>`,
   "schedule.show": `看全文和最近几次结果：${HUB_COMMAND} schedule show <编号>`,
+  "watch.add": `要等外部条件（比如检查通过）再动手，用 ${HUB_COMMAND} watch add 让后台盯着，结果出来叫醒你（用法见 ${HUB_COMMAND} help）。`,
+  "watch.list": `看在盯的条件：${HUB_COMMAND} watch list`,
+  "watch.close": `不用再盯了：${HUB_COMMAND} watch close <编号>`,
 } as const satisfies Partial<Record<HubCommand, string>>;
 
 export type HubHelpOnlyCommand = keyof typeof HUB_HELP_ONLY_COMMANDS;
@@ -200,6 +210,17 @@ export interface HubArgsMap {
   "schedule.pause": { scheduleId: ScheduleId };
   "schedule.resume": { scheduleId: ScheduleId };
   "schedule.remove": { scheduleId: ScheduleId };
+  "watch.add": {
+    until?: string;
+    everyMs?: number;
+    afterMs?: number;
+    maxMs?: number;
+    graphId?: TaskGraphId;
+    workerId?: WorkerId;
+    body: string;
+  };
+  "watch.list": Record<string, never>;
+  "watch.close": { watchId: PmWatchId };
   "router.report": {
     summary: string;
     links?: RouterReportLink[];
@@ -485,6 +506,9 @@ interface HubDataMap {
   "schedule.pause": { schedule: ScheduleRecord };
   "schedule.resume": { schedule: ScheduleRecord };
   "schedule.remove": { schedule: ScheduleRecord };
+  "watch.add": { watch: PmWatchRecord };
+  "watch.list": { watches: PmWatchRecord[] };
+  "watch.close": { watch: PmWatchRecord };
   "router.report": { item: RouterItem };
   "graph.create": { graph: TaskGraph };
   "graph.show": { graph: TaskGraph };

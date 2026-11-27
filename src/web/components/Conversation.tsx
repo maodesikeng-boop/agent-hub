@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId, type WorkerPick } from "../../shared/index.ts";
-import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
+import { errorText, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -16,6 +16,7 @@ import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { RowError } from "./SettingsList.tsx";
+import { ArchiveRemaining } from "./TimeAgo.tsx";
 import { useStop } from "../useStop.ts";
 import { actionStartedAt, hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 
@@ -39,7 +40,7 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-body">
           <span>Archived</span>
-          <span className="text-minor text-muted-foreground">{formatArchiveRemaining(archivedAt)}</span>
+          <span className="text-minor text-muted-foreground"><ArchiveRemaining archivedAt={archivedAt} /></span>
         </div>
         <Button variant="outline" size="sm" disabled={unarchiving} onClick={() => void unarchive()}>
           {unarchiving ? "Restoring…" : "Restore"}

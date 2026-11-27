@@ -900,6 +900,10 @@ export interface TaskGraph {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+  /** When the last step became done while every step is done; null otherwise. Later writes to a done step do not move it. */
+  readySince: number | null;
+  /** The watch the PM handed this graph's wait to; delivery waits on it instead of on the PM. */
+  deliveryWatch?: { watchId: number; body: string };
 }
 
 export function isTaskGraphReadyToFinish(graph: Pick<TaskGraph, "status" | "nodes">): boolean {

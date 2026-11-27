@@ -22,12 +22,14 @@ import { parseWorkerCommand, parseAskCommand } from "./parse-worker.ts";
 import { parseRouterCommand } from "./parse-router.ts";
 import { parseGraphAuthorCommand, parseGraphStepCommand } from "./parse-graph.ts";
 import { parseDispatchPmCommand, parseDispatchWorkerCommand } from "./parse-dispatch.ts";
+import { parseWatchCommand } from "./watch.ts";
 
 const GROUP_PARSERS: readonly ((args: GroupArgs) => Parsed | undefined)[] = [
   parseCoreCommand,
   parseWorkerCommand,
   parseAskCommand,
   parseScheduleCommand,
+  parseWatchCommand,
   parseRouterCommand,
   parseGraphAuthorCommand,
   parseGraphStepCommand,

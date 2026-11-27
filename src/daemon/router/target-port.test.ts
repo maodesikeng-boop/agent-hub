@@ -308,6 +308,8 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
     ];
 
     let digestFetchCount = 0;
+    let markHangOpReceived = () => {};
+    const hangOpReceived = new Promise<void>((resolve) => (markHangOpReceived = resolve));
     const uploadedFiles: Array<{ name: string; body: string; headers: IncomingHttpHeaders }> = [];
     const targetOpsReceived: unknown[] = [];
 
@@ -316,7 +318,10 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       res.end(JSON.stringify(body));
     };
     const peer = await fakePeer((req, res) => {
-      if (peerHang) return;
+      if (peerHang) {
+        markHangOpReceived();
+        return;
+      }
       const url = req.url;
       if (url.endsWith("/api/router/digest")) {
         digestFetchCount += 1;
@@ -383,6 +388,7 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       uploadsDir,
     });
 
+    const dispatchTimeoutMs = 5_000;
     const registry = createRouterTargetRegistry({
       localPort,
       peers: {
@@ -392,8 +398,8 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       },
       uploadsDir,
       now: () => now,
-      peerDigestTimeoutMs: 60,
-      peerDispatchTimeoutMs: 80,
+      peerDigestTimeoutMs: 5_000,
+      peerDispatchTimeoutMs: dispatchTimeoutMs,
     });
 
     // 1. 远端 Digest 10s 缓存命中
@@ -465,16 +471,23 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       message: expect.stringContaining("Linux 工作站"),
     });
 
-    peer.state.online = true;
-    peerHang = true;
-    await expect(
-      rPort.executeOp({ kind: "pm.forward", clientId: "hang-1", pmId: 7, text: "hi" }),
-    ).rejects.toMatchObject({
-      name: "RouterTargetError",
-      code: "device_timeout",
-      message: expect.stringContaining("超时"),
-    });
-    peerHang = false;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      peer.state.online = true;
+      peerHang = true;
+      const hangPromise = rPort.executeOp({ kind: "pm.forward", clientId: "hang-1", pmId: 7, text: "hi" });
+      const hangExpectation = expect(hangPromise).rejects.toMatchObject({
+        name: "RouterTargetError",
+        code: "device_timeout",
+        message: expect.stringContaining("超时"),
+      });
+      await hangOpReceived;
+      vi.advanceTimersByTime(dispatchTimeoutMs);
+      await hangExpectation;
+    } finally {
+      peerHang = false;
+      vi.useRealTimers();
+    }
 
     // 5. 设备移出账号（不在信任表里）时缓存立即失效
     pairedDevices = [{ id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null }];

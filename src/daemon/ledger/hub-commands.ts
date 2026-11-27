@@ -28,6 +28,7 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import { scheduleShowIn } from "./schedule-runs.ts";
 import type { LedgerSchedules } from "./schedules.ts";
+import type { LedgerPmWatches } from "./pm-watch-commands.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
@@ -196,6 +197,25 @@ function capsIn(
   );
 }
 
+/** Attachments are copied by the agent API outside the transaction; if any copy is missing the whole command is rejected. */
+function sharedFileArgs(raw: unknown, context: HubCallContext): { args: HubFileArg[]; files: SentFile[] } | undefined {
+  const parsed = fileArgsSchema.safeParse(raw);
+  if (!parsed.success) throw fail("invalid", "--file 要写成 [标签=]路径");
+  const args = parsed.data ?? [];
+  if (args.length === 0) return undefined;
+  assertHubLimit("files", args);
+  for (const arg of args) {
+    if (arg.label !== null) assertHubLimit("fileLabel", arg.label.trim());
+  }
+  const files = context.sharedFiles;
+  if (files === undefined || files.length !== args.length || files.some((f, i) => f.href !== args[i]!.path)) {
+    throw new Error("--file 的副本要在进事务之前存好（agent 接口先调 shareHubFiles，结果放进 HubCallContext.sharedFiles）");
+  }
+  const problem = fileArgsProblem(files);
+  if (problem !== null) throw fail("invalid", problem);
+  return { args, files: [...files] };
+}
+
 export function createLedgerHubCommands(
   ctx: LedgerContext,
   persona: LedgerPersona,
@@ -206,6 +226,7 @@ export function createLedgerHubCommands(
   workerView: ReturnType<typeof createLedgerWorkerView>,
   router: LedgerRouter,
   taskGraphs: LedgerTaskGraphs,
+  watches: LedgerPmWatches,
   taskGraphManual: (sessionId: SessionId) => string = () => "",
   workerPlatform: string = process.platform,
 ) {
@@ -219,24 +240,6 @@ export function createLedgerHubCommands(
       if (note !== "" && error instanceof LedgerRequestError) throw new LedgerRequestError(error.code, `${error.message}\n${note}`);
       throw error;
     }
-  };
-  /** Attachments are copied by the agent API outside the transaction; if any copy is missing the whole command is rejected. */
-  const sharedFileArgs = (raw: unknown, context: HubCallContext): { args: HubFileArg[]; files: SentFile[] } | undefined => {
-    const parsed = fileArgsSchema.safeParse(raw);
-    if (!parsed.success) throw fail("invalid", "--file 要写成 [标签=]路径");
-    const args = parsed.data ?? [];
-    if (args.length === 0) return undefined;
-    assertHubLimit("files", args);
-    for (const arg of args) {
-      if (arg.label !== null) assertHubLimit("fileLabel", arg.label.trim());
-    }
-    const files = context.sharedFiles;
-    if (files === undefined || files.length !== args.length || files.some((f, i) => f.href !== args[i]!.path)) {
-      throw new Error("--file 的副本要在进事务之前存好（agent 接口先调 shareHubFiles，结果放进 HubCallContext.sharedFiles）");
-    }
-    const problem = fileArgsProblem(files);
-    if (problem !== null) throw fail("invalid", problem);
-    return { args, files: [...files] };
   };
   const { pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
   const { createProjectIn, attachIn, detachIn, setupIn } = projects;
@@ -389,6 +392,7 @@ export function createLedgerHubCommands(
         return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
       case "schedule.remove":
         return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
+      case "watch.add": case "watch.list": case "watch.close": return watches.hubIn(p, caller, command, args);
       case "router.report": {
         const { files: rawFiles, ...rest } = args as HubArgs<"router.report">;
         const fileArgs = sharedFileArgs(rawFiles, context);

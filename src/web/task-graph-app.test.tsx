@@ -81,6 +81,7 @@ function graph(): TaskGraph {
     createdAt: 1_000,
     updatedAt: 1_000,
     completedAt: null,
+    readySince: null,
   };
 }
 
@@ -345,6 +346,7 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
       createdAt: 1_000,
       updatedAt: 2_000,
       completedAt: null,
+      readySince: null,
     };
     const snap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
@@ -426,6 +428,7 @@ describe("桌面右栏：App 接通工作面板任务图画布", () => {
       createdAt: 1_000,
       updatedAt: 2_000,
       completedAt: null,
+      readySince: null,
     };
     const snap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
@@ -838,6 +841,7 @@ describe("Task Graph delivery row", () => {
         data: {
           graph: {
             ...graph(),
+            readySince: 2_000,
             nodes: [
               makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
               makeNode({ key: "gate", title: "确认上线", status: "done", waitingFor: null, skipped: true, sortOrder: 1 }),
@@ -869,6 +873,24 @@ describe("Task Graph delivery row", () => {
     expect(within(zoom).queryByText("Waiting for the PM")).not.toBeInTheDocument();
   });
 
+  it("names the watch the delivery waits for in the work panel and dialog", async () => {
+    const user = userEvent.setup();
+    const { ws } = await bootSingle(graphSnapshot());
+    const rail = await waitFor(sidePanel);
+    act(() => ws.push({
+      seq: 30,
+      type: "task_graph.updated",
+      data: { graph: { ...graph(), readySince: 2_000, deliveryWatch: { watchId: 3, body: "检查通过后交付" }, nodes: [
+        makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0 }),
+        makeNode({ key: "gate", title: "确认上线", status: "done", sortOrder: 1 }),
+      ] } },
+    }));
+    expect(await within(rail).findByText("Waiting for #3: 检查通过后交付")).toBeInTheDocument();
+    await user.click(within(rail).getByRole("button", { name: "Expand 发布流水线" }));
+    const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    expect(within(zoom).getByText("Waiting for #3: 检查通过后交付")).toHaveAttribute("title", "Waiting for #3: 检查通过后交付");
+  });
+
   it("任务图门禁卡草稿跨开关弹窗与对话 AskCard 共享；远端定案离开 waiting:user 后在节点上保留只读可复制未发草稿", async () => {
     const user = userEvent.setup();
     const { ws } = await bootSingle(graphSnapshot());
@@ -897,6 +919,7 @@ describe("Task Graph delivery row", () => {
         data: {
           graph: {
             ...graph(),
+            readySince: 2_000,
             nodes: [
               makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
               makeNode({

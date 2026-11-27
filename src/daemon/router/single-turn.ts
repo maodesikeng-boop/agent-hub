@@ -72,6 +72,8 @@ export function createRouterTurnRunner(options: RouterTurnRunnerOptions): Router
 
     const texts: string[] = [];
     let turnEnded = false;
+    let launching = true;
+    let deferredExitReason: string | null = null;
     let settle!: (outcome: Outcome) => void;
     const done = new Promise<Outcome>((resolve) => {
       let settled = false;
@@ -91,8 +93,11 @@ export function createRouterTurnRunner(options: RouterTurnRunnerOptions): Router
         if (event.ok && !event.interrupted) settle({ kind: "ok" });
         else if (event.error) failRaw(turnFailureReason(event.error));
         else settle({ kind: "error", error: "这一轮被打断了" });
-      } else if (event.type === "session.exited" && !event.hadResult) settle({ kind: "error", error: `进程提前退出（${event.reason}）` });
-      else if (event.type === "driver.error" && event.code === "invalid_input") failRaw(event.message);
+      } else if (event.type === "session.exited" && !event.hadResult) {
+        // Defer startup_failed until start()/send() rejects so its DriverError detail is not masked.
+        if (event.reason === "startup_failed" && launching) deferredExitReason = event.reason;
+        else settle({ kind: "error", error: `进程提前退出（${event.reason}）` });
+      } else if (event.type === "driver.error" && event.code === "invalid_input") failRaw(event.message);
     });
     const timer = setTimeout(() => settle({ kind: "timeout" }), request.timeoutMs);
     timer.unref?.();
@@ -103,9 +108,14 @@ export function createRouterTurnRunner(options: RouterTurnRunnerOptions): Router
     let outcome: Outcome;
     try {
       void (async () => {
-        await driver.start(sessionId);
-        const sent = await driver.send(sessionId, { messageIds: [1], source: "user", text: request.text });
-        if (sent.kind === "rejected" || sent.kind === "cancelled") settle({ kind: "error", error: `没能写进会话（${sent.kind}）` });
+        try {
+          await driver.start(sessionId);
+          const sent = await driver.send(sessionId, { messageIds: [1], source: "user", text: request.text });
+          if (sent.kind === "rejected" || sent.kind === "cancelled") settle({ kind: "error", error: `没能写进会话（${sent.kind}）` });
+        } finally {
+          launching = false;
+        }
+        if (deferredExitReason !== null) settle({ kind: "error", error: `进程提前退出（${deferredExitReason}）` });
       })().catch((err: unknown) => failRaw(messageOf(err)));
       outcome = await done;
     } finally {

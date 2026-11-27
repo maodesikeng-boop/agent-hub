@@ -25,17 +25,21 @@ import {
   MIN_SCHEDULE_EVERY_MINUTES,
   SELF_RELOAD_DRAIN_MAX_MS,
   SETUP_TIMEOUT_MS,
+  WATCH_EVERY_MIN_MS,
+  WATCH_MAX_CAP_MS,
+  WATCH_MAX_DEFAULT_MS,
   WORKER_LOG_DEFAULT_STEPS,
   WORKER_SEARCH_DEFAULT_LIMIT,
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { CAPABILITY_KINDS } from "../shared/pm-capabilities.ts";
+import { formatDurationShort } from "../shared/schedule.ts";
 import { AGENT_VENDORS, ALL_EFFORTS } from "../shared/vendors.ts";
 
 const hub = HUB_COMMAND;
 const FILE_ARG_PATH_HINT = "标签含斜杠时，用绝对路径或以 ./ 开头的相对路径；不带标签的相对路径若含 =，可在路径前加 ./";
 
-export type HubCommandCategory = "core" | "project" | "persona" | "worker" | "ask" | "schedule" | "graph" | "router" | "dispatch";
+export type HubCommandCategory = "core" | "project" | "persona" | "worker" | "ask" | "schedule" | "watch" | "graph" | "router" | "dispatch";
 
 export type HubCliCommandId = HubCommand | "caps" | "self.reload" | `dispatch.${string}`;
 
@@ -464,6 +468,48 @@ export const HUB_CLI_REGISTRY: readonly HubCliEntry[] = [
     positionalHint: "<编号>",
   }),
   cmdEntry({
+    id: "watch.add",
+    category: "watch",
+    group: "watch",
+    action: "add",
+    cli: "watch add",
+    summary: "让后台盯外部条件或到点叫醒",
+    usage: `  ${hub} watch add (--until <命令> [--every <间隔>] | --after <时长>) [--max <时长>] [--graph <图编号> | --worker <编号>] --stdin
+                                                          让后台替你等外部条件（检查通过、部署完成等），满足、失败或超时都叫醒你；正文是结果出来后你要做的事。
+                                                          --until 的命令在项目主文件夹里、只读沙箱中跑（能联网，不能改文件），按这台电脑的 shell 写：
+                                                          不带 --every 只跑一次，退出码 0 算满足、其他算失败；带 --every（最短 ${formatDurationShort(WATCH_EVERY_MIN_MS)}）就每隔一段跑一次，直到退出码为 0。
+                                                          --after 不跑命令，到点叫醒你。--max 是最多等多久（默认 ${formatDurationShort(WATCH_MAX_DEFAULT_MS)}，最长 ${formatDurationShort(WATCH_MAX_CAP_MS)}）。
+                                                          --graph / --worker 把它挂到图或 Worker 上：在盯期间那一项不算等你处理；图结束或 Worker 收工后，结果不再叫醒你`,
+    allowedFlags: ["until", "every", "after", "max", "graph", "worker", "stdin"],
+    minPositionals: 0,
+    maxPositionals: 0,
+  }),
+  cmdEntry({
+    id: "watch.list",
+    category: "watch",
+    group: "watch",
+    action: "list",
+    cli: "watch list",
+    summary: "列出在盯条件与最近结果",
+    usage: `  ${hub} watch list                                          在盯的条件和最近的结果`,
+    allowedFlags: [],
+    minPositionals: 0,
+    maxPositionals: 0,
+  }),
+  cmdEntry({
+    id: "watch.close",
+    category: "watch",
+    group: "watch",
+    action: "close",
+    cli: "watch close",
+    summary: "停止一个在盯条件",
+    usage: `  ${hub} watch close <编号>                                  不用再盯了；正在跑的命令会停下，不再叫醒你`,
+    allowedFlags: [],
+    minPositionals: 1,
+    maxPositionals: 1,
+    positionalHint: "<编号>",
+  }),
+  cmdEntry({
     id: "router.report",
     category: "router",
     group: "router",
@@ -726,6 +772,7 @@ const CATEGORY_ORDER: readonly { key: Exclude<HubCommandCategory, "dispatch">; l
   { key: "worker", label: "Worker" },
   { key: "ask", label: "提问卡" },
   { key: "schedule", label: "定时任务" },
+  { key: "watch", label: "在盯条件" },
   { key: "router", label: "总助汇报" },
   { key: "graph", label: "任务图（完整手册：hub help graph）" },
 ];

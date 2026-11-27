@@ -1,6 +1,7 @@
 // OS differences belong here; other modules should not branch on process.platform.
 export {
   makeSessionOwnerTag,
+  makeWatchOwnerTag,
   reapTaggedProcesses,
   runsInsideRoots,
   scanTaggedProcesses,

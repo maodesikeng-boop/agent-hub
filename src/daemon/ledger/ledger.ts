@@ -45,6 +45,8 @@ import type { HealthDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./r
 import { createLedgerRouter } from "./router.ts";
 import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
+import { createLedgerPmWatches, type PmWatchRunnerLedger } from "./pm-watch-commands.ts";
+import { installWatchLinkClose } from "./pm-watches.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions, idle } from "./sessions.ts";
 import { completedWorkPage } from "./completed-work.ts";
@@ -98,6 +100,8 @@ export interface SqliteLedger extends Ledger {
    */
   runDueBackgroundWaits(nowMs?: number): number;
   busySessionSnapshots(): BusySessionSnapshot[];
+  /** What the watch runner reads and settles; watches belong to the PM, not to a session. */
+  readonly watches: PmWatchRunnerLedger;
   /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
   close(): void;
 }
@@ -112,6 +116,7 @@ export interface LedgerOptions {
   initialSeq?: number;
   changeBufferSize?: number;
   osSandboxed?: LedgerContextOptions["osSandboxed"];
+  readonlyKernelSandboxed?: LedgerContextOptions["readonlyKernelSandboxed"];
   workerPlatform?: NodeJS.Platform;
   pmHomeRoot: string;
   personasDir?: string;
@@ -295,6 +300,7 @@ function busySessionSnapshotsOf(
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   installSlotAdmission(db);
+  installWatchLinkClose(db);
   const ctx = createLedgerContext(db, options);
   const { log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
   const userHome = options.userHome ?? homedir();
@@ -403,7 +409,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual, options.workerPlatform ?? process.platform);
+  const watches = createLedgerPmWatches(ctx, sessions, persona, taskGraphs.publishBranchChange);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, watches, taskGraphManual, options.workerPlatform ?? process.platform);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
   const { assertStart, init, ...capabilities } = createLedgerPmCapabilities(ctx);
 
@@ -642,6 +649,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     runDueSchedules: schedules.runDueSchedules,
     runDueBackgroundWaits: (nowMs = ctx.now()) => workers.backgroundWaits.runDue(nowMs),
     busySessionSnapshots: () => busySessionSnapshotsOf(db, sessions, workers),
+    watches: watches.runner,
     addSchedule: schedules.addForUser,
     setScheduleEnabled: schedules.setEnabledForUser,
     removeSchedule: schedules.removeForUser,
@@ -654,6 +662,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     waitsForFirstTurn: workers.waitsForFirstTurn,
     onWorktreeCreated: workers.onWorktreeCreated,
     recordReviewSnapshot: workers.recordReviewSnapshot,
+    noteWorkspaceCheckout: workers.noteWorkspaceCheckout,
+    getWorktreeSyncTask: workers.getWorktreeSyncTask,
+    onWorktreeSynced: workers.onWorktreeSynced,
     getReviewVerifyTask: workers.getReviewVerifyTask,
     onReviewVerified: workers.onReviewVerified,
 

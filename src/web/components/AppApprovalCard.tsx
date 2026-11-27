@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useRef, useState, type ReactElement } from "react";
 import { APP_APPROVAL_SETTLED_LABELS, type AppApprovalDecision, type AppApprovalId, type AppApprovalRiskLevel, type AppApprovalStatus } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, newClientId } from "../format.ts";
-import { ACTION_ELAPSED_TICK_MS } from "../limits.ts";
+import { SECOND_TICK_MS } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Clock } from "../ui/icons.ts";
+import { useNow } from "../useNow.ts";
 
 export interface AppApprovalCardViewProps {
   workerId: number;
@@ -94,19 +95,13 @@ export function AppApprovalCard(props: AppApprovalCardProps): ReactElement {
   const [decision, setDecision] = useState<AppApprovalStatus>("pending");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now);
   const settled = props.chosenOption === APP_APPROVAL_SETTLED_LABELS.revoked ? "revoked"
     : props.closed ? "expired"
     : props.answered ? props.chosenOption === APP_APPROVAL_SETTLED_LABELS.allowed ? "allowed" : "denied"
     : decision;
+  const now = useNow(SECOND_TICK_MS, settled === "pending" ? (expiresAt ?? null) : null);
   const remaining = expiresAt === undefined ? null : Math.max(0, expiresAt - now);
   const status = settled === "pending" && remaining === 0 ? "expired" : settled;
-
-  useEffect(() => {
-    if (status !== "pending" || expiresAt === undefined) return;
-    const timer = setInterval(() => setNow(Date.now()), ACTION_ELAPSED_TICK_MS);
-    return () => clearInterval(timer);
-  }, [status, expiresAt]);
 
   const submit = async (choice: AppApprovalDecision) => {
     if (disabled || status !== "pending" || request.current?.busy) return;

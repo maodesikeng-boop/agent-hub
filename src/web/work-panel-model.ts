@@ -29,8 +29,6 @@ export interface ActiveWork {
 }
 
 export interface CompletedDay {
-  /** `Today`, `Yesterday`, or a short date such as `Nov 22`, in the viewer's time zone. */
-  label: string;
   /** Local midnight of the day, used as the React key. */
   dayStart: number;
   items: readonly CompletedWorkItem[];
@@ -48,7 +46,7 @@ const MAX_COMPLETED_ITEMS = COMPLETED_WORK_MAX_PAGES * COMPLETED_WORK_PAGE_SIZE;
 const IDLE_ACTIVITIES: ReadonlySet<string> = new Set(["idle", "stopping"]);
 
 const activeWorkCache = new WeakMap<readonly TaskGraph[], WeakMap<readonly WorkerEntry[], ActiveWork>>();
-const completedDaysCache = new WeakMap<readonly CompletedWorkPage[], { nowDayStart: number; days: readonly CompletedDay[] }>();
+const completedDaysCache = new WeakMap<readonly CompletedWorkPage[], readonly CompletedDay[]>();
 
 function isRunningWorker(worker: WorkerEntry): boolean {
   return !worker.ended && !IDLE_ACTIVITIES.has(worker.activity);
@@ -83,9 +81,11 @@ function localMidnight(ms: number): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-function dayLabelOf(dayStart: number, todayStart: number, yesterdayStart: number): string {
-  if (dayStart === todayStart) return "Today";
-  if (dayStart === yesterdayStart) return "Yesterday";
+/** `Today`, `Yesterday`, or a short date such as `Nov 22`, in the viewer's time zone. */
+export function completedDayLabel(dayStart: number, now: number): string {
+  const today = new Date(now);
+  if (dayStart === localMidnight(now)) return "Today";
+  if (dayStart === new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime()) return "Yesterday";
   const d = new Date(dayStart);
   return `${SHORT_MONTHS[d.getMonth()]!} ${d.getDate()}`;
 }
@@ -94,13 +94,10 @@ export function completedKeyOf(item: CompletedWorkItem): string {
   return item.kind === "graph" ? `graph:${item.graphId}` : `worker:${item.conversationId}`;
 }
 
-export function completedDaysOf(pages: readonly CompletedWorkPage[], now: number): readonly CompletedDay[] {
-  const nowDate = new Date(now);
-  const todayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+export function completedDaysOf(pages: readonly CompletedWorkPage[]): readonly CompletedDay[] {
   const hit = completedDaysCache.get(pages);
-  if (hit !== undefined && hit.nowDayStart === todayStart) return hit.days;
+  if (hit !== undefined) return hit;
 
-  const yesterdayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - 1).getTime();
   const seen = new Set<string>();
   const groups = new Map<number, CompletedWorkItem[]>();
   let totalKept = 0;
@@ -122,13 +119,9 @@ export function completedDaysOf(pages: readonly CompletedWorkPage[], now: number
 
   const days: CompletedDay[] = [...groups.entries()]
     .toSorted(([a], [b]) => b - a)
-    .map(([dayStart, items]) => ({
-      label: dayLabelOf(dayStart, todayStart, yesterdayStart),
-      dayStart,
-      items,
-    }));
+    .map(([dayStart, items]) => ({ dayStart, items }));
 
-  completedDaysCache.set(pages, { nowDayStart: todayStart, days });
+  completedDaysCache.set(pages, days);
   return days;
 }
 

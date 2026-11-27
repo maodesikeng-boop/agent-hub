@@ -40,6 +40,7 @@ class PiForkTurn {
   readonly #src: ForkSource;
   readonly #fork: ForkHandle;
   readonly #signal: AbortSignal;
+  readonly #killWaitMs: number;
   readonly #resolve: (result: ForkWriteResult) => void;
   readonly #reject: (err: Error) => void;
 
@@ -48,6 +49,7 @@ class PiForkTurn {
     src: ForkSource,
     fork: ForkHandle,
     signal: AbortSignal,
+    killWaitMs: number,
     resolve: (result: ForkWriteResult) => void,
     reject: (err: Error) => void,
   ) {
@@ -55,6 +57,7 @@ class PiForkTurn {
     this.#src = src;
     this.#fork = fork;
     this.#signal = signal;
+    this.#killWaitMs = killWaitMs;
     this.#resolve = resolve;
     this.#reject = reject;
   }
@@ -116,7 +119,7 @@ class PiForkTurn {
       this.#resolve(result!);
       return;
     }
-    const killTimer = setTimeout(() => this.#stopChild(), KILL_WAIT_MS);
+    const killTimer = setTimeout(() => this.#stopChild(), this.#killWaitMs);
     this.#child.once("exit", () => {
       clearTimeout(killTimer);
       this.#resolve(result!);
@@ -244,14 +247,19 @@ class PiForkTurn {
   }
 }
 
+export interface PiForkTurnOptions {
+  killWaitMs?: number;
+}
+
 export function runPiForkTurn(
   child: ChildProcess,
   src: ForkSource,
   fork: ForkHandle,
   prompt: string,
   signal: AbortSignal,
+  options?: PiForkTurnOptions,
 ): Promise<ForkWriteResult> {
   return new Promise<ForkWriteResult>((resolve, reject) => {
-    new PiForkTurn(child, src, fork, signal, resolve, reject).start(prompt);
+    new PiForkTurn(child, src, fork, signal, options?.killWaitMs ?? KILL_WAIT_MS, resolve, reject).start(prompt);
   });
 }
