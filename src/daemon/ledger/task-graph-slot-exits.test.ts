@@ -95,6 +95,22 @@ describe("step slots: every exit path frees the slot and the oldest waiter start
     expect(step(second.id).status).toBe("running");
   });
 
+  it("a step that leaves the queue republishes its graph, whether it starts or turns to the PM", () => {
+    const first = slotted("图甲");
+    const briefless = f.createGraph({ title: "图乙", steps: [{ key: "review-real", title: "真实环境审查", slot: "real-env", deps: [] }] }).data.graph;
+    const third = slotted("图丙");
+    const pushed = new Map<TaskGraphId, TaskNode>();
+    const stop = f.ledger.onChange((change) => {
+      if (change.type === "task_graph.updated") pushed.set(change.data.graph.id, change.data.graph.nodes[0]!);
+    });
+    f.ledger.hubCall(f.lin.sessionId, "worker.end", { workerId: holderWorker(first.id) });
+    stop();
+    expect(pushed.get(briefless.id)).toMatchObject({ status: "waiting", waitingFor: "pm" });
+    expect(pushed.get(briefless.id)?.slotQueue).toBeUndefined();
+    expect(pushed.get(third.id)).toMatchObject({ status: "running" });
+    expect(pushed.get(third.id)?.slotQueue).toBeUndefined();
+  });
+
   it("a step without a brief queues for its slot and turns to the PM when the slot frees", () => {
     const first = slotted("图甲");
     const holder = holderWorker(first.id);

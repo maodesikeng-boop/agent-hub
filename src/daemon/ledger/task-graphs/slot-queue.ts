@@ -25,19 +25,22 @@ const START_OVERRIDES: ReadonlyArray<[keyof StartArgs, string]> = [
 
 /**
  * Precondition: called in the write that follows any committed change, since HOLDS_SLOT_SQL reads steps, Workers, turns, background counts, and messages.
- * Postcondition: starts the oldest waiting step of each free slot; leaves every held slot alone.
+ * Postcondition: starts the oldest waiting step of each free slot and republishes every graph it advanced; leaves every held slot alone.
  */
 export function drainSlotsIn(g: TaskGraphCtx, p: Pending): void {
+  const recomputed = new Set<number>();
   for (const slot of freeSlotsWithWaiters(g.db)) {
     for (const waiter of slotWaitersOf(g.db, slot)) {
       const graphRow = getGraphRow(g.db, waiter.graph_id);
       if (graphRow === undefined) continue;
       const t = g.now();
       const progress = recomputeGraphProgressIn(g, p, graphRow, undefined, undefined, { retractBlockedWaiting: false });
+      recomputed.add(graphRow.id);
       wakePmForTurnedIn(g, p, graphRow, progress.turned, `名额「${slot}」空出来了，`, `slot-free:${slot}:${waiter.step_id}:${t}`);
       if (slotHolderOf(g.db, slot) !== null) break;
     }
   }
+  for (const graphId of recomputed) pushSlimGraphIn(g, p, graphId);
 }
 
 /** One line per slot with a queue: its holder and its waiters in order, so any change in either shows up as a new line. */
