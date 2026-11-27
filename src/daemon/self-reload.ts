@@ -58,18 +58,31 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
   const drainMaxMs = options.drainMaxMs ?? SELF_RELOAD_DRAIN_MAX_MS;
   const now = options.now ?? Date.now;
 
+  interface ActiveBuild {
+    controller: AbortController;
+    userCancelled: boolean;
+  }
+
   let state: SelfReloadState = "idle";
   let wantBuild = false;
   let built = false;
   let requestedAt: number | null = null;
   let lastFailure = options.initialFailure == null ? null : truncateChars(options.initialFailure, SELF_RELOAD_FAILURE_MAX_CHARS);
   let closed = false;
-  let building: AbortController | null = null;
+  let activeBuild: ActiveBuild | null = null;
+  let settlingBuild: Promise<void> | null = null;
   let quietTimer: ReturnType<typeof setTimeout> | null = null;
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   let recheckTimer: ReturnType<typeof setInterval> | null = null;
   let unsubscribe: (() => void) | null = null;
 
+  const runCancelBuild = () => {
+    try {
+      options.cancelBuild?.();
+    } catch (error) {
+      log(`${LOG_PREFIX} 热重启：清理暂存构建目录失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   const clearQuiet = () => {
     if (quietTimer !== null) clearTimeout(quietTimer);
     quietTimer = null;
@@ -85,8 +98,8 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
   };
   const reset = () => {
     stopWatching();
-    building?.abort();
-    building = null;
+    activeBuild?.controller.abort();
+    activeBuild = null;
     state = "idle";
     wantBuild = false;
     built = false;
@@ -165,23 +178,43 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
     if (build === undefined) return;
     state = "building";
     clearQuiet();
-    const controller = new AbortController();
-    building = controller;
+    const run: ActiveBuild = { controller: new AbortController(), userCancelled: false };
+    activeBuild = run;
     log(`${LOG_PREFIX} 热重启：开始在后台构建网页。`);
-    void build(controller.signal)
-      .catch((error: unknown): BuildOutcome => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }))
-      .then((outcome) => {
-        if (building !== controller || closed) return;
-        building = null;
-        if (!outcome.ok) {
-          fail(`构建失败（${outcome.reason}）`);
-          return;
-        }
-        built = true;
-        state = "draining";
-        log(`${LOG_PREFIX} 热重启：网页构建通过，等全库空闲（最晚 ${formatClock(requestedAt! + drainMaxMs)} 起只等正在回用户的轮次）。`);
-        evaluate();
-      });
+    const launch = (): Promise<void> => {
+      if (activeBuild !== run || closed || run.controller.signal.aborted) return Promise.resolve();
+      let pending: Promise<BuildOutcome>;
+      try {
+        pending = build(run.controller.signal);
+      } catch (error: unknown) {
+        pending = Promise.reject(error);
+      }
+      return pending
+        .catch((error: unknown): BuildOutcome => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }))
+        .then((outcome) => {
+          if (run.userCancelled) {
+            // Re-run cleanup after the aborted build process exits so late writes or Windows handle locks cannot leave staging behind.
+            runCancelBuild();
+            return;
+          }
+          if (activeBuild !== run || closed) return;
+          activeBuild = null;
+          if (!outcome.ok) {
+            fail(`构建失败（${outcome.reason}）`);
+            return;
+          }
+          built = true;
+          state = "draining";
+          log(`${LOG_PREFIX} 热重启：网页构建通过，等全库空闲（最晚 ${formatClock(requestedAt! + drainMaxMs)} 起只等正在回用户的轮次）。`);
+          evaluate();
+        });
+    };
+    // Serialize behind any previous cancelled build that is still exiting so two builds never share staging or log files.
+    const previous = settlingBuild;
+    const current = (previous === null ? launch() : previous.then(launch)).finally(() => {
+      if (settlingBuild === current) settlingBuild = null;
+    });
+    settlingBuild = current;
   };
 
   return {
@@ -217,9 +250,10 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
         return { text: "当前没有进行中的热重启任务。", status: status() };
       }
       const hadBuild = wantBuild || built;
+      if (activeBuild !== null) activeBuild.userCancelled = true;
       reset();
       lastFailure = null;
-      if (hadBuild) options.cancelBuild?.();
+      if (hadBuild) runCancelBuild();
       log(`${LOG_PREFIX} ${by} 取消了待执行的热重启。`);
       return { text: "已取消待执行的热重启。", status: status() };
     },

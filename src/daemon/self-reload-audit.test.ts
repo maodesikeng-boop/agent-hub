@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +8,7 @@ import { SELF_RELOAD_BUSY_ITEMS_MAX, SELF_RELOAD_QUIET_MS } from "../shared/limi
 import { pmMemoryDirPath } from "../shared/paths.ts";
 import { createResolveFolder } from "./ledger/files.ts";
 import { createLedger, type SqliteLedger } from "./ledger/index.ts";
-import { createSelfReload, type BuildOutcome } from "./self-reload.ts";
+import { createSelfReload, createStagedWebBuild, type BuildOutcome } from "./self-reload.ts";
 import {
   describeBusySessionsForReload,
   type BusyBackgroundCommand,
@@ -201,5 +201,200 @@ describe("S8 and S9: PM-own memory file sharing, Worker/cross-PM isolation, rece
     expect(stepAsk.text).toContain(`--message ${stepAsk.data.messageId}`);
     expect(HUB_USAGE).not.toContain("本轮最大容忍时间");
     expect(HUB_USAGE).toContain("时间预算");
+  });
+});
+
+describe("S7 regression: createSelfReload + createStagedWebBuild cancel cleanup, restart recovery, and serialized re-entry", () => {
+  let root: string;
+  let staticDir: string;
+  let stagingDir: string;
+  let readyDir: string;
+  let logPath: string;
+
+  beforeEach(() => {
+    root = realpathSync.native(mkdtempSync(join(tmpdir(), "hub-self-reload-audit-")));
+    staticDir = join(root, "dist", "web");
+    stagingDir = join(root, "dist", ".web-reload-next");
+    readyDir = join(root, "dist", ".web-reload-ready");
+    logPath = join(root, "logs", "self-reload-build.log");
+    mkdirSync(staticDir, { recursive: true });
+    writeFileSync(join(staticDir, "index.html"), "old");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "demo", scripts: { build: "echo ok" } }));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("cleans up late staging writes after cancel exits (even if sync cleanup throws EBUSY) so next-startup recover() returns null", async () => {
+    const webBuild = createStagedWebBuild({
+      repoDir: root,
+      staticDir,
+      logPath,
+      command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      log: () => {},
+    })!;
+    let releaseFirstBuild!: () => void;
+    const firstBuildDone = new Promise<void>((resolve) => { releaseFirstBuild = resolve; });
+    let buildSettled!: () => void;
+    const buildFinished = new Promise<void>((resolve) => { buildSettled = resolve; });
+    let cleanupAttempts = 0;
+
+    const reload = createSelfReload({
+      busyReasons: () => ["Worker #1 忙碌中"],
+      unresumableReasons: () => [],
+      subscribe: () => () => {},
+      build: async (signal) => {
+        mkdirSync(stagingDir, { recursive: true });
+        writeFileSync(join(stagingDir, "index.html"), "partial");
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        await firstBuildDone;
+        // Simulate a child process still writing into .web-reload-next before exiting on abort.
+        mkdirSync(stagingDir, { recursive: true });
+        writeFileSync(join(stagingDir, "late.js"), "console.log('late');");
+        queueMicrotask(buildSettled);
+        return { ok: false, reason: "被取消" };
+      },
+      applyBuild: () => webBuild.apply(),
+      cancelBuild: () => {
+        cleanupAttempts += 1;
+        if (cleanupAttempts === 1) {
+          throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+        }
+        webBuild.cleanup();
+      },
+      restart: vi.fn(),
+      log: () => {},
+    });
+
+    reload.request({ build: true, by: "pm 1" });
+    expect(existsSync(stagingDir)).toBe(true);
+    expect(() => reload.cancel({ by: "pm 1" })).not.toThrow();
+    expect(reload.status().state).toBe("idle");
+
+    releaseFirstBuild();
+    await buildFinished;
+    await vi.waitFor(() => expect(existsSync(stagingDir)).toBe(false));
+    expect(existsSync(readyDir)).toBe(false);
+    expect(readFileSync(join(staticDir, "index.html"), "utf8")).toBe("old");
+
+    // Across a restart, a fresh StagedWebBuild must not misreport the cancelled build as an interruption.
+    const nextStartup = createStagedWebBuild({
+      repoDir: root,
+      staticDir,
+      logPath,
+      command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      log: () => {},
+    })!;
+    expect(nextStartup.recover()).toBeNull();
+
+    // Contrasting invariant: daemon close() during a build keeps .web-reload-next so restart recovery reports the interruption.
+    const shutdownReload = createSelfReload({
+      busyReasons: () => ["Worker #1 忙碌中"],
+      unresumableReasons: () => [],
+      subscribe: () => () => {},
+      build: async (signal) => {
+        mkdirSync(stagingDir, { recursive: true });
+        writeFileSync(join(stagingDir, "index.html"), "partial");
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        return { ok: false, reason: "被取消" };
+      },
+      applyBuild: () => webBuild.apply(),
+      cancelBuild: () => webBuild.cleanup(),
+      restart: vi.fn(),
+      log: () => {},
+    });
+    shutdownReload.request({ build: true, by: "pm 1" });
+    shutdownReload.close();
+    await vi.waitFor(() => expect(existsSync(stagingDir)).toBe(true));
+    expect(nextStartup.recover()).toContain("在网页构建完成前被打断");
+    expect(existsSync(stagingDir)).toBe(false);
+  });
+
+  it("serializes a re-requested build behind a cancelled in-flight build and cleans staging with real createStagedWebBuild", async () => {
+    writeFileSync(
+      join(root, "fake-build.mjs"),
+      `import { mkdirSync, writeFileSync } from "node:fs";
+const out = process.argv[process.argv.indexOf("--outDir") + 1];
+mkdirSync(out, { recursive: true });
+writeFileSync(out + "/index.html", "v2");
+if (process.argv.includes("HANG")) setInterval(() => {}, 1000);`,
+    );
+    const hangingBuild = createStagedWebBuild({
+      repoDir: root,
+      staticDir,
+      logPath,
+      command: `${JSON.stringify(process.execPath)} fake-build.mjs HANG`,
+      log: () => {},
+    })!;
+    const fastBuild = createStagedWebBuild({
+      repoDir: root,
+      staticDir,
+      logPath,
+      command: `${JSON.stringify(process.execPath)} fake-build.mjs`,
+      log: () => {},
+    })!;
+
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let buildCalls = 0;
+    let releaseFirst!: () => void;
+    const holdFirst = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const events: string[] = [];
+    const restart = vi.fn();
+
+    const reload = createSelfReload({
+      busyReasons: () => [],
+      unresumableReasons: () => [],
+      subscribe: () => () => {},
+      quietMs: 20,
+      build: async (signal) => {
+        buildCalls += 1;
+        const idx = buildCalls;
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        events.push(`start:${idx}`);
+        try {
+          if (idx === 1) {
+            const res = await hangingBuild.build(signal);
+            await holdFirst;
+            return res;
+          }
+          return await fastBuild.build(signal);
+        } finally {
+          events.push(`end:${idx}`);
+          inFlight -= 1;
+        }
+      },
+      applyBuild: () => fastBuild.apply(),
+      cancelBuild: () => {
+        events.push("cleanup");
+        hangingBuild.cleanup();
+      },
+      restart,
+      log: () => {},
+    });
+
+    // 1. Start hanging real build, wait until staging file exists, then cancel.
+    reload.request({ build: true, by: "pm 1" });
+    await vi.waitFor(() => expect(existsSync(join(stagingDir, "index.html"))).toBe(true));
+    reload.cancel({ by: "pm 1" });
+
+    // 2. Immediately re-request --build before the first build settles; build #2 must wait.
+    reload.request({ build: true, by: "pm 1" });
+    expect(reload.status().state).toBe("building");
+    expect(buildCalls).toBe(1);
+    expect(maxConcurrent).toBe(1);
+
+    // 3. Let build #1 finish exiting: cleanup runs before build #2 starts, and build #2 completes and swaps cleanly.
+    releaseFirst();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+    expect(buildCalls).toBe(2);
+    expect(maxConcurrent).toBe(1);
+    expect(events.indexOf("end:1")).toBeLessThan(events.indexOf("start:2"));
+    expect(readFileSync(join(staticDir, "index.html"), "utf8")).toBe("v2");
+    expect(existsSync(stagingDir)).toBe(false);
+    expect(existsSync(readyDir)).toBe(false);
+    expect(fastBuild.recover()).toBeNull();
   });
 });

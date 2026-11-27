@@ -58,6 +58,7 @@ export interface AgentApiOptions {
     | "workerStartFolder"
     | "workerPrTarget"
     | "graphPrTargets"
+    | "graphNeedsCapabilityInventory"
     | "graphAutoDispatchVendors"
     | "workerTranscriptTarget"
     | "shareHubFiles"
@@ -630,6 +631,10 @@ function createPreparation(opts: AgentApiOptions) {
       const folder = ledger.workerStartFolder(sessionId);
       if (folder !== null) context.workspace = await probeWorkspace(folder);
       if (signal.aborted) return context;
+      if (opts.capabilityInventory !== undefined && (ledger.graphNeedsCapabilityInventory?.(sessionId, command, body) ?? true)) {
+        context.capabilityInventory = await opts.capabilityInventory.get({ projectDir: folder });
+        if (signal.aborted) return context;
+      }
       if (opts.refreshVendor) {
         const refresh = opts.refreshVendor;
         await Promise.all((ledger.graphAutoDispatchVendors?.(sessionId, command, body) ?? []).map((v) => refresh(v)));

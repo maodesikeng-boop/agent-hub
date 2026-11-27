@@ -97,7 +97,7 @@ export function createIn(
   const goal = validateGraphGoal(spec.goal);
   assertActiveGraphQuota(g, project.id);
   const steps = list.map((n, index) => normalizeNewStep(n, index, list, sequential, caller.vendor as AgentVendor, g.modelCatalog));
-  for (const step of steps) assertStepSandboxRequest(g, caller.pmId, caller.vendor as AgentVendor, step);
+  for (const step of steps) assertStepSandboxRequest(g, caller.pmId, caller.vendor as AgentVendor, step, context?.capabilityInventory);
   const edges = edgesOf(steps, spec.edges);
   const topoOrder = validateDagAndOrder(
     steps.map((n) => n.key),

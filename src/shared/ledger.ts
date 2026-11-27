@@ -325,6 +325,7 @@ export interface Ledger extends LedgerHandoverWork {
   reconcileWorkerGraph?(workerId: WorkerId): Promise<void> | null;
   reconcileHubBranches?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<void> | null;
   graphPrTargets?(sessionId: SessionId, graphId?: TaskGraphId): GraphPrTarget[];
+  graphNeedsCapabilityInventory?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): boolean;
   graphAutoDispatchVendors?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): AgentVendor[];
   graphDeliveryProbeTarget?(messageId: MessageId): {
     graphId: TaskGraphId;

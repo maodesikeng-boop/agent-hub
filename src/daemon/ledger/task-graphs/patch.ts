@@ -12,7 +12,7 @@ import type {
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { checkHubLimit, formatHubLimitViolations, type HubLimitViolation } from "../../../shared/hub-limits.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
-import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
+import type { CapabilityInventory, WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import { readWorkerCapabilities, writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import { syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
@@ -201,7 +201,14 @@ function patchedEdges(
   return [...edgeSet.values()];
 }
 
-function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNodeDbRow, vendor: AgentVendor, pmId: number): PreparedUpdate {
+function prepareUpdate(
+  g: TaskGraphCtx,
+  u: PatchTaskGraphNodeInput,
+  cur: TaskNodeDbRow,
+  vendor: AgentVendor,
+  pmId: number,
+  inventory?: CapabilityInventory,
+): PreparedUpdate {
   const nextTitle = u.title !== undefined ? validateNodeTitle(u.title) : cur.title;
   const nextBrief = u.brief !== undefined ? validateStepBrief(u.brief, cur.node_key) : cur.brief;
   const vendorChanged = u.vendor !== undefined && (u.vendor?.trim() || null) !== cur.vendor;
@@ -225,7 +232,7 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
   assertStepSandboxRequest(g, pmId, vendor, {
     noOuterSandbox: nextNoOuterSandbox, vendor: agent.vendor, readonly: nextReadonly, review: nextReview,
     capabilities: nextCapabilities ?? readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }),
-  });
+  }, inventory);
   return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextNoOuterSandbox, nextCapabilities, nextConfirm, nextReview, nextSlot };
 }
 
@@ -286,7 +293,7 @@ interface PatchPlan {
   nextGoal: string | null | undefined;
 }
 
-function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch">): PatchPlan {
+function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch">, context?: HubCallContext): PatchPlan {
   const { patch, lists } = parsePatchSpec(args.specJson);
   validatePatchText(patch, lists);
   const graphRow = resolveGraphForPm(g.db, caller.pmId, { graphId: args.graphId, requireActive: true });
@@ -297,12 +304,12 @@ function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch
   const removeKeySet = takeRemovals(nodesByKey, lists.remove);
   const vendor = caller.vendor as AgentVendor;
   const added = normalizeAdded(g, lists, nodesByKey, vendor);
-  for (const step of added) assertStepSandboxRequest(g, caller.pmId, vendor, step);
+  for (const step of added) assertStepSandboxRequest(g, caller.pmId, vendor, step, context?.capabilityInventory);
   const finalEdges = patchedEdges(existingEdges, removeKeySet, patch, added, lists.update, nodesByKey);
   const topoOrder = validateDagAndOrder([...nodesByKey.keys(), ...added.map((a) => a.key)], finalEdges);
   const rankOf = new Map<TaskNodeKey, number>(topoOrder.map((k, idx) => [k, idx]));
   const nextGoal = patch.goal !== undefined ? validateGraphGoal(patch.goal) : undefined;
-  const updates = lists.update.map((u) => prepareUpdate(g, u, nodesByKey.get(validateNodeKey(u.key))!, vendor, caller.pmId));
+  const updates = lists.update.map((u) => prepareUpdate(g, u, nodesByKey.get(validateNodeKey(u.key))!, vendor, caller.pmId, context?.capabilityInventory));
   const updatedByKey = new Map(updates.map((u) => [u.cur.node_key, u]));
   const doneKeys = new Set(doneSteps.map((step) => step.node_key));
   assertReviewStepsHaveTarget(
@@ -349,7 +356,7 @@ export function patchIn(
   context?: HubCallContext,
 ): HubResult<"graph.patch"> {
   g.persona.assertPmNotArchived(caller.pmId);
-  const plan = planPatch(g, caller, args);
+  const plan = planPatch(g, caller, args, context);
   const { graphRow, existingNodes } = plan;
   const wasAllSettled = existingNodes.length > 0 && existingNodes.every((n) => n.status === "done");
   applyPatchIn(g, p, plan);

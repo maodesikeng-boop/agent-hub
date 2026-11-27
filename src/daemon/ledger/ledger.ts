@@ -641,6 +641,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     isSystemMessageCurrent: (id) => isSystemMessageCurrent(db, id, ctx.now(), workers.isWorkerInFlight, workers.backgroundWaits.isReminderCurrent),
     retireStaleSystemMessage: messages.retireStaleSystemMessage,
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
+    graphNeedsCapabilityInventory: (sessionId, command, body) =>
+      taskGraphs.graphNeedsCapabilityInventory(getAgentSession(db, sessionId), command, body),
     graphAutoDispatchVendors: (sessionId, command, body) =>
       taskGraphs.graphAutoDispatchVendors(getAgentSession(db, sessionId), command, body),
     graphDeliveryProbeTarget: taskGraphs.graphDeliveryProbeTarget,
