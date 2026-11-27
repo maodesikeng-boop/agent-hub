@@ -7,10 +7,12 @@ import {
   createBaseSessionState,
   entryParts,
   errorMessage,
+  formatStartupExitDetail,
   type ClosingReason,
   type PendingEntry,
   type StartupOutcome,
 } from "../../../daemon/driver/base-driver.ts";
+import { isNestedMacOsSandboxError } from "../../../shared/errors.ts";
 import { signalChild } from "../../../daemon/driver/process.ts";
 import {
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
@@ -63,6 +65,24 @@ import type { AcpDriverConfig, AcpDriverOptions, AcpLaunchContext } from "./type
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function acpStartupFailure(outcome: Extract<StartupOutcome, { kind: "failed" }>): DriverError {
+  const detail =
+    isNestedMacOsSandboxError(outcome.stderr, outcome.exitCode) ||
+    isNestedMacOsSandboxError(outcome.errorMessage ?? "", outcome.exitCode)
+      ? formatStartupExitDetail({
+          vendorLabel: "ACP",
+          phase: "initialization",
+          exitCode: outcome.exitCode,
+          signal: outcome.signal,
+          stderr: outcome.stderr,
+          errorMessage: outcome.errorMessage,
+        })
+      : outcome.errorMessage ||
+        outcome.stderr.trim() ||
+        `ACP process exited before initialization (code=${outcome.exitCode}, signal=${outcome.signal})`;
+  return new DriverError("spawn_failed", detail);
 }
 
 
@@ -383,11 +403,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       if (outcome.timedOut) {
         throw new DriverError("start_timeout", `timed out waiting for ACP session initialization (${st.id})`);
       }
-      const detail =
-        outcome.errorMessage ||
-        outcome.stderr.trim() ||
-        `ACP process exited before initialization (code=${outcome.exitCode}, signal=${outcome.signal})`;
-      throw new DriverError("spawn_failed", detail);
+      throw acpStartupFailure(outcome);
     }
 
     if (st.ended || proc.closing || st.proc !== proc) {
@@ -496,11 +512,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     if (outcome.timedOut) {
       throw new DriverError("start_timeout", `timed out waiting for ACP session initialization (${st.id})`);
     }
-    const detail =
-      outcome.errorMessage ||
-      outcome.stderr.trim() ||
-      `ACP process exited before initialization (code=${outcome.exitCode}, signal=${outcome.signal})`;
-    throw new DriverError("spawn_failed", detail);
+    throw acpStartupFailure(outcome);
   }
 
   async #wrapLaunch(

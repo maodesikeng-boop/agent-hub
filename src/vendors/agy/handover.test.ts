@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { checkAgyUserLine } from "./protocol.ts";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV, AGY_MACOS_LOGIN_KEYCHAIN_REL } from "./paths.ts";
 import { writeAgyPromptRules } from "./rules.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import type { ForkSource } from "../../daemon/handover/forker.ts";
@@ -373,6 +374,27 @@ describe.skipIf(process.platform === "win32")("write：--conversation <新编号
     const deadline = Date.now() + 3_000;
     while (Date.now() < deadline && isAlive(bgPid)) await new Promise((r) => setTimeout(r, 20));
     expect(isAlive(bgPid)).toBe(false);
+  });
+
+  it("acceptance S3: macOS isolated HOME without login.keychain-db injects AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 for copy-fork write", async () => {
+    feed(result());
+    const isolatedHome = mkdtempSync(join(tmpdir(), "agy-fork-home-"));
+    try {
+      const srcIsolated = source({
+        launch: { promptFile: "/p.md", env: { REC: rec, PATH: process.env.PATH ?? "", HOME: isolatedHome }, fingerprint: "fp" },
+      });
+      await forker({ platform: "darwin" }).write(srcIsolated, fakeHandle, "写", signal());
+      const isolatedEnv = readFileSync(join(rec, "env"), "utf8");
+      expect(isolatedEnv).toContain(`${AGY_FORCE_FILE_TOKEN_STORAGE_ENV}=1`);
+
+      mkdirSync(join(isolatedHome, "Library", "Keychains"), { recursive: true });
+      writeFileSync(join(isolatedHome, AGY_MACOS_LOGIN_KEYCHAIN_REL), "");
+      await forker({ platform: "darwin" }).write(srcIsolated, fakeHandle, "写", signal());
+      const normalEnv = readFileSync(join(rec, "env"), "utf8");
+      expect(normalEnv).not.toContain(`${AGY_FORCE_FILE_TOKEN_STORAGE_ENV}=1`);
+    } finally {
+      rmSync(isolatedHome, { recursive: true, force: true });
+    }
   });
 });
 

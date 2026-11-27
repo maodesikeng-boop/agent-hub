@@ -8,6 +8,7 @@ import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST, type AgentVe
 import { DESKTOP_PRODUCT } from "../../src/daemon/ui-server/types.ts";
 import { VENDOR_FALLBACK_PATHS, resolveHubPaths } from "../../src/shared/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import { sandboxAllowsNestedSandbox } from "../sandbox-probes.ts";
 import { isInsideBench } from "./bench-paths.ts";
@@ -145,6 +146,7 @@ export function localDaemonEnv(input: DaemonEnvInput): Record<string, string> {
     PATH: benchPath(instance, nodeBin, platform, baseEnv.PATH ?? baseEnv.Path),
     HOME: instance.userHome,
     USERPROFILE: instance.userHome,
+    ...(platform === "darwin" ? { [AGY_FORCE_FILE_TOKEN_STORAGE_ENV]: "1" } : {}),
     [ENV_HOME]: instance.dataDir,
     [ENV_PORT]: String(instance.uiPort),
     [ENV_MESH_PORT]: String(instance.meshPort),

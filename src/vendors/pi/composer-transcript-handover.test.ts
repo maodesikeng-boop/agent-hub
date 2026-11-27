@@ -1,3 +1,6 @@
+import { EventEmitter, once } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +12,7 @@ import { writeFakePiBinary } from "./fixtures/fake-pi.ts";
 import { PI_NATIVE_FORKER_ID, createPiForker } from "./handover.ts";
 import * as piPaths from "./paths.ts";
 import { piSessionDirName, piSessionFiles, piSessionsRoot, piTranscriptPath } from "./transcript.ts";
-import { removeTreeWithRetry } from "../../daemon/platform/index.ts";
+import { removeTreeWithRetry, spawnOwnedProcess } from "../../daemon/platform/index.ts";
 
 const tempDirs: string[] = [];
 
@@ -51,7 +54,6 @@ describe("Pi 输入框命令与技能加载（composer.ts）", () => {
     const composer = createPiComposer({
       executablePath: fake.binPath,
       env: { FAKE_PI_SCRIPT: fake.scriptPath, FAKE_PI_LOG: fake.logPath },
-      timeoutMs: 3_000,
     });
 
     const cmds = await composer.queryCommands({ cwd: dir, addDirs: [] }, new AbortController().signal);
@@ -212,7 +214,17 @@ describe("Pi 复制会话写交接（handover.ts）", () => {
     const dir = makeTempDir();
     const fake = writeFakePiBinary(dir, { ignoreStdinEnd: true, turns: [{ failPromptError: "model not configured" }] });
     const env = { FAKE_PI_SCRIPT: fake.scriptPath, FAKE_PI_LOG: fake.logPath, PI_CODING_AGENT_DIR: join(dir, ".pi", "agent") };
-    const forker = createPiForker({ homeDir: dir, env });
+    const spawned: ChildProcess[] = [];
+    const forker = createPiForker({
+      homeDir: dir,
+      env,
+      killWaitMs: 100,
+      spawnProcess: (command, args, opts) => {
+        const child = spawnOwnedProcess(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"] }).child;
+        spawned.push(child);
+        return child;
+      },
+    });
     const src: ForkSource = {
       sessionId: 3,
       vendor: "pi",
@@ -232,13 +244,15 @@ describe("Pi 复制会话写交接（handover.ts）", () => {
         return false;
       }
     };
-    const pidOf = (nth: number) => fake.readLogs().filter((e) => e.kind === "argv")[nth]!.pid;
 
     // prompt 被拒：pi 还活着（不理 EOF）也要立即补杀，不留孤儿
     const failed = await forker.fork(src, new AbortController().signal);
     await expect(forker.write(src, failed, "写交接", new AbortController().signal)).rejects.toThrow(/model not configured/);
-    const failedPid = pidOf(0);
-    await vi.waitFor(() => expect(alive(failedPid)).toBe(false), { timeout: 3_000 });
+    const failedChild = spawned[0]!;
+    if (failedChild.exitCode === null && failedChild.signalCode === null) {
+      await once(failedChild, "exit");
+    }
+    expect(alive(failedChild.pid!)).toBe(false);
     expect(fake.readLogs().find((e) => e.kind === "argv")?.argv).toContain("--no-approve");
 
     // 正常写完：交回时进程已经退出
@@ -246,7 +260,7 @@ describe("Pi 复制会话写交接（handover.ts）", () => {
     const ok = await forker.fork(src, new AbortController().signal);
     const written = await forker.write(src, ok, "写交接", new AbortController().signal);
     expect(written.text).toBe("交接");
-    expect(alive(pidOf(1))).toBe(false);
+    expect(alive(spawned[1]!.pid!)).toBe(false);
   });
 
   it("找不到会话文件、编号又不像 pi 的编号（如以 - 开头）时不起进程，退回本会话交接", async () => {
@@ -293,5 +307,52 @@ describe("Pi 复制会话写交接（handover.ts）", () => {
     await expect(forker.write(src, handle, "写交接", new AbortController().signal)).rejects.toBeInstanceOf(
       ForkUnsupportedError,
     );
+  });
+
+  it("acceptance S6: respects custom killWaitMs under fake timers without waiting 2s wall-clock", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const dir = makeTempDir();
+      const child = Object.assign(new EventEmitter(), {
+        pid: undefined,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(() => {
+          child.signalCode = "SIGKILL";
+          child.emit("exit", null, "SIGKILL");
+          return true;
+        }),
+      });
+      const forker = createPiForker({
+        homeDir: dir,
+        killWaitMs: 50,
+        spawnProcess: () => child as unknown as ChildProcess,
+      });
+      const src: ForkSource = {
+        sessionId: 9,
+        vendor: "pi",
+        vendorSessionId: "sess-kill-wait",
+        cwd: dir,
+        addDirs: [],
+        model: null,
+        effort: null,
+        executablePath: "/bin/pi",
+        launch: { promptFile: "", env: {}, fingerprint: "fp-kw" },
+      };
+      const handle = await forker.fork(src, new AbortController().signal);
+      const writing = forker.write(src, handle, "写交接", new AbortController().signal);
+      child.stdout.write(`${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input: 1, output: 1 } } })}\n`);
+      child.stdout.write(`${JSON.stringify({ type: "agent_settled", aborted: false })}\n`);
+      child.stdout.write(`${JSON.stringify({ id: "3", type: "response", command: "get_session_stats", success: true, data: {} })}\n`);
+      await Promise.resolve();
+      vi.advanceTimersByTime(50);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect((await writing).text).toBe("ok");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
