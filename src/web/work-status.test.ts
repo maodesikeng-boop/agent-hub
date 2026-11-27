@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskNode } from "../shared/index.ts";
-import { completedWorkStatusOf, graphDeliveryOf, graphProgressOf, nodeWorkStatusOf, workerWorkStatusOf } from "./work-status.ts";
+import { completedWorkStatusOf, graphDeliveryOf, graphProgressOf, graphSlotQueueOf, nodeWorkStatusOf, workerWorkStatusOf } from "./work-status.ts";
 
 describe("nodeWorkStatusOf", () => {
   it("maps done and skipped steps to done", () => {
@@ -104,5 +104,28 @@ describe("graphDeliveryOf (D-A2 option 1)", () => {
   it("S1.2: a graph with unfinished steps, or one already finished, has no delivery row", () => {
     expect(graphDeliveryOf(graphOf("active", [node("impl", "done", 100), node("review-real", "running", 200)]))).toEqual({ header: "1/2 steps", row: null });
     expect(graphDeliveryOf(graphOf("completed", [node("impl", "done", 100)], 100))).toEqual({ header: "1/1 steps", row: null });
+  });
+});
+
+describe("graphSlotQueueOf (S7.2)", () => {
+  type QueueNode = Pick<TaskNode, "key" | "title" | "status" | "slot" | "slotQueue">;
+  const graphOf = (status: "active" | "completed", nodes: QueueNode[]) => ({ status, nodes }) as unknown as Parameters<typeof graphSlotQueueOf>[0];
+  const holder = { graphId: 86, nodeKey: "review-real", workerId: 1336 };
+
+  it("names the slot and the holder, and counts the steps ahead after the first", () => {
+    const rows = graphSlotQueueOf(graphOf("active", [
+      { key: "review", title: "Review", status: "running", slot: null },
+      { key: "review-real", title: "Real run", status: "pending", slot: "real-env", slotQueue: { position: 1, holder } },
+      { key: "bench", title: "Bench", status: "pending", slot: "real-env", slotQueue: { position: 3, holder } },
+    ]));
+    expect(rows).toEqual([
+      { key: "review-real", title: "Real run", text: "Queued for real-env · behind #86 review-real" },
+      { key: "bench", title: "Bench", text: "Queued for real-env · behind #86 review-real and 2 more" },
+    ]);
+  });
+
+  it("has no rows for a running holder, a step without a queue, or a graph that is no longer active", () => {
+    expect(graphSlotQueueOf(graphOf("active", [{ key: "a", title: "A", status: "running", slot: "real-env" }]))).toEqual([]);
+    expect(graphSlotQueueOf(graphOf("completed", [{ key: "a", title: "A", status: "pending", slot: "real-env", slotQueue: { position: 1, holder } }]))).toEqual([]);
   });
 });

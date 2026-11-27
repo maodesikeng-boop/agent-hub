@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo, StateSnapshot, TaskGraph, TaskNode } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import * as ActiveTabMod from "./components/ActiveTab.tsx";
+import { GraphSlotQueueRows } from "./components/GraphSlotQueueRows.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import {
   FakeApi,
@@ -25,6 +26,7 @@ import {
   messageChange,
   sessionChange,
 } from "./test-utils.ts";
+import { graphSlotQueueOf } from "./work-status.ts";
 
 const GRAPH_ID = 7;
 const DECIDE_PATH = new RegExp(`^/api/task-graphs/${GRAPH_ID}/nodes/gate/decide$`);
@@ -689,6 +691,20 @@ function completedPageFor(title: string, outcome: "done" | "cancelled") {
     },
   };
 }
+
+describe("Slot queue text", () => {
+  it("wraps the full queue text in the dialog and the work panel instead of truncating the position", async () => {
+    const holder = { graphId: 1, nodeKey: "review-real", workerId: 4 };
+    const queued = { ...graph(), nodes: [makeNode({ key: "bench", title: "Real-environment review", slot: "real-env", slotQueue: { position: 3, holder } })] };
+    render(<TaskGraphDialog open graph={queued} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+    const dialog = await screen.findByRole("dialog", { name: queued.title });
+    const text = within(dialog).getByText("Queued for real-env · behind #1 review-real and 2 more");
+    expect(text.className).not.toMatch(/\btruncate\b/u);
+    render(<GraphSlotQueueRows rows={graphSlotQueueOf(queued)} onOpenStep={() => {}} />);
+    const row = screen.getAllByText("Queued for real-env · behind #1 review-real and 2 more").find((el) => !dialog.contains(el))!;
+    expect(row.className).not.toMatch(/\btruncate\b/u);
+  });
+});
 
 describe("Settling a card in task graph history", () => {
   it("keeps a pending card open in TaskGraphDialog on a completed graph and sends askMessageId when decided", async () => {

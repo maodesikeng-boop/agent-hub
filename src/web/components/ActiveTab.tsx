@@ -6,8 +6,9 @@ import { graphFlowOf } from "../graph-flow.ts";
 import type { WorkerEntry } from "../selectors.ts";
 import { ChevronRight, Maximize2 } from "../ui/icons.ts";
 import { stepTargetOf, type ActiveWork } from "../work-panel-model.ts";
-import { graphDeliveryOf, workerWorkStatusOf, WORK_STATUS_LABEL } from "../work-status.ts";
+import { graphDeliveryOf, graphSlotQueueOf, workerWorkStatusOf, WORK_STATUS_LABEL } from "../work-status.ts";
 import { GraphDeliveryRow } from "./GraphDeliveryRow.tsx";
+import { GraphSlotQueueRows } from "./GraphSlotQueueRows.tsx";
 import { GraphCanvas } from "./GraphCanvas.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
 
@@ -40,6 +41,7 @@ const GraphSection = memo(function GraphSection({
 }) {
   const flow = useMemo(() => graphFlowOf(graph), [graph]);
   const delivery = graphDeliveryOf(graph);
+  const slotQueue = graphSlotQueueOf(graph);
   const targetByKey = useMemo(() => {
     const map = new Map<TaskNodeKey, ReturnType<typeof stepTargetOf>>();
     for (const node of graph.nodes) map.set(node.key, stepTargetOf(node, workers, asks, graph.id));
@@ -62,6 +64,8 @@ const GraphSection = memo(function GraphSection({
     [targetByKey, onOpenWorker, onOpenAsk, onExpandGraph, graph],
   );
 
+  const handleOpenQueued = useCallback((key: TaskNodeKey) => onExpandGraph(graph, key), [onExpandGraph, graph]);
+
   return (
     <section aria-label={graph.title} className="work-panel-section">
       <div className="mb-2.5 flex items-center justify-between gap-3">
@@ -82,6 +86,7 @@ const GraphSection = memo(function GraphSection({
         </div>
       </div>
       <GraphCanvas flow={flow} orientation="auto" paper onOpenStep={handleOpenStep} stepInteractive={stepInteractive} />
+      {slotQueue.length > 0 && <GraphSlotQueueRows rows={slotQueue} onOpenStep={handleOpenQueued} />}
       {delivery.row !== null && <GraphDeliveryRow row={delivery.row} />}
     </section>
   );

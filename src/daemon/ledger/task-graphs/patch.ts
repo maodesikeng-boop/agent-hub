@@ -35,8 +35,10 @@ import {
   validateStepBrief,
   validateStepCapabilities,
   validateStepMaxTime,
+  validateStepSlot,
   type NewStep,
 } from "./spec.ts";
+import { writeStepSlot } from "./slots.ts";
 import { getGraphRow, insertEdgeRow, insertStepRow, listStepRows, publishGraphIn, resolveGraphForPm } from "./store.ts";
 import { formatGraphText, unlockedNoteOf } from "./text.ts";
 import type { PmCaller, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
@@ -62,6 +64,7 @@ interface PreparedUpdate {
   nextCapabilities: WorkerCapabilities | null;
   nextConfirm: number;
   nextReview: number;
+  nextSlot: string | null | undefined;
 }
 
 const isLocked = (n: TaskNodeDbRow): boolean => n.status === "running" || n.status === "done" || n.active_worker_id !== null;
@@ -219,11 +222,12 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
   const nextConfirm = u.confirm !== undefined ? (u.confirm ? 1 : 0) : cur.confirm;
   const nextReview = u.review !== undefined ? (u.review ? 1 : 0) : cur.review;
   const nextBase = validateStepBase(u.base !== undefined ? u.base : cur.base, nextReview === 1);
+  const nextSlot = u.slot !== undefined ? validateStepSlot(u.slot, cur.node_key) : undefined;
   assertStepSandboxRequest(g, pmId, vendor, {
     noOuterSandbox: nextNoOuterSandbox, vendor: agent.vendor, readonly: nextReadonly, review: nextReview,
     capabilities: nextCapabilities ?? readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }),
   });
-  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextNoOuterSandbox, nextCapabilities, nextConfirm, nextReview };
+  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextNoOuterSandbox, nextCapabilities, nextConfirm, nextReview, nextSlot };
 }
 
 function writeUpdateIn(g: TaskGraphCtx, u: PreparedUpdate, t: number): void {
@@ -255,6 +259,7 @@ function writeUpdateIn(g: TaskGraphCtx, u: PreparedUpdate, t: number): void {
   );
   writeStepNoOuterSandbox(g.db, cur.id, u.nextNoOuterSandbox);
   if (u.nextCapabilities !== null) writeWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }, u.nextCapabilities);
+  if (u.nextSlot !== undefined) writeStepSlot(g.db, cur.id, u.nextSlot);
 }
 
 function applySkips(g: TaskGraphCtx, rawSkip: readonly TaskNodeKey[], nodesByKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>, t: number): void {

@@ -782,12 +782,12 @@ export function taskNodeStateFromLegacy(status: string): TaskNodeState {
 }
 
 export function taskNodeStatusText(
-  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval">,
+  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker" | "sandboxApproval" | "slot" | "slotQueue">,
   viewer: "pm" | "user",
 ): string {
   switch (node.status) {
     case "pending":
-      return "没轮到";
+      return node.slotQueue !== undefined && node.slot != null ? `排队等名额 ${node.slot}` : "没轮到";
     case "running":
       return "在干";
     case "waiting":
@@ -857,6 +857,10 @@ export interface TaskNode {
   confirm?: boolean;
   review?: boolean;
   base?: string | null;
+  /** Name of the resource on this computer the step queues for; null or absent when it needs none. */
+  slot?: string | null;
+  /** Present while the step waits for its slot: first-in, first-out position and the current holder. */
+  slotQueue?: { position: number; holder: { graphId: TaskGraphId; nodeKey: TaskNodeKey; workerId: WorkerId | null } };
   status: TaskNodeStatus;
   waitingFor: TaskNodeWaitingFor | null;
   skipped: boolean;

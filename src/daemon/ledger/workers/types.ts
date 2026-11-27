@@ -1,6 +1,6 @@
 import type { createWorkerAppApprovals } from "./app-approvals.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, WorkerId } from "../../../shared/domain.ts";
-import type { WorkerHubStatus } from "../../../shared/hub.ts";
+import type { HubArgs, WorkerHubStatus, WorkerStartQueuedResult } from "../../../shared/hub.ts";
 import type { ReviewTarget, ReviewVerifyResult } from "../../../shared/review.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { ParsedWorkerReport } from "../../../shared/worker.ts";
@@ -18,6 +18,7 @@ import type { LedgerUserBlockers } from "../user-blockers.ts";
 
 export interface LedgerWorkersTaskGraphHooks {
   prepareWorkerBind: (pmId: PmId, nodeKey: string, graphId?: number) => WorkerBindTarget;
+  queueWorkerStartIn: (p: Pending, target: WorkerBindTarget, args: HubArgs<"worker.start">) => WorkerStartQueuedResult | null;
   bindWorkerStartedIn: (
     p: Pending,
     target: WorkerBindTarget,
@@ -44,6 +45,7 @@ export interface LedgerWorkersTaskGraphHooks {
   ) => string | null;
   onWorkerUserBlockedIn: (p: Pending, workerId: WorkerId, blocker: UserBlocker) => string | null;
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
+  isWorkerSlotHeldElsewhere: (workerId: WorkerId) => boolean;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphWorkspacePlan: (workerId: WorkerId) => StepWorkspacePlan | undefined;
   workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;

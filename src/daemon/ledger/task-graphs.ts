@@ -15,6 +15,8 @@ import {
   purgeExpiredBatch,
 } from "./task-graphs/overview.ts";
 import { patchIn } from "./task-graphs/patch.ts";
+import { drainSlotsIn, graphsQueuedOn, queueWorkerStartIn, slotQueueLinesOf } from "./task-graphs/slot-queue.ts";
+import { freeSlotsWithWaiters } from "./task-graphs/slots.ts";
 import { onWorkerTurnReportIn } from "./task-graphs/turn-report.ts";
 import type { TaskGraphCtx, TaskGraphOptions } from "./task-graphs/types.ts";
 import {
@@ -26,6 +28,7 @@ import {
   onWorkerUserBlockedIn,
   prepareWorkerBind,
   releaseUserBlockedStepsIn,
+  isWorkerSlotHeldElsewhere,
   workerGraphStatus,
   workerGraphWorkspacePlan,
 } from "./task-graphs/worker-hooks.ts";
@@ -61,6 +64,33 @@ export function createLedgerTaskGraphs(
     <A extends unknown[], R>(fn: (g: TaskGraphCtx, ...args: A) => R) =>
     (...args: A): R =>
       fn(g, ...args);
+  let draining = false;
+  let publishedQueues = new Map<string, string>();
+  const changedQueues = (): string[] => {
+    const lines = slotQueueLinesOf(g);
+    const changed = [...new Set([...lines.keys(), ...publishedQueues.keys()])].filter((slot) => lines.get(slot) !== publishedQueues.get(slot));
+    publishedQueues = lines;
+    return changed;
+  };
+  // Commits made while draining re-enter here and return at once; the loop below rechecks after each of its writes instead.
+  const drainSlotsAfterCommit = (): void => {
+    if (draining) return;
+    draining = true;
+    try {
+      let drained: string | null = null;
+      for (;;) {
+        const free = freeSlotsWithWaiters(g.db).join("\n");
+        // A drain that left the same slots free made no progress, so repeating it would loop.
+        if (free === "" || free === drained) break;
+        drained = free;
+        ctx.write((p) => drainSlotsIn(g, p));
+      }
+      const graphIds = graphsQueuedOn(g, changedQueues());
+      if (graphIds.length > 0) ctx.write((p) => { for (const graphId of graphIds) pushSlimGraphIn(g, p, graphId); });
+    } finally {
+      draining = false;
+    }
+  };
   const bindDb =
     <A extends unknown[], R>(fn: (db: TaskGraphCtx["db"], ...args: A) => R) =>
     (...args: A): R =>
@@ -86,11 +116,14 @@ export function createLedgerTaskGraphs(
     skipNode: bind(skipNode),
     cancelGraph: bind(cancelGraph),
     prepareWorkerBind: bind(prepareWorkerBind),
+    queueWorkerStartIn: bind(queueWorkerStartIn),
+    drainSlotsAfterCommit,
     bindWorkerStartedIn: bind(bindWorkerStartedIn),
     onWorkerTurnReportIn: bind(onWorkerTurnReportIn),
     onWorkerFailedIn: bind(onWorkerFailedIn),
     onWorkerUserBlockedIn: bind(onWorkerUserBlockedIn),
     releaseUserBlockedStepsIn: bind(releaseUserBlockedStepsIn),
+    isWorkerSlotHeldElsewhere: bind(isWorkerSlotHeldElsewhere),
     notifyUserBlockedStepsIn: bind(notifyUserBlockedStepsIn),
     onWorkerResumedIn: bind(onWorkerResumedIn),
     onWorkerEndedIn: bind(onWorkerEndedIn),

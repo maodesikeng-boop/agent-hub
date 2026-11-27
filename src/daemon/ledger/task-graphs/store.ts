@@ -7,6 +7,7 @@ import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import type { MessageDbRow } from "../rows.ts";
 import { parseJsonOr, toTaskNode } from "./rows.ts";
+import { slotViewsOf, writeStepSlot } from "./slots.ts";
 import type { NewStep } from "./spec.ts";
 import type { GraphMaps, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
@@ -150,10 +151,12 @@ export function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], in
   const waitingIds = rows.filter((n) => n.status === "waiting" && n.waiting_for === "user" && n.active_worker_id !== null).map((n) => n.id);
   const approvals = pendingSandboxCardsForSteps(g.db, waitingIds);
   const pendingAsks = pendingStepAskIds(g.db, rows);
+  const slots = slotViewsOf(g.db, rows.map((n) => n.id));
   return rows.map((n) => toTaskNode(n, includeDetails, {
     userBlocker: blockers.get(n.id),
     sandboxApproval: approvals.get(n.id),
     ...(n.gate_ask_message_id !== null ? { gateAskPending: pendingAsks.has(n.gate_ask_message_id) } : {}),
+    slot: slots.get(n.id),
   }));
 }
 
@@ -268,6 +271,7 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
   ).lastInsertRowid;
   writeWorkerCapabilities(db, { table: "task_graph_step_capabilities", stepId }, n.capabilities);
   if (n.noOuterSandbox) writeStepNoOuterSandbox(db, stepId, true);
+  if (n.slot !== null) writeStepSlot(db, Number(stepId), n.slot);
 }
 
 export const insertEdgeRow = (db: Db, graphId: TaskGraphId, e: TaskEdge): void => {

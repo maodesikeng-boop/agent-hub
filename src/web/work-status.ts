@@ -83,3 +83,37 @@ export function graphDeliveryOf(graph: DeliveryGraph, watch: DeliveryWatch | nul
   deliveryByGraph.set(graph, { watch, delivery });
   return delivery;
 }
+
+export interface SlotQueueRow {
+  key: TaskNode["key"];
+  title: string;
+  /** For example `Queued for real-env · behind #86 review-real`. */
+  text: string;
+}
+
+type SlotQueueGraph = Pick<TaskGraph, "status" | "nodes">;
+const NO_SLOT_QUEUE: readonly SlotQueueRow[] = [];
+const slotQueueByGraph = new WeakMap<SlotQueueGraph, readonly SlotQueueRow[]>();
+
+export function slotQueueTextOf(node: Pick<TaskNode, "slot" | "slotQueue">): string | null {
+  if (node.slotQueue === undefined || node.slot == null) return null;
+  const { position, holder } = node.slotQueue;
+  const more = position > 1 ? ` and ${position - 1} more` : "";
+  return `Queued for ${node.slot} · behind #${holder.graphId} ${holder.nodeKey}${more}`;
+}
+
+/** Steps of an active graph that wait for a slot held elsewhere, in step order. */
+export function graphSlotQueueOf(graph: SlotQueueGraph): readonly SlotQueueRow[] {
+  const cached = slotQueueByGraph.get(graph);
+  if (cached !== undefined) return cached;
+  const rows: SlotQueueRow[] = [];
+  if (graph.status === "active") {
+    for (const node of graph.nodes) {
+      const text = node.status === "pending" ? slotQueueTextOf(node) : null;
+      if (text !== null) rows.push({ key: node.key, title: node.title, text });
+    }
+  }
+  const result = rows.length === 0 ? NO_SLOT_QUEUE : rows;
+  slotQueueByGraph.set(graph, result);
+  return result;
+}
