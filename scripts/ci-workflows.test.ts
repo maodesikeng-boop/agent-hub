@@ -40,6 +40,32 @@ interface Workflow {
 }
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
+const SANDBOX_LAUNCH_CALL = /\b(?:wrapInOsSandbox|wrapInReadonlyOsSandbox|prepareOsSandboxForLaunch|spawnInWriteScope)\s*\(/u;
+
+function productionSrcFiles(): Map<string, string> {
+  const srcRoot = join(REPO_ROOT, "src");
+  const files = (readdirSync(srcRoot, { recursive: true }) as string[])
+    .filter((file) => /\.tsx?$/u.test(file) && !/\.test\.tsx?$/u.test(file) && !/(^|[\\/])(test-helpers|test-utils)\.tsx?$/u.test(file) && !file.includes("fixture"))
+    .map((file) => relative(REPO_ROOT, join(srcRoot, file)).split("\\").join("/"))
+    .sort();
+  return new Map(files.map((file) => [file, readFileSync(join(REPO_ROOT, file), "utf8")]));
+}
+
+function findUncoveredSandboxCallers(
+  sources: ReadonlyMap<string, string>,
+  windowsPrPaths: readonly string[],
+  windowsPushPaths: readonly string[],
+  stampGlobs: readonly string[],
+): string[] {
+  const problems: string[] = [];
+  for (const [file, source] of sources) {
+    if (!SANDBOX_LAUNCH_CALL.test(source)) continue;
+    if (matchStampPaths([file], windowsPrPaths).length === 0) problems.push(`windows.yml pull_request.paths missing ${file}`);
+    if (matchStampPaths([file], windowsPushPaths).length === 0) problems.push(`windows.yml push.paths missing ${file}`);
+    if (matchStampPaths([file], stampGlobs).length === 0) problems.push(`REVIEW.md stamp paths missing ${file}`);
+  }
+  return problems;
+}
 
 /** Repo-relative paths of `entries` and every relative module they import at runtime; type-only imports are erased before node runs. */
 function runtimeImportClosure(entries: readonly string[]): string[] {
@@ -297,6 +323,24 @@ describe(".github/workflows", () => {
     const gateFiles = [".github/workflows/review-stamp.yml", "REVIEW.md", ...runtimeImportClosure(scripts)];
     const globs = parseStampPaths(readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8"));
     expect(gateFiles.filter((file) => matchStampPaths([file], globs).length === 0)).toEqual([]);
+  });
+
+  it("cover every OS-sandbox launch module in windows.yml path filters and REVIEW.md stamp paths", () => {
+    const win = workflow("windows.yml");
+    const prPaths = win.on.pull_request?.paths ?? [];
+    const pushPaths = win.on.push?.paths ?? [];
+    const stampGlobs = parseStampPaths(readFileSync(join(REPO_ROOT, "REVIEW.md"), "utf8"));
+    expect(findUncoveredSandboxCallers(productionSrcFiles(), prPaths, pushPaths, stampGlobs)).toEqual([]);
+
+    const synthetic = new Map<string, string>([
+      ["src/daemon/driver/write-scope.ts", "export function wrapInReadonlyOsSandbox() {}"],
+      ["src/daemon/watches/launch.ts", "await prepareOsSandboxForLaunch(prep, platform); wrapInReadonlyOsSandbox(base, input, platform);"],
+    ]);
+    expect(findUncoveredSandboxCallers(synthetic, prPaths, pushPaths, stampGlobs)).toEqual([
+      "windows.yml pull_request.paths missing src/daemon/watches/launch.ts",
+      "windows.yml push.paths missing src/daemon/watches/launch.ts",
+      "REVIEW.md stamp paths missing src/daemon/watches/launch.ts",
+    ]);
   });
 
   it("never let actions/setup-node cache a package manager that no earlier step in the job installed", () => {

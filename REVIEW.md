@@ -51,8 +51,8 @@ Each review round runs logic review and real-environment review in parallel, exc
 
 Before a PR that changes any path below can merge into `main`, its head commit needs a `bellwood/review` status of `success`. After independent review judges `PASS` on that head (both tracks, or logic review only for PRs that change only documentation and repository rules), the Project Manager posts the status with `node scripts/post-review-stamp.ts <PR> --sha <HEAD_SHA> [--account <login>]`. Branch protection requires this status. `.github/workflows/review-stamp.yml` reads this list from `main` and posts `bellwood/review` as `success` itself when a PR touches none of these paths. A new head needs a new review for these paths unless the gate carries a prior review success. The gate carries the stamp only when the head is the clean merge of the previous stamped head and `main` and the PR patch has the same changes. Patterns match like `Trigger:` patterns.
 
-- Sandboxes and write scopes: `src/daemon/driver/write-scope.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
-- Vendor launch arguments: `src/vendors/*/protocol.ts`, `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/*/capabilities.ts`, `src/vendors/_common/acp/**`
+- Sandboxes and write scopes: `src/daemon/driver/write-scope.ts`, `src/daemon/launch.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
+- Vendor launch arguments: `src/vendors/*/protocol.ts`, `src/vendors/*/driver.ts`, `src/vendors/*/launch.ts`, `src/vendors/*/spec.ts`, `src/vendors/*/capabilities.ts`, `src/vendors/_common/acp/**`
 - Ledger storage and schema: `src/daemon/store/**`, `migrations/**`
 - Device trust, relay, and Feishu: `src/daemon/mesh/**`, `src/relay/**`, `src/daemon/feishu/**`
 - Review mechanism and its gate: `src/shared/review.ts`, `REVIEW.md`, `.github/**`, `scripts/review-stamp-gate.ts`, `scripts/post-review-stamp.ts`, `scripts/pr-body-sync.ts`, `scripts/migration-claims.ts`, `scripts/wait-checks.ts`
@@ -62,11 +62,11 @@ Before a PR that changes any path below can merge into `main`, its head commit n
 
 ### Worker sandboxes keep the data directory out of reach
 
-Trigger: `src/daemon/driver/write-scope.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
+Trigger: `src/daemon/driver/write-scope.ts`, `src/daemon/launch.ts`, `src/vendors/*/launch.ts`, `src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/platform/**`, `apps/windows/crates/fusa-win-helper/**`, `scripts/linux-sandbox-setup.sh`
 
-Check: Normal and read-only Workers still cannot read `state/` (tokens, keys, the database, memory, logs, backups, other sessions' launch directories) or connect to `run/admin.sock`, on macOS, Linux `bwrap`, and Windows alike. If the deny list cannot be built, the launch fails instead of running without it. The PR runs `src/shared/write-scope.test.ts`, and a `bwrap` or Windows change has its cloud job green.
+Check: Normal and read-only Workers still cannot read `state/` (tokens, keys, the database, memory, logs, backups, other sessions' launch directories) or connect to `run/admin.sock`, on macOS, Linux `bwrap`, and Windows alike. If the deny list cannot be built, the launch fails instead of running without it. A raw-shell caller of `wrapInReadonlyOsSandbox` without a vendor tool-permission layer rejects `readonlyMode === "fallback_write_restricted"` instead of treating `osSandboxed: true` alone as kernel-enforced read-only on Windows, and forwards `baseEnv` to sandbox preparation. `scripts/ci-workflows.test.ts` fails when an OS-sandbox launch module is missing from `windows.yml` path filters or `REVIEW.md` stamp paths. The PR runs `src/shared/write-scope.test.ts`, and a `bwrap` or Windows change has its cloud job green.
 
-Seen in: `c2806c41`/`18936aa8`, `c6eb1731`/`638516a7`
+Seen in: `c2806c41`/`18936aa8`, `c6eb1731`/`638516a7`, #497
 
 ### Vendor launch arguments never widen the permission tier
 
@@ -94,11 +94,11 @@ Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `
 
 ### Restart recovery finishes what the last run left
 
-Trigger: `src/daemon/daemon.ts`, `src/daemon/ledger/ledger.ts`, `src/daemon/ledger/turn-completions.ts`, `src/daemon/ledger/workers/**`, `src/daemon/ledger/schedules.ts`, `src/daemon/session-tmp.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/process-ledger.ts`
+Trigger: `src/daemon/daemon.ts`, `src/daemon/ledger/ledger.ts`, `src/daemon/ledger/sessions.ts`, `src/daemon/ledger/turn-completions.ts`, `src/daemon/ledger/workers/**`, `src/daemon/ledger/schedules.ts`, `src/daemon/session-tmp.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/process-ledger.ts`
 
-Check: Anything the next daemon run needs to finish or clean up this run's work (a pending receipt, a background wait, a process tag nonce, a temp-dir prefix) is persisted or derived from the data directory, never minted fresh on each start. Startup recovery settles every pending record, not one batch or page, before timers, schedules, or new sessions start. A test restarts the daemon in the middle of the operation and shows the work completes or its leftovers are reaped.
+Check: Anything the next daemon run needs to finish or clean up this run's work (a pending receipt, a background wait, a process tag nonce, a temp-dir prefix) is persisted or derived from the data directory, never minted fresh on each start. Startup recovery settles every pending record, not one batch or page, before timers, schedules, or new sessions start. Recovery does not re-enqueue dependent work (such as `session.send`) while a prerequisite prep action (such as `worktree.create` or `worktree.sync`) is unfinished, and replaying a prep action after a mid-step crash is idempotent. A test restarts the daemon in the middle of the operation and shows the work completes or its leftovers are reaped.
 
-Seen in: `e9b9ec23`, `6883b2f4`, `12815bc8`
+Seen in: `e9b9ec23`, `6883b2f4`, `12815bc8`, #491
 
 ### Database transactions stay synchronous
 
@@ -134,19 +134,19 @@ Seen in: `43d70fad`, `473db164`, `0fc0e181`, `f52e5e95`, `9dd20f40`
 
 ### Stale in-flight queries never overwrite fresh mutations
 
-Trigger: `src/web/**`, `src/daemon/actions/**`
+Trigger: `src/web/**`, `src/daemon/actions/**`, `src/daemon/handlers.ts`, `src/daemon/mesh/**`
 
-Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; whenever a mutation claims a ticket (`latest`) without advancing `gen`, advance both counters from `Math.max(gen, latest) + 1` so an invalidation cannot collide with or regress past an in-flight ticket. `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them or mixes decoupled `.latest` writes with `.latest = .gen` or direct increments, though it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise, and actions that write the same target run on one lane.
+Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it. Use the shared `queryGenerationOf` or `guardedQueryFn` from `src/web/query-client.ts`; whenever a mutation claims a ticket (`latest`) without advancing `gen`, advance both counters from `Math.max(gen, latest) + 1` so an invalidation cannot collide with or regress past an in-flight ticket. `src/web/query-write-guard.test.ts` fails when a new module writes the cache without them or mixes decoupled `.latest` writes with `.latest = .gen` or direct increments, though it cannot tell whether every write path advances the generation. On the daemon, a queued or retried action that publishes a result checks when it runs that its source is still the latest (same Worker, same report, no newer action) and drops itself otherwise; actions and async protocol handlers that write the same target (such as a worktree, session, or pairing state) run on one lane—or defer (`{ kind: "later" }`) while another session or action still owns that target when `laneKey` is `null`—so concurrent `await`s cannot interleave.
 
-Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`, `c8241fe9`
+Seen in: `2c3ff071`, `c58bac01`/`73e911b0`, `755269d9`, `9f2269fa`, `c8241fe9`, #410, #491
 
 ### Interface changes come with a real-browser render
 
 Trigger: `src/web/components/**`, `src/web/ui/**`, `src/web/styles.css`, `src/web/mobile/**`
 
-Check: The PR shows the changed screen rendered in a real browser (`pnpm verify`, `pnpm ui:polish`, or a Playwright screenshot), not only jsdom tests. Spacing, radius, type size, color, and focus states follow `docs/ui-standard.md`.
+Check: The PR shows the changed screen rendered in a real browser (`pnpm verify`, `pnpm ui:polish`, or a Playwright screenshot), not only jsdom tests. Check both wide and narrow (such as `390px`) viewports so dynamic labels, counts, and dialogs wrap or fit without clipping or truncating essential information. Spacing, radius, type size, color, and focus states follow `docs/ui-standard.md`.
 
-Seen in: `0fc0e181`, `a55ca6f0`
+Seen in: `0fc0e181`, `a55ca6f0`, #469, `59358e6e`
 
 ### A rewrite keeps what the old code guaranteed
 
@@ -206,11 +206,11 @@ Seen in: `01ec18ad`, `9c3254de`
 
 ### Detached child processes and temp dirs stay inside the session boundary
 
-Trigger: `src/daemon/launch.ts`, `src/daemon/handlers.ts`, `src/daemon/setup/**`, `src/daemon/driver/**`, `src/daemon/platform/process-tag.ts`, `src/daemon/session-tmp.ts`, `src/daemon/worktree-cleanup.ts`, `src/daemon/resources/**`, `scripts/**`
+Trigger: `src/daemon/launch.ts`, `src/daemon/handlers.ts`, `src/daemon/setup/**`, `src/daemon/driver/**`, `src/daemon/git/branches.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/session-tmp.ts`, `src/daemon/worktree-cleanup.ts`, `src/daemon/resources/**`, `scripts/**`
 
-Check: Every Worker and setup subprocess inherits `ENV_SESSION_OWNER_TAG` and a private `SessionTmpStore` directory (owned by a kill-on-close Job Object on Windows) so detached grandchildren and nested test daemons are reaped on session exit. The identity that finds leftovers (tag nonce, temp-dir prefix) survives a daemon restart and differs per data directory. Nothing deletes by a bare name prefix in a shared location such as `/tmp`, and nothing is mounted over `/tmp`. Automatic reaping stops only processes inside the session's own folders; anything else waits for the user. A failed scan never counts as "gone", so it never prunes a Keep decision. A delete re-checks the exact object it verified (branch commit, file age). Cleanup failures or held dirty worktrees surface to the user instead of logging repeated silent skips.
+Check: Every Worker and setup subprocess inherits `ENV_SESSION_OWNER_TAG` (constructed through `src/daemon/platform/process-tag.ts`, guarded by `src/daemon/resources/registry.test.ts`, so `sessionProcesses.listEnded` recognizes active processes) and a private `SessionTmpStore` directory (owned by a kill-on-close Job Object on Windows) so detached grandchildren and nested test daemons are reaped on session exit. The identity that finds leftovers (tag nonce, temp-dir prefix) survives a daemon restart and differs per data directory. Nothing deletes by a bare name prefix in a shared location such as `/tmp`, and nothing is mounted over `/tmp`. Automatic reaping stops only processes inside the session's own folders; anything else waits for the user. A failed scan or ledger read never counts as empty or "gone", so it never prunes a Keep decision or aborts live work. A delete re-checks the exact object it verified (branch commit, file age). Automatic merge detection for branch or worktree cleanup stays fail-closed (never treating an empty net diff, a reverted integration ref, or a custom `.gitattributes` merge driver as proof a branch merged) and avoids executing repo-configured merge drivers. Cleanup failures or held dirty worktrees surface to the user instead of logging repeated silent skips.
 
-Seen in: `600067d6`, `60e0ab75`, `ac55c10f`, `ba599181`/`ea9ff72f`, `ba599181`/`12815bc8`
+Seen in: `600067d6`, `60e0ab75`, `ac55c10f`, `ba599181`/`ea9ff72f`, `ba599181`/`12815bc8`, `e3da4c13`, #497
 
 ### Text shipped to agents holds in any project
 
@@ -235,3 +235,19 @@ Trigger: `src/web/**`, `src/daemon/**`
 Check: Code that decides whether a request, retry, or round has finished, or which request or round an event, row, or snapshot belongs to, matches an id that the request carries and every result echoes: the HTTP reply, change events, and snapshots. It never infers the answer from timestamps such as `updatedAt`, from change `seq`, from versions or counters the page assigns itself, or from whether the reply or the event arrived first. A request the user can repeat carries a client-generated id that the daemon accepts once and rejects on repeat. Tests cover the result arriving before the HTTP reply, after it, and through a resync that returns unchanged data. Ordering guards on cache writes follow "Stale in-flight queries never overwrite fresh mutations" instead.
 
 Seen in: #449, #453
+
+### PM-owned queues and background jobs handle archive, unarchive, and owner teardown
+
+Trigger: `src/daemon/ledger/persona.ts`, `src/daemon/ledger/schedules.ts`, `src/daemon/ledger/task-graphs/**`, `src/daemon/ledger/workers/**`, `src/daemon/ledger/pm-*.ts`
+
+Check: Every ledger-backed queue, schedule, or background runner owned by a PM, task graph, or Worker excludes archived PMs from selection, ordering, and wakeups. When `archivePm` aborts in-flight background work, it leaves a clean resumable state (such as restoring `next_run_at`) so `unarchivePm` does not leave the item stuck. When a parent task graph finishes or cancels or a Worker ends, child background work bound to it closes in the same transaction instead of continuing to poll or hold quota. Tests cover archiving while active or queued, unarchiving afterward, and finishing or cancelling the owning graph or Worker.
+
+Seen in: `59358e6e`, #497
+
+### Ledger state invariants hold across every transition and reader path
+
+Trigger: `src/daemon/ledger/**`, `src/shared/pm-agenda.ts`
+
+Check: When a PR adds or tightens a ledger state rule (such as slot admission, `notStarted` message queueing, or watch suppression), list every sibling transition and reader path over that state and verify none bypasses it. Prefer one shared helper, predicate, or SQLite trigger over duplicating the condition across callers (such as auto-dispatch vs resume, sandbox approval, decision, or `worker send`; `onWorktreeCreated` vs `worktreeSyncedIn`; or `pmAgendaOf` SQL ordering vs `agendaLinesOf` and `isPmAgendaItemOpen`).
+
+Seen in: `59358e6e`, #491, #497
