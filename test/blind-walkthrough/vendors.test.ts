@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -293,5 +293,35 @@ describe("vendors (S13, S14)", () => {
     expect(piDump.env.OPENCODE_API_KEY).toBe("test-opencode-key");
     expect(piDump.env.DEEPSEEK_API_KEY).toBe("test-deepseek-key");
     expect(piDump.env.GH_TOKEN).toBeUndefined();
+  });
+
+  it("blocks symlinked ancestors pointing into host vendor config dirs even for nonexistent child paths", () => {
+    const blindCwd = makeTempDir("blind-cwd-");
+    const fakeHostHome = makeTempDir("blind-host-symlink-");
+    const linkDir = makeTempDir("blind-link-dir-");
+    const hostClaudeDir = join(fakeHostHome, ".claude");
+    mkdirSync(hostClaudeDir, { recursive: true });
+
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    const linkToClaude = join(linkDir, "link-to-claude");
+    symlinkSync(hostClaudeDir, linkToClaude, linkType);
+
+    const linkToHost = join(linkDir, "link-to-host");
+    symlinkSync(fakeHostHome, linkToHost, linkType);
+
+    for (const candidate of [
+      join(linkToClaude, "nonexistent-child"),
+      join(linkToHost, ".kimi-code", "nonexistent-child"),
+    ]) {
+      expect(() =>
+        resolveBlindVendorAdapter({
+          vendor: "agy",
+          systemPrompt: "Blind prompt.",
+          blindCwd,
+          blindHomeDir: candidate,
+          baseEnv: { HOME: fakeHostHome },
+        }),
+      ).toThrow(/overlaps host vendor config directory/i);
+    }
   });
 });

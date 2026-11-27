@@ -1,15 +1,15 @@
 // Invariant: BlindVendorMatrix exhaustively covers every AgentVendor registered in src/shared/vendors.ts.
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPathInsideOrEqual, normalizePathForComparison } from "../../src/daemon/platform/index.ts";
 import { vendorSpec, type AgentVendor } from "../../src/shared/vendors.ts";
 import { agyIsolatedHomeEnv } from "../../src/vendors/agy/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
 import { VENDOR_LIST } from "../../src/vendors/registry.ts";
-import { assertBlindPromptClean, assertIsolatedWorkspace, buildBlindAgentEnv } from "./context-barrier.ts";
+import { assertBlindPromptClean, assertIsolatedWorkspace, buildBlindAgentEnv, resolveRealPath } from "./context-barrier.ts";
 import type {
   BlindAction,
   BlindAgentAdapter,
@@ -316,14 +316,6 @@ function formatTurnPrompt(
   ].join("\n");
 }
 
-function realpathOrSelf(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
-}
-
 function trimTrailingSlashes(pathValue: string): string {
   return pathValue.replace(/[\\/]+$/, "");
 }
@@ -339,17 +331,18 @@ function assertDistinctFromHostHome(
   platform: NodeJS.Platform,
 ): string {
   const hostHome = baseEnv.HOME?.trim() || baseEnv.USERPROFILE?.trim() || homedir();
-  const realBlind = realpathOrSelf(resolve(blindHomeDir));
-  const realHost = realpathOrSelf(resolve(hostHome));
+  const realBlind = resolveRealPath(blindHomeDir, platform);
+  const realHost = resolveRealPath(hostHome, platform);
   const blindKey = comparisonKey(realBlind, platform);
   const hostKey = comparisonKey(realHost, platform);
   if (blindKey === hostKey) {
     throw new Error(`Blind agent HOME (${blindHomeDir}) must be isolated from host HOME (${hostHome})`);
   }
   for (const rel of HOST_VENDOR_CONFIG_DIRS) {
-    const vendorDirKey = comparisonKey(realpathOrSelf(join(realHost, rel)), platform);
+    const vendorDir = resolveRealPath(join(realHost, rel), platform);
+    const vendorDirKey = comparisonKey(vendorDir, platform);
     if (isPathInsideOrEqual(blindKey, vendorDirKey) || isPathInsideOrEqual(vendorDirKey, blindKey)) {
-      throw new Error(`Blind agent HOME (${blindHomeDir}) overlaps host vendor config directory ${join(realHost, rel)}`);
+      throw new Error(`Blind agent HOME (${blindHomeDir}) overlaps host vendor config directory ${vendorDir}`);
     }
   }
   return realHost;
@@ -363,12 +356,15 @@ function buildVendorCliCommand(
   repoRoot: string,
 ): { readonly command: string; readonly args: readonly string[] } {
   const command = options.executablePath ?? vendorSpec(options.vendor).cli.command;
+  const platform = options.platform ?? process.platform;
   switch (options.vendor) {
     case "agy": {
-      const allowRules = existsSync(observation.screenshotPath) ? [`read_file(${realpathOrSelf(observation.screenshotPath)})`] : [];
-      const blockedReadRoots = [...new Set([trimTrailingSlashes(realpathOrSelf(repoRoot)), trimTrailingSlashes(hostHome)])].filter(
-        (p) => p.length > 0,
-      );
+      const allowRules = existsSync(observation.screenshotPath)
+        ? [`read_file(${resolveRealPath(observation.screenshotPath, platform)})`]
+        : [];
+      const blockedReadRoots = [
+        ...new Set([trimTrailingSlashes(resolveRealPath(repoRoot, platform)), trimTrailingSlashes(hostHome)]),
+      ].filter((p) => p.length > 0);
       const denyRules = [
         "write_file(*)",
         "command(*)",
@@ -415,7 +411,7 @@ function buildVendorCliCommand(
           "--tools",
           "Read",
           "--allowedTools",
-          `Read(${realpathOrSelf(observation.screenshotPath)})`,
+          `Read(${resolveRealPath(observation.screenshotPath, platform)})`,
           "--disallowedTools",
           "Bash,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Agent,Task",
         );

@@ -75,7 +75,7 @@ function symlinkTarget(path: string): string | undefined {
   }
 }
 
-function resolveRealPath(rawPath: string, platform: NodeJS.Platform): string {
+export function resolveRealPath(rawPath: string, platform: NodeJS.Platform = process.platform): string {
   if (platform !== process.platform) {
     return platform === "win32" ? win32.resolve(rawPath) : posix.resolve(rawPath);
   }
