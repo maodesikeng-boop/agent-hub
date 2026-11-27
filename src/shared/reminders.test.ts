@@ -268,6 +268,7 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
           title: "远端发版",
           status: "active",
           originMsgId: null,
+          readySince: null,
           nodes: [
             {
               key: "gate-1",
@@ -461,6 +462,7 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
       createdAt: T0,
       updatedAt: T0,
       completedAt: null,
+      readySince: null,
     };
     const rawSnap = makeSnapshot({ ...snapshot(), activeTaskGraphs: [legacyRemoteGraph] });
     const firstDirect = pendingDecisionsOf(rawSnap, DEVICE);

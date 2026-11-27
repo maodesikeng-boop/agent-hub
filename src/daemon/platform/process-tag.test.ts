@@ -10,6 +10,7 @@ import {
   envContainsSessionTag,
   listTaggedProcesses,
   makeSessionOwnerTag,
+  makeWatchOwnerTag,
   parseLsofCwd,
   reapTaggedProcesses,
   runsInsideRoots,
@@ -64,6 +65,21 @@ describe("session owner process tagging and reaping", () => {
     expect(tokens).toHaveLength(SESSION_TAG_MAX_DEPTH);
     expect(tokens[0]).toBe("s1:a");
     expect(tokens.at(-1)).toBe("s99:zzz999");
+  });
+
+  it("builds a watch owner tag with validation, deduplication, and SESSION_TAG_MAX_DEPTH cap", () => {
+    expect(makeWatchOwnerTag(7, "abc_1-2")).toBe("watch7:abc_1-2");
+    expect(makeWatchOwnerTag(7, "abc", "s1:root")).toBe("s1:root,watch7:abc");
+    expect(makeWatchOwnerTag(7, "abc", "s1:root,watch7:abc")).toBe("s1:root,watch7:abc");
+    const deep = makeWatchOwnerTag(9, "zzz", "s1:a,s2:b,s3:c,s4:d,s5:e");
+    const tokens = deep.split(",");
+    expect(tokens).toHaveLength(SESSION_TAG_MAX_DEPTH);
+    expect(tokens[0]).toBe("s1:a");
+    expect(tokens.at(-1)).toBe("watch9:zzz");
+    expect(() => makeWatchOwnerTag(0, "abc")).toThrow(/Invalid watchId/u);
+    expect(() => makeWatchOwnerTag(1.5, "abc")).toThrow(/Invalid watchId/u);
+    expect(() => makeWatchOwnerTag(7, "")).toThrow(/Invalid nonce/u);
+    expect(() => makeWatchOwnerTag(7, "bad,nonce")).toThrow(/Invalid nonce/u);
   });
 
   it("matches only exact comma-delimited tokens in envContainsSessionTag", () => {

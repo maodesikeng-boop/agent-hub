@@ -64,7 +64,10 @@ export function formatGraphText(graph: TaskGraph, results = true, agentContext?:
   if (isTaskGraphReadyToFinish(graph)) {
     const minutes = wait === undefined ? null : Math.max(0, Math.floor((wait.now - wait.since) / 60_000));
     const age = minutes === null ? "" : `（已等 ${minutes} 分钟）`;
-    lines.push(`  - [等你验收交付] 交付：图里画的步骤都做完了${age}`);
+    const watch = graph.deliveryWatch;
+    lines.push(watch === undefined
+      ? `  - [等你验收交付] 交付：图里画的步骤都做完了${age}`
+      : `  - [在等] 交付：在等 #${watch.watchId}「${watch.body}」`);
   }
   return lines.join("\n");
 }

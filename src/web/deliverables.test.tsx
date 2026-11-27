@@ -195,6 +195,7 @@ function gateGraph(): TaskGraph {
     createdAt: 1_000,
     updatedAt: 1_000,
     completedAt: null,
+    readySince: null,
   };
 }
 

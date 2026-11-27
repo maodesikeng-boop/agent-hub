@@ -608,6 +608,7 @@ export class FakeLedger {
       createdAt: 1,
       updatedAt: 2,
       completedAt: status === "active" ? null : 2,
+      readySince: null,
     };
   }
 
@@ -733,6 +734,9 @@ export class FakeLedger {
       waitsForFirstTurn: unused("waitsForFirstTurn"),
       onWorktreeCreated: unused("onWorktreeCreated"),
       recordReviewSnapshot: unused("recordReviewSnapshot"),
+      noteWorkspaceCheckout: unused("noteWorkspaceCheckout"),
+      getWorktreeSyncTask: unused("getWorktreeSyncTask"),
+      onWorktreeSynced: unused("onWorktreeSynced"),
       getReviewVerifyTask: unused("getReviewVerifyTask"),
       onReviewVerified: unused("onReviewVerified"),
       syncPersonaFiles: unused("syncPersonaFiles"),

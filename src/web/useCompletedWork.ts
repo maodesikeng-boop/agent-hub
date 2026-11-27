@@ -56,7 +56,7 @@ export function useCompletedWork(pmId: PmId | null, enabled: boolean): Completed
   );
 
   const pages = query.data?.pages ?? EMPTY_PAGES;
-  const days = useMemo(() => (pages.length === 0 ? EMPTY_DAYS : completedDaysOf(pages, Date.now())), [pages]);
+  const days = useMemo(() => (pages.length === 0 ? EMPTY_DAYS : completedDaysOf(pages)), [pages]);
   const total = pages.length > 0 ? pages[0]!.total : null;
   const hasMore = Boolean(query.hasNextPage) && pages.length < COMPLETED_WORK_MAX_PAGES;
   const { fetchNextPage, refetch, isFetchingNextPage, isFetchNextPageError } = query;

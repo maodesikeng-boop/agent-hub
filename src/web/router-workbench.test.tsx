@@ -390,6 +390,7 @@ describe("最左栏嫩芽铃入口与项目列表去重", () => {
       createdAt: 30_000,
       updatedAt: 30_000,
       completedAt: null,
+      readySince: null,
     };
     const tokyoSnap = makeSnapshot({
       pms: [makePm({ id: 2, name: "阿青" })],
@@ -423,7 +424,7 @@ describe("Needs You 托盘", () => {
     } as const;
     const graph: TaskGraph = {
       id: 7, projectId: 10, pmId: 1, conversationId: 1, title: "Desktop check", status: "active",
-      originMsgId: null, edges: [], createdAt: 1, updatedAt: 1, completedAt: null,
+      originMsgId: null, edges: [], createdAt: 1, updatedAt: 1, completedAt: null, readySince: null,
       nodes: [{
         key: "run", title: "Inspect Calculator", status: "waiting", waitingFor: "user", skipped: false, sortOrder: 0,
         activeWorkerId: approval.workerId, workerIds: [approval.workerId], artifact: null, decision: null,
@@ -581,6 +582,7 @@ describe("Needs You 托盘", () => {
       createdAt: 1_000,
       updatedAt,
       completedAt: null,
+      readySince: null,
     });
 
     const tokyoSnap = makeSnapshot({

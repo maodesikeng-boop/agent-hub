@@ -24,8 +24,8 @@ import type { AgentVendor, VendorAvailability } from "../../shared/vendors.ts";
 import { REVIEW_CHECKLIST } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { scopeAllowsWrite, workerWriteScope } from "../../shared/write-scope.ts";
-import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
-import { createReviewObserver, createWorktreeCreateHandler } from "../handlers.ts";
+import { addWorktree, resolveBranchTip } from "../git/index.ts";
+import { createWorktreeCreateHandler } from "../handlers.ts";
 import { buildLaunchPrompt } from "../prompt.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -150,7 +150,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
   const runWorktreeCreate = async (workerId: WorkerId) => {
     const handler = createWorktreeCreateHandler({
       ledger,
-      observeReview: createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b) => remoteBranchHead(r, b), probePr: async () => null }),
+      resolveTip: resolveBranchTip,
+      probePr: async () => null,
       addWorktree,
       setup: {
         start: (req) => {
@@ -352,10 +353,13 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(scope.writableDirs).toEqual([w1Row.worktree_path]);
     expect(scopeAllowsWrite(scope, join(w1Row.worktree_path, "cursor.ts"))).toBe(true);
 
-    // 在上游会话彻底退出前，waitsForFirstTurn 挡住下游首轮避免双写；上游退出后立即放行
+    // 在上游会话彻底退出前，worktree.sync 不动目录、下游首轮也不发，避免双写；上游退出并同步完才放行
     const w2FirstMsg = firstWorkerMessageOf(w2Id);
     expect(ledger.waitsForFirstTurn(w2Sess.id, w2FirstMsg.id)).toBe(true);
+    expect(ledger.getWorktreeSyncTask(w2Id)).toEqual({ kind: "wait" });
     createSessionStore(db).update(workerSessionOf(w1Id).id, { status: "ended", pid: null });
+    expect(ledger.waitsForFirstTurn(w2Sess.id, w2FirstMsg.id)).toBe(true);
+    ledger.onWorktreeSynced(w2Id, null);
     expect(ledger.waitsForFirstTurn(w2Sess.id, w2FirstMsg.id)).toBe(false);
 
     // 上游提交与未提交文件都在同一个目录里
@@ -434,8 +438,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(deliveryMsg.text).toContain("https://github.com/maodesikeng-boop/agent-hub/pull/315");
     expect(deliveryMsg.text).toContain("核查并通过 cursor.ts:1，补了同 id 断言。");
 
-    // 图尚未 finish 前仍受保护不可清理；finish 后允许清理
-    expect(ledger.isWorkerCleanable(w1Id)).toBe(false);
+    // 步骤都做完、没有下游会再接手这个目录：图还没 finish 也不挡清理（是否已合并、保留期由清理器再判断）
+    expect(ledger.isWorkerCleanable(w1Id)).toBe(true);
     ledger.hubCall(lin.sessionId, "graph.finish", { graphId: g0.id, summary: "PR #315 已合并" });
     expect(ledger.isWorkerCleanable(w1Id)).toBe(true);
   });
@@ -628,6 +632,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(stateOf(cur.nodes[0]!)).toBe("done");
     expect(stateOf(cur.nodes[1]!)).toBe("running");
     const wMid = cur.nodes[1]!.activeWorkerId!;
+    ledger.onWorktreeSynced(wMid, null);
     expect(firstWorkerMessageOf(wMid).text).toContain("映射逻辑在 compat.ts");
     expect(firstWorkerMessageOf(wMid).text).toContain("认可保留兼容视图，核对步骤请额外查一下视图查询计划。");
 

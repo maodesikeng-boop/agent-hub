@@ -78,7 +78,7 @@ import {
   createMultiVendorDriver,
   type ModelCatalogs,
 } from "./driver/index.ts";
-import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
+import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveBranchTip, resolveCommit, syncWorktreeBranch } from "./git/index.ts";
 import { createWorktreeBranchProbe } from "./git/worktree-branch.ts";
 import { createObservedQuotaStore, observeDriverQuota } from "./quota/observed-quota.ts";
 import { createProviderQuota } from "./quota/provider-quota.ts";
@@ -92,6 +92,7 @@ import {
   createReviewVerifyHandler,
   canDeliverSystemMessage,
   createWorktreeCreateHandler,
+  createWorktreeSyncHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
 import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
@@ -102,6 +103,8 @@ import { createLedger, type SqliteLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
+import { createWatchCommandRunner } from "./watches/launch.ts";
+import { createWatchRunner, type WatchRunner } from "./watches/runner.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { createSkillFiles } from "./skill-files.ts";
 import { DaemonAlreadyRunningError, acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
@@ -205,6 +208,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     handoverRunner?: HandoverRunner;
     catalogRunner?: ProjectCatalogRunner;
     setup?: SetupRunner;
+    watches?: WatchRunner;
     executor?: ActionExecutor;
     driver?: Driver;
     providerManager?: ProviderManager;
@@ -264,6 +268,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.stopFileCleanup?.();
     parts.stopWorkerRetention?.();
     if (setup) await step("准备命令", () => setup.shutdown());
+    if (parts.watches) await step("后台盯的条件", () => parts.watches!.close());
     parts.feishuAccountBot?.close();
     if (parts.feishu) await step("飞书", () => parts.feishu!.close());
     if (parts.routerDispatcher) await step("总助分派引擎", () => parts.routerDispatcher!.close());
@@ -563,8 +568,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.end", createSessionEndHandler(deps));
     const observeReview = createReviewObserver({ resolveCommit, remoteBranchHead, probePr });
     executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
+    executor.register("worktree.sync", createWorktreeSyncHandler({ ledger, syncWorktree: syncWorktreeBranch }));
     executor.register("worktree.create", createWorktreeCreateHandler({
-        ledger, observeReview, addWorktree, setup,
+        ledger, resolveTip: resolveBranchTip, probePr, addWorktree, setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
         sessionTmp: sessionScope.tmp,
         sessionTagEnv: sessionScope.ownerEnv,
@@ -617,6 +623,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
       }),
     );
+    // Watches belong to PMs, not sessions, so they resume before any session starts and keep their deadlines.
+    const watchRunner = createWatchRunner({
+      ledger,
+      run: createWatchCommandRunner({
+        dataDir, stateDir, protectedRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), tagNonce: sessionScope.tagNonce, homeDir: options.userHome, baseEnv: env,
+      }),
+      log,
+    });
+    parts.watches = watchRunner;
+    watchRunner.start();
     parts.executor = executor;
     executor.start();
     // Missed schedules (daemon stopped or machine asleep) run once at startup, not once per missed slot.
@@ -649,7 +665,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const feishuPostsStore = createFeishuStore(db);
     parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: feishuPostsStore, feishuOfflineInbox, log });
     parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
-    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, sessionProcesses, processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
+    const resources = startDaemonResources({ db, paths, ledger, worktrees: parts.worktreeCleanup, sessionScope, sessionProcesses, runningWatchIds: () => watchRunner.runningIds(), processLedger, feishuPosts: feishuPostsStore, feishuOfflineInbox, uploadsDir, sentFilesDir, extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir), log });
     parts.resources = resources;
     const runAutoRenew = () => {
       try {

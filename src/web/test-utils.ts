@@ -637,6 +637,7 @@ export class FakeApi {
         createdAt: 1_000,
         updatedAt: 1_000,
         completedAt: 1_000,
+        readySince: null,
       },
       messageId: 778,
     } satisfies CancelTaskGraphResponse,

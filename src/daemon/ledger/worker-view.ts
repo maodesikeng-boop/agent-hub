@@ -64,7 +64,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   }): string | null => {
     if (worker.status === "ended") return null;
     if (live.activity === "preparing") return "在跑项目的准备命令，跑完才开工";
-    if (notStarted(worker)) return "worktree 还没建好，没开工";
+    if (notStarted(worker)) return "worktree 还没建好或还在同步，没开工";
     if (live.activity === "stopping") return "正在停下来";
     if (live.activity === "background") {
       const count = live.backgroundTasks ?? 0;

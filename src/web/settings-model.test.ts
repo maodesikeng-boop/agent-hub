@@ -15,12 +15,12 @@ import { ChoiceRows } from "./components/ChoiceRows.tsx";
 import { ComputersSection } from "./components/DeviceSettings.tsx";
 import { ModeRows } from "./components/ModeRows.tsx";
 import type { DeviceView } from "./devices.ts";
+import { SECOND_TICK_MS } from "./limits.ts";
 import type { NotifySettings } from "./notify.ts";
 import { resetQueryClient } from "./query-client.ts";
 import {
   BROWSER_SESSIONS_QUERY_KEY,
   CONFIRM_TIMEOUT_MS,
-  COUNTDOWN_TICK_MS,
   NOTIFY_BLOCKED,
   SESSIONS_POLL_MS,
   defaultProviderAuthMethodId,
@@ -585,7 +585,7 @@ describe("浏览器会话与扫码链接 hooks", () => {
 
     // 倒计时走 1s
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(COUNTDOWN_TICK_MS);
+      await vi.advanceTimersByTimeAsync(SECOND_TICK_MS);
     });
     expect(result.current.signIn.remainingMs).toBe(4_000);
 
