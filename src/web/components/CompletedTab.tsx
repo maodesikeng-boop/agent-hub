@@ -4,10 +4,12 @@ import type * as React from "react";
 import type { CompletedWorkItem, ConversationId } from "../../shared/index.ts";
 import { cleanWorkerTitle, errorLine, errorText, errorTitle } from "../format.ts";
 import { completedFlowOf } from "../graph-flow.ts";
+import { MINUTE_TICK_MS } from "../limits.ts";
 import { cn } from "../lib/utils.ts";
 import { Loader2 } from "../ui/icons.ts";
 import type { CompletedWorkQuery } from "../useCompletedWork.ts";
-import { completedKeyOf, prLabelOf, type CompletedDay } from "../work-panel-model.ts";
+import { useNow } from "../useNow.ts";
+import { completedDayLabel, completedKeyOf, prLabelOf, type CompletedDay } from "../work-panel-model.ts";
 import { completedWorkStatusOf } from "../work-status.ts";
 import { GraphCanvas } from "./GraphCanvas.tsx";
 import { WorkStatusIcon } from "./WorkStatusIcon.tsx";
@@ -29,6 +31,10 @@ const LOAD_MORE_SCROLL_PX = 160;
 const UNSIZED_VIEWPORT_ROWS = 200;
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
+
+function DayLabel({ dayStart }: { dayStart: number }) {
+  return completedDayLabel(dayStart, useNow(MINUTE_TICK_MS));
+}
 
 function formatClockTime(ms: number): string {
   const d = new Date(ms);
@@ -260,7 +266,7 @@ export const CompletedTab = memo(function CompletedTab({ query, onOpenWorker }: 
             >
               {row.kind === "day" && (
                 <div className={cn("work-day-header", !row.isFirst && "work-day-header-divider")}>
-                  <span>{row.day.label}</span>
+                  <span><DayLabel dayStart={row.day.dayStart} /></span>
                   <span className="tabular-nums">{row.day.items.length}</span>
                 </div>
               )}

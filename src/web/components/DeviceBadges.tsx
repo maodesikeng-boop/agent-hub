@@ -16,8 +16,8 @@ import {
   type Icon,
 } from "../ui/icons.ts";
 import type { DeviceStatus } from "../devices.ts";
-import { formatAgo } from "../format.ts";
 import { cn } from "../lib/utils.ts";
+import { TimeAgo } from "./TimeAgo.tsx";
 
 export function StatusDot({ status }: { status: DeviceStatus }) {
   return (
@@ -35,7 +35,7 @@ export function StatusText({ status, lastOnlineAt, online = false }: { status: D
   return (
     <span className="flex items-center gap-2">
       <span>Offline</span>
-      {status === "offline" && lastOnlineAt !== null && <span className="tabular-nums">{formatAgo(lastOnlineAt)}</span>}
+      {status === "offline" && lastOnlineAt !== null && <span className="tabular-nums"><TimeAgo at={lastOnlineAt} /></span>}
     </span>
   );
 }

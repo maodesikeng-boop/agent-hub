@@ -438,8 +438,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(deliveryMsg.text).toContain("https://github.com/maodesikeng-boop/agent-hub/pull/315");
     expect(deliveryMsg.text).toContain("核查并通过 cursor.ts:1，补了同 id 断言。");
 
-    // 图尚未 finish 前仍受保护不可清理；finish 后允许清理
-    expect(ledger.isWorkerCleanable(w1Id)).toBe(false);
+    // 步骤都做完、没有下游会再接手这个目录：图还没 finish 也不挡清理（是否已合并、保留期由清理器再判断）
+    expect(ledger.isWorkerCleanable(w1Id)).toBe(true);
     ledger.hubCall(lin.sessionId, "graph.finish", { graphId: g0.id, summary: "PR #315 已合并" });
     expect(ledger.isWorkerCleanable(w1Id)).toBe(true);
   });

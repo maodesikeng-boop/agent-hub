@@ -1284,10 +1284,10 @@ describe("shell list and rail selectors", () => {
         };
       }),
     }));
-    const days0 = completedDaysOf(pages, now);
-    expect(completedDaysOf(pages, now)).toBe(days0);
+    const days0 = completedDaysOf(pages);
+    expect(completedDaysOf(pages)).toBe(days0);
     expect(days0.reduce((sum, d) => sum + d.items.length, 0)).toBe(400);
-    expect(medianMs(21, () => void completedDaysOf([...pages], now))).toBeLessThan(15);
+    expect(medianMs(21, () => void completedDaysOf([...pages]))).toBeLessThan(15);
   });
 });
 

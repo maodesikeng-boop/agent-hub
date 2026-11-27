@@ -1,9 +1,10 @@
 import { Loader2 } from "../../ui/icons.ts";
 import { useMemo, useState } from "react";
 import type { BrowserSessionInfo } from "../../../shared/index.ts";
-import { describeUserAgent, formatAgo, userAgentDevice } from "../../browser-sessions.ts";
+import { describeUserAgent, userAgentDevice } from "../../browser-sessions.ts";
 import { PlatformIcon } from "../../components/DeviceBadges.tsx";
 import { RowError, SettingsGroup } from "../../components/SettingsList.tsx";
+import { TimeAgo } from "../../components/TimeAgo.tsx";
 import { useBrowserSessions } from "../../settings-model.ts";
 import { ConfirmBody, SettingsDrawer, useDrawerTarget } from "./SettingsDrawer.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
@@ -20,7 +21,6 @@ export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
   );
   const confirm = useDrawerTarget<BrowserSessionInfo>();
   const [allOpen, setAllOpen] = useState(false);
-  const now = Date.now();
   const active = useMemo(() => sessions?.toSorted(byRecency) ?? [], [sessions]);
   const target = confirm.target;
   const targetName = target === null ? "" : describeUserAgent(target.userAgent);
@@ -44,7 +44,7 @@ export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
             detail={
               <span className="flex flex-wrap items-center gap-x-3">
                 {session.current && <span>This browser</span>}
-                <span>{formatAgo(session.lastSeenAt, now)}</span>
+                <span><TimeAgo at={session.lastSeenAt} /></span>
               </span>
             }
             onClick={() => confirm.show(session)}

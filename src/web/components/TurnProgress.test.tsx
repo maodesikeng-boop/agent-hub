@@ -3,7 +3,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChecklistItem, ChecklistStatus, Message } from "../../shared/index.ts";
 import { defaultLookOf } from "../../shared/slimes.ts";
-import { ACTION_ELAPSED_TICK_MS } from "../limits.ts";
+import { SECOND_TICK_MS } from "../limits.ts";
 import { makeMessage, makeSession, makeToolMessage, makeWorkerLine } from "../test-utils.ts";
 import { turnProgress } from "../turn-progress.ts";
 import { AgentStatus } from "./AgentStatus.tsx";
@@ -276,7 +276,7 @@ describe("TurnProgress", () => {
 });
 
 describe("ActionElapsed", () => {
-  it("advances every ACTION_ELAPSED_TICK_MS and clears its timer on unmount", () => {
+  it("advances every SECOND_TICK_MS and clears its timer on unmount", () => {
     vi.useFakeTimers();
     vi.setSystemTime(50_000);
     const clearSpy = vi.spyOn(globalThis, "clearInterval");
@@ -284,12 +284,12 @@ describe("ActionElapsed", () => {
     expect(container).toHaveTextContent("0s");
 
     act(() => {
-      vi.advanceTimersByTime(ACTION_ELAPSED_TICK_MS);
+      vi.advanceTimersByTime(SECOND_TICK_MS);
     });
     expect(container).toHaveTextContent("1s");
 
     act(() => {
-      vi.advanceTimersByTime(15 * ACTION_ELAPSED_TICK_MS);
+      vi.advanceTimersByTime(15 * SECOND_TICK_MS);
     });
     expect(container).toHaveTextContent("16s");
 
