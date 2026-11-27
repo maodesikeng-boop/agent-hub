@@ -39,6 +39,35 @@ interface InPageDomNode {
   children: InPageDomNode[];
 }
 
+const SYSTEM_CHROMIUM_CANDIDATES: readonly string[] = [
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+];
+
+function resolveChromiumLaunchOptions(): { readonly headless: true; readonly executablePath?: string } {
+  const envExecutable = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
+  if (envExecutable && existsSync(envExecutable)) {
+    return { headless: true, executablePath: envExecutable };
+  }
+  try {
+    const managed = chromium.executablePath();
+    if (managed && existsSync(managed)) return { headless: true };
+  } catch {
+    // Fall back to a preinstalled system browser when Playwright's managed browser cache is absent (such as unit-test CI shards).
+  }
+  for (const candidate of SYSTEM_CHROMIUM_CANDIDATES) {
+    if (existsSync(candidate)) return { headless: true, executablePath: candidate };
+  }
+  return { headless: true };
+}
+
 function sha256File(path: string): string {
   if (!existsSync(path)) return "";
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -381,7 +410,7 @@ async function executeWalkthrough(
 
   try {
     const firstViewport = config.viewports[0]!;
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch(resolveChromiumLaunchOptions());
     context = await browser.newContext({
       viewport: { width: firstViewport.width, height: firstViewport.height },
       recordVideo: {
