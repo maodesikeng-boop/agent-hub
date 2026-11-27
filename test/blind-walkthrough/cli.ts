@@ -2,7 +2,7 @@
 // Command-line entry point for the blind new-user walkthrough runner (`pnpm blind-walkthrough <command>`).
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentVendor } from "../../src/shared/vendors.ts";
@@ -11,7 +11,7 @@ import { ingestCuaRecording, prepareCuaHandoff } from "./cua-track.ts";
 import { createSampleUserProject } from "./isolated-app.ts";
 import { BLIND_MAX_TOTAL_STEPS_PER_RUN } from "./limits.ts";
 import { BLIND_AGENT_SYSTEM_PROMPT, isBlindMissionId, listMissions, selectMissions } from "./missions.ts";
-import { pruneOldRuns } from "./recorder.ts";
+import { appendRunHistory, pruneOldRuns } from "./recorder.ts";
 import { extractPainPoints, mergePainPointReports, renderPainPointReportMarkdown } from "./report.ts";
 import { resumeBlindWalkthrough, runBlindWalkthrough } from "./runner.ts";
 import type { AppVendorMode, BlindMissionId, PainPointReport, ViewportSpec, WalkthroughTrace } from "./types.ts";
@@ -128,7 +128,6 @@ export async function main(argv: readonly string[]): Promise<number> {
           "max-steps": { type: "string" },
           "runs-root": { type: "string" },
           "blind-home": { type: "string" },
-          "use-host-auth": { type: "boolean", default: false },
         },
       });
 
@@ -160,7 +159,7 @@ export async function main(argv: readonly string[]): Promise<number> {
           blindHomeDir,
           model: values.model,
           effort: values.effort,
-          useHostAuthHome: values["use-host-auth"],
+          repoRoot: REPO_ROOT,
         });
 
         const trace =
@@ -172,6 +171,7 @@ export async function main(argv: readonly string[]): Promise<number> {
                 appVendorMode,
                 adapter,
                 maxTotalSteps,
+                repoRoot: REPO_ROOT,
               })
             : await runBlindWalkthrough({
                 runId,
@@ -182,11 +182,13 @@ export async function main(argv: readonly string[]): Promise<number> {
                 appVendorMode,
                 adapter,
                 maxTotalSteps,
+                repoRoot: REPO_ROOT,
               });
 
         if (values["runs-root"]) {
           const runsRoot = resolve(values["runs-root"]);
           assertIsolatedWorkspace(runsRoot);
+          appendRunHistory(runsRoot, trace);
           pruneOldRuns(runsRoot);
         }
 
@@ -293,7 +295,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       const finalReport = reports.length === 1 ? reports[0]! : mergePainPointReports(reports);
       const markdown = renderPainPointReportMarkdown(finalReport);
       if (values.out) {
-        writeFileSync(resolve(values.out), markdown, "utf8");
+        const outPath = resolve(values.out);
+        assertIsolatedWorkspace(outPath);
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, markdown, "utf8");
       } else {
         console.log(markdown);
       }

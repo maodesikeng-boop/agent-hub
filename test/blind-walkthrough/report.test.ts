@@ -1,14 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { main as cliMain } from "./cli.ts";
 import {
   BLIND_EVIDENCE_KEEP_RUNS,
   BLIND_HISTORY_MAX_RUNS,
   BLIND_REPORT_MAX_BYTES,
   BLIND_TRACE_SCHEMA_VERSION,
 } from "./limits.ts";
-import { pruneOldRuns } from "./recorder.ts";
+import { appendRunHistory, pruneOldRuns } from "./recorder.ts";
 import { extractPainPoints, mergePainPointReports, renderPainPointReportMarkdown } from "./report.ts";
 import type { WalkthroughStep, WalkthroughTrace } from "./types.ts";
 
@@ -157,5 +158,58 @@ describe("report & retention bounds (S5, S6, S12, S13)", () => {
   it("S13: rejects traces with an unsupported schemaVersion", () => {
     const legacy = makeTrace("run-legacy", [], { schemaVersion: 0 });
     expect(() => extractPainPoints(legacy)).toThrow(/schema|version|unsupported/i);
+  });
+
+  it("grades stuck-loop terminal steps as P0 and preserves blocked status even when a later mission aborts", () => {
+    const trace = makeTrace(
+      "run-stuck-preserved",
+      [
+        makeStep({
+          index: 1,
+          missionId: "create-first-project",
+          action: { kind: "wait", reason: "waiting for project dialog" },
+          confusion: "Still stuck | Stuck loop detected: repeated waited (waiting for project dialog) 3 times with zero visual change",
+          telemetry: { consoleErrors: [], pageErrors: [], failedRequests: [], visualChanged: false, daemonAlive: true, durationMs: 300 },
+        }),
+        makeStep({
+          index: 2,
+          missionId: "recover-and-configure",
+          action: { kind: "wait", reason: "harness_interrupted" },
+          confusion: "run_budget_exceeded",
+          noiseReason: "run_budget_exceeded",
+          telemetry: { consoleErrors: [], pageErrors: [], failedRequests: [], visualChanged: false, daemonAlive: true, durationMs: 300 },
+        }),
+      ],
+      {
+        missionIds: ["create-first-project", "recover-and-configure"],
+        completedMissions: [],
+        abortedReason: "run_budget_exceeded",
+      },
+    );
+
+    const report = extractPainPoints(trace, new Date("2026-11-28T04:00:00.000Z"));
+    expect(report.missionStatus["create-first-project"]).toBe("blocked");
+    expect(report.missionStatus["recover-and-configure"]).toBe("aborted");
+    const stuckPoint = report.painPoints.find((p) => p.missionIds.includes("create-first-project"));
+    expect(stuckPoint?.severity).toBe("P0");
+    expect(stuckPoint?.deterministicSignals).toContain("stuck_loop");
+  });
+
+  it("writes run summaries into history.jsonl and blocks cli report --out inside ~/.agent-hub", async () => {
+    const runsRoot = makeTempDir("blind-history-write-");
+    const trace = makeTrace("run-hist-1", [makeStep({ index: 1 })]);
+    appendRunHistory(runsRoot, trace);
+    const historyPath = join(runsRoot, "history.jsonl");
+    expect(existsSync(historyPath)).toBe(true);
+    const lines = readFileSync(historyPath, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).runId).toBe("run-hist-1");
+
+    const tracePath = join(runsRoot, "trace.json");
+    writeFileSync(tracePath, JSON.stringify(trace, null, 2));
+    const unsafeOut = join(homedir(), ".agent-hub", "should-never-be-written.md");
+    const exitCode = await cliMain(["report", "--trace", tracePath, "--out", unsafeOut]);
+    expect(exitCode).toBe(1);
+    expect(existsSync(unsafeOut)).toBe(false);
   });
 });

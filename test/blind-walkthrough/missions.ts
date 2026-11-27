@@ -65,7 +65,7 @@ export const BLIND_AGENT_SYSTEM_PROMPT = [
   "}",
   "Allowed action objects:",
   '- {"kind":"click_label","role":"button|link|tab|menuitem|textbox|... (optional)","label":"exact visible text or accessible name"}',
-  '- {"kind":"click_point","x":123,"y":456}',
+  '- {"kind":"click_point","x":500,"y":250} (normalized coordinates in [0, 1000] relative to the viewport: x=0 left edge to 1000 right edge, y=0 top edge to 1000 bottom edge; prefer click_label whenever an accessible label is listed)',
   '- {"kind":"type","text":"text to type into the active or target input","submit":false}',
   '- {"kind":"press","key":"Enter|Escape|Tab|..."}',
   '- {"kind":"scroll","deltaY":300}',

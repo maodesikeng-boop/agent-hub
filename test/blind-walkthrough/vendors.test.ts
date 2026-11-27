@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../../src/vendors/agy/paths.ts";
 import { VENDOR_LIST } from "../../src/vendors/registry.ts";
 import { listBlindVendorSupport, parseBlindActionResponse, resolveBlindVendorAdapter } from "./vendors.ts";
 
@@ -73,5 +74,127 @@ describe("vendors (S13, S14)", () => {
         expect(parsed.noiseReason.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it("rejects out-of-bounds click_point coordinates outside [0, 1000] and accepts normalized coordinates", () => {
+    const valid = parseBlindActionResponse(
+      JSON.stringify({
+        thought: "Clicking the add button using normalized coordinates.",
+        confusion: null,
+        action: { kind: "click_point", x: 265, y: 88 },
+      }),
+    );
+    expect(valid.ok).toBe(true);
+
+    for (const bad of [
+      { kind: "click_point", x: -1, y: 50 },
+      { kind: "click_point", x: 1001, y: 50 },
+      { kind: "click_point", x: 500, y: 1280 },
+    ]) {
+      const parsed = parseBlindActionResponse(JSON.stringify({ thought: "bad coords", confusion: null, action: bad }));
+      expect(parsed.ok).toBe(false);
+    }
+  });
+
+  it("isolates agy/claude/codex tool permissions, injects AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1, refuses host HOME, and blocks prompt leaks", async () => {
+    const blindCwd = makeTempDir("blind-cwd-");
+    const blindHome = makeTempDir("blind-home-");
+    const scratch = makeTempDir("blind-stub-");
+    const screenshot = join(scratch, "001-before.png");
+    writeFileSync(screenshot, "png");
+    const dumpPath = join(scratch, "invocation.json");
+    const stubPath = join(scratch, "stub-cli.mjs");
+    writeFileSync(
+      stubPath,
+      [
+        `#!${process.execPath}`,
+        `import { writeFileSync } from "node:fs";`,
+        `writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));`,
+        `console.log(JSON.stringify({ thought: "ok", confusion: null, action: { kind: "wait", reason: "ok" } }));`,
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(stubPath, 0o755);
+
+    const fakeHostHome = makeTempDir("blind-fake-host-home-");
+    expect(() =>
+      resolveBlindVendorAdapter({
+        vendor: "agy",
+        systemPrompt: "Blind prompt.",
+        blindCwd,
+        blindHomeDir: fakeHostHome,
+        baseEnv: { HOME: fakeHostHome },
+        platform: "darwin",
+      }),
+    ).toThrow(/host|home|isolated/i);
+
+    const obs = {
+      stepIndex: 1,
+      missionId: "first-launch-orient" as const,
+      viewport: { kind: "desktop" as const, width: 1280, height: 800 },
+      url: "http://127.0.0.1:4317/",
+      screenshotPath: screenshot,
+      visualHash: "abc",
+      a11yNodes: [],
+      a11yText: "[button] \"New project manager\"",
+      recentJournal: [],
+    };
+
+    const agyAdapter = resolveBlindVendorAdapter({
+      vendor: "agy",
+      systemPrompt: "Blind prompt.",
+      blindCwd,
+      blindHomeDir: blindHome,
+      baseEnv: { PATH: process.env.PATH, HOME: fakeHostHome },
+      platform: "darwin",
+      executablePath: stubPath,
+    });
+    await agyAdapter.decideNext(obs, new AbortController().signal);
+    const agyDump = JSON.parse(readFileSync(dumpPath, "utf8")) as { argv: string[]; env: Record<string, string> };
+    expect(agyDump.env[AGY_FORCE_FILE_TOKEN_STORAGE_ENV]).toBe("1");
+    expect(agyDump.env.HOME).toBe(blindHome);
+    const settingsIdx = agyDump.argv.indexOf("--settings");
+    expect(settingsIdx).toBeGreaterThan(-1);
+    const agySettings = JSON.parse(agyDump.argv[settingsIdx + 1]!) as { permissions: { deny: string[] } };
+    expect(agySettings.permissions.deny).toContain("command(*)");
+    expect(agySettings.permissions.deny.some((rule) => rule.startsWith("read_file("))).toBe(true);
+
+    const claudeAdapter = resolveBlindVendorAdapter({
+      vendor: "claude",
+      systemPrompt: "Blind prompt.",
+      blindCwd,
+      blindHomeDir: blindHome,
+      baseEnv: { PATH: process.env.PATH, HOME: fakeHostHome },
+      platform: "darwin",
+      executablePath: stubPath,
+    });
+    await claudeAdapter.decideNext(obs, new AbortController().signal);
+    const claudeDump = JSON.parse(readFileSync(dumpPath, "utf8")) as { argv: string[]; env: Record<string, string> };
+    expect(claudeDump.argv).toContain("--strict-mcp-config");
+    expect(claudeDump.argv).toContain("--no-session-persistence");
+    expect(claudeDump.argv).toContain("--disallowedTools");
+    expect(claudeDump.env.HOME).toBe(blindHome);
+
+    const codexAdapter = resolveBlindVendorAdapter({
+      vendor: "codex",
+      systemPrompt: "Blind prompt.",
+      blindCwd,
+      blindHomeDir: blindHome,
+      baseEnv: { PATH: process.env.PATH, HOME: fakeHostHome },
+      platform: "darwin",
+      executablePath: stubPath,
+    });
+    await codexAdapter.decideNext(obs, new AbortController().signal);
+    const codexDump = JSON.parse(readFileSync(dumpPath, "utf8")) as { argv: string[]; env: Record<string, string> };
+    expect(codexDump.argv).toContain("--ephemeral");
+    expect(codexDump.argv).toContain("--ignore-user-config");
+    expect(codexDump.argv).toContain("--sandbox");
+    expect(codexDump.env.HOME).toBe(blindHome);
+
+    await expect(
+      agyAdapter.decideNext({ ...obs, url: "http://127.0.0.1:4317/auth?token=secret123" }, new AbortController().signal),
+    ).rejects.toThrow(/leak|forbidden/i);
+
+    expect(homedir().length).toBeGreaterThan(0);
   });
 });

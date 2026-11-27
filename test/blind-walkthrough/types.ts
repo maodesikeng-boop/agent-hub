@@ -87,6 +87,7 @@ export interface WalkthroughStep {
   readonly screenshotAfter: string;
   readonly telemetry: StepTelemetry;
   readonly noiseReason: string | null;
+  readonly stuckLoop?: boolean;
 }
 
 export interface WalkthroughTrace {
@@ -99,6 +100,7 @@ export interface WalkthroughTrace {
   readonly appVendorMode: AppVendorMode;
   readonly missionIds: readonly BlindMissionId[];
   readonly completedMissions: readonly BlindMissionId[];
+  readonly blockedMissions?: readonly BlindMissionId[];
   readonly steps: readonly WalkthroughStep[];
   readonly videoPath: string | null;
   readonly systemPromptSha256: string;
@@ -162,6 +164,7 @@ export interface BlindRunConfig {
   readonly appVendorMode: AppVendorMode;
   readonly adapter: BlindAgentAdapter;
   readonly maxTotalSteps?: number;
+  readonly repoRoot?: string;
   readonly platform?: NodeJS.Platform;
   readonly signal?: AbortSignal;
 }

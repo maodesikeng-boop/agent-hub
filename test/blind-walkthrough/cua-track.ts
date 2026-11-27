@@ -97,7 +97,7 @@ export function prepareCuaHandoff(options: PrepareCuaHandoffOptions): CuaHandoff
     };
   }
 
-  const launchCommand = `AGENT_HUB_HOME=${shellQuote(options.isolatedHomeDir)} AGENT_HUB_PORT=${options.isolatedPort} open -n -a Bellwood.app`;
+  const launchCommand = `open -n --env ${shellQuote(`AGENT_HUB_HOME=${options.isolatedHomeDir}`)} --env ${shellQuote(`AGENT_HUB_PORT=${options.isolatedPort}`)} -a Bellwood.app`;
   const requiredManualGates: readonly string[] = [
     "Grant macOS Accessibility permission to the external Computer Use driver manually in System Settings.",
     "Grant macOS Screen Recording permission to the external Computer Use driver manually in System Settings.",

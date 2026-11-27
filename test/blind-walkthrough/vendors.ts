@@ -1,8 +1,13 @@
 // Invariant: BlindVendorMatrix exhaustively covers every AgentVendor registered in src/shared/vendors.ts.
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isPathInsideOrEqual, normalizePathForComparison } from "../../src/daemon/platform/index.ts";
 import type { AgentVendor } from "../../src/shared/vendors.ts";
-import { assertIsolatedWorkspace, buildBlindAgentEnv } from "./context-barrier.ts";
+import { agyIsolatedHomeEnv } from "../../src/vendors/agy/paths.ts";
+import { assertBlindPromptClean, assertIsolatedWorkspace, buildBlindAgentEnv } from "./context-barrier.ts";
 import type {
   BlindAction,
   BlindAgentAdapter,
@@ -10,6 +15,9 @@ import type {
   BlindObservation,
   BlindVendorMatrix,
 } from "./types.ts";
+
+const DEFAULT_REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const HOST_VENDOR_CONFIG_DIRS = [".gemini", ".claude", ".codex", ".pi", ".cursor", ".kimi"] as const;
 
 export interface ResolveVendorAdapterOptions {
   readonly vendor: AgentVendor;
@@ -21,7 +29,7 @@ export interface ResolveVendorAdapterOptions {
   readonly model?: string;
   readonly effort?: string;
   readonly executablePath?: string;
-  readonly useHostAuthHome?: boolean;
+  readonly repoRoot?: string;
 }
 
 export type ParsedBlindResponse =
@@ -140,6 +148,9 @@ function parseActionObject(rawAction: unknown): { readonly ok: true; readonly ac
     case "click_point":
       if (typeof a.x !== "number" || !Number.isFinite(a.x) || typeof a.y !== "number" || !Number.isFinite(a.y)) {
         return { ok: false, reason: "click_point requires finite numeric x and y" };
+      }
+      if (a.x < 0 || a.x > 1000 || a.y < 0 || a.y > 1000) {
+        return { ok: false, reason: `click_point coordinates (${a.x}, ${a.y}) must be normalized within [0, 1000]` };
       }
       return { ok: true, action: { kind: "click_point", x: a.x, y: a.y } };
     case "click_label":
@@ -261,7 +272,7 @@ function formatTurnPrompt(
     "",
     `Step: ${observation.stepIndex}`,
     `Mission: ${observation.missionId}`,
-    `Viewport: ${observation.viewport.kind} (${observation.viewport.width}x${observation.viewport.height})`,
+    `Viewport: ${observation.viewport.kind} (${observation.viewport.width}x${observation.viewport.height}); click_point uses normalized [0, 1000] coordinates`,
     `Current URL: ${observation.url}`,
     screenshotNote,
     "",
@@ -283,25 +294,66 @@ function realpathOrSelf(path: string): string {
   }
 }
 
+function trimTrailingSlashes(pathValue: string): string {
+  return pathValue.replace(/[\\/]+$/, "");
+}
+
+function comparisonKey(pathValue: string, platform: NodeJS.Platform): string {
+  const normalized = normalizePathForComparison(pathValue);
+  return platform === "darwin" || platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function assertDistinctFromHostHome(
+  blindHomeDir: string,
+  baseEnv: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform,
+): string {
+  const hostHome = baseEnv.HOME?.trim() || baseEnv.USERPROFILE?.trim() || homedir();
+  const realBlind = realpathOrSelf(resolve(blindHomeDir));
+  const realHost = realpathOrSelf(resolve(hostHome));
+  const blindKey = comparisonKey(realBlind, platform);
+  const hostKey = comparisonKey(realHost, platform);
+  if (blindKey === hostKey) {
+    throw new Error(`Blind agent HOME (${blindHomeDir}) must be isolated from host HOME (${hostHome})`);
+  }
+  for (const rel of HOST_VENDOR_CONFIG_DIRS) {
+    const vendorDirKey = comparisonKey(realpathOrSelf(join(realHost, rel)), platform);
+    if (isPathInsideOrEqual(blindKey, vendorDirKey) || isPathInsideOrEqual(vendorDirKey, blindKey)) {
+      throw new Error(`Blind agent HOME (${blindHomeDir}) overlaps host vendor config directory ${join(realHost, rel)}`);
+    }
+  }
+  return realHost;
+}
+
 function buildVendorCliCommand(
   options: ResolveVendorAdapterOptions,
   prompt: string,
   observation: BlindObservation,
+  hostHome: string,
+  repoRoot: string,
 ): { readonly command: string; readonly args: readonly string[] } {
   const command = options.executablePath ?? options.vendor;
   switch (options.vendor) {
     case "agy": {
       const allowRules = existsSync(observation.screenshotPath) ? [`read_file(${realpathOrSelf(observation.screenshotPath)})`] : [];
+      const blockedReadRoots = [...new Set([trimTrailingSlashes(realpathOrSelf(repoRoot)), trimTrailingSlashes(hostHome)])].filter(
+        (p) => p.length > 0,
+      );
+      const denyRules = [
+        "write_file(*)",
+        "command(*)",
+        "read_url(*)",
+        "mcp(*)",
+        ...blockedReadRoots.flatMap((root) => [`read_file(${root})`, `read_file(${root}/*)`]),
+      ];
       const agySettings = {
         enableTerminalSandbox: false,
         permissions: {
           allow: allowRules,
-          deny: ["write_file(*)", "command(*)", "read_url(*)", "mcp(*)"],
+          deny: denyRules,
         },
       };
       const args: string[] = [
-        "--mode",
-        "plan",
         "--output-format",
         "text",
         "--disable-slash-commands",
@@ -314,17 +366,56 @@ function buildVendorCliCommand(
       return { command, args };
     }
     case "claude": {
-      const args: string[] = ["-p", prompt, "--output-format", "text"];
+      const args: string[] = [
+        "-p",
+        prompt,
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+        "--settings",
+        JSON.stringify({ disableAllHooks: true }),
+        "--permission-mode",
+        "dontAsk",
+      ];
+      if (existsSync(observation.screenshotPath)) {
+        args.push(
+          "--tools",
+          "Read",
+          "--allowedTools",
+          `Read(${realpathOrSelf(observation.screenshotPath)})`,
+          "--disallowedTools",
+          "Bash,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Agent,Task",
+        );
+      } else {
+        args.push("--tools", "", "--disallowedTools", "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Agent,Task");
+      }
       if (options.model) args.push("--model", options.model);
       return { command, args };
     }
     case "codex": {
-      const args: string[] = ["exec", "--skip-git-repo-check"];
+      const args: string[] = [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "-c",
+        "features.shell_tool=false",
+        "-C",
+        options.blindCwd,
+      ];
       if (existsSync(observation.screenshotPath)) args.push("-i", observation.screenshotPath);
       if (options.model) args.push("-m", options.model);
       args.push(prompt);
       return { command, args };
     }
+    case "pi":
+      return { command, args: ["--no-mcp", "--exclude-tools", "bash,edit,write,read,grep,find,ls", "-p", prompt] };
     default:
       return { command, args: ["-p", prompt] };
   }
@@ -389,20 +480,20 @@ export function resolveBlindVendorAdapter(options: ResolveVendorAdapterOptions):
   if (!support || support.mode === "unsupported") {
     throw new Error(`Blind walkthrough vendor ${options.vendor} is unsupported: ${support?.reason ?? "unknown vendor"}`);
   }
-  assertIsolatedWorkspace(options.blindCwd, { env: options.baseEnv, platform: options.platform });
-  assertIsolatedWorkspace(options.blindHomeDir, { env: options.baseEnv, platform: options.platform });
-
+  const platform = options.platform ?? process.platform;
   const baseEnv = options.baseEnv ?? process.env;
-  const env = buildBlindAgentEnv(
-    baseEnv,
-    options.blindHomeDir,
-    options.platform ?? process.platform,
-    ALLOWED_MODEL_ENV_KEYS[options.vendor],
-  );
-  // Some CLIs (such as macOS agy) read Google OAuth from the host keychain under HOME; preserve only HOME when explicitly opted in while keeping cwd empty and Bellwood/GH/SSH env scrubbed.
-  if (options.useHostAuthHome && baseEnv.HOME) {
-    env.HOME = baseEnv.HOME;
-    env.USERPROFILE = baseEnv.USERPROFILE ?? baseEnv.HOME;
+  const repoRoot = options.repoRoot ?? DEFAULT_REPO_ROOT;
+  assertIsolatedWorkspace(options.blindCwd, { env: baseEnv, platform });
+  assertIsolatedWorkspace(options.blindHomeDir, { env: baseEnv, platform });
+  const hostHome = assertDistinctFromHostHome(options.blindHomeDir, baseEnv, platform);
+
+  const env = buildBlindAgentEnv(baseEnv, options.blindHomeDir, platform, ALLOWED_MODEL_ENV_KEYS[options.vendor]);
+  if (options.vendor === "agy") {
+    Object.assign(env, agyIsolatedHomeEnv({ platform, env, userHome: options.blindHomeDir, exists: existsSync }));
+  } else if (options.vendor === "codex") {
+    env.CODEX_HOME = join(options.blindHomeDir, ".codex");
+  } else if (options.vendor === "claude") {
+    env.CLAUDE_CONFIG_DIR = join(options.blindHomeDir, ".claude");
   }
   const fixedSystemPrompt = options.systemPrompt;
 
@@ -411,7 +502,8 @@ export function resolveBlindVendorAdapter(options: ResolveVendorAdapterOptions):
     systemPrompt: fixedSystemPrompt,
     async decideNext(observation, signal) {
       const prompt = formatTurnPrompt(fixedSystemPrompt, observation, support.supportsImageInput);
-      const { command, args } = buildVendorCliCommand(options, prompt, observation);
+      assertBlindPromptClean(prompt, { repoRoot });
+      const { command, args } = buildVendorCliCommand(options, prompt, observation, hostHome, repoRoot);
       const rawOutput = await runVendorProcess(command, args, options.blindCwd, env, signal);
       const parsed = parseBlindActionResponse(rawOutput);
       if (!parsed.ok) {

@@ -9,6 +9,7 @@ import { DESKTOP_DIALOG_TOKEN_ENV, DESKTOP_DIALOG_URL_ENV } from "../../src/daem
 import { readLedgerFile } from "../../src/daemon/process-ledger.ts";
 import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
+import { agyIsolatedHomeEnv } from "../../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import { assertIsolatedWorkspace } from "./context-barrier.ts";
 import { BLIND_DAEMON_START_TIMEOUT_MS, BLIND_DAEMON_STOP_TIMEOUT_MS } from "./limits.ts";
@@ -135,6 +136,9 @@ function buildDaemonEnv(input: {
   env.LANG = "en_US.UTF-8";
   env.HOME = effectiveUserHome;
   env.USERPROFILE = effectiveUserHome;
+  if (input.appVendorMode.kind === "real" && input.appVendorMode.vendor === "agy") {
+    Object.assign(env, agyIsolatedHomeEnv({ platform: input.platform, env, userHome: effectiveUserHome, exists: existsSync }));
+  }
   env[ENV_HOME] = input.homeDir;
   env[ENV_PORT] = "0";
 

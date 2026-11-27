@@ -1,6 +1,6 @@
 // Invariant: evidence directories and history logs never exceed BLIND_HISTORY_MAX_RUNS, BLIND_EVIDENCE_KEEP_RUNS, or BLIND_VIDEO_MAX_BYTES.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import {
@@ -140,6 +140,27 @@ export async function transcodeVideoToMp4(
   const finalBytes = existsSync(outputMp4Path) ? statSync(outputMp4Path).size : 0;
   rmSync(outputMp4Path, { force: true });
   return { ok: false, mp4Path: null, bytes: finalBytes, note: `Transcoded MP4 (${finalBytes} bytes) exceeds cap (${maxBytes} bytes)` };
+}
+
+/**
+ * Precondition: runsRoot is an isolated runs root directory.
+ * Postcondition: appends one compact JSONL run summary record to <runsRoot>/history.jsonl.
+ */
+export function appendRunHistory(runsRoot: string, trace: WalkthroughTrace): void {
+  mkdirSync(runsRoot, { recursive: true });
+  const record = {
+    runId: trace.runId,
+    track: trace.track,
+    startedAt: trace.startedAt,
+    finishedAt: trace.finishedAt,
+    blindVendor: trace.blindVendor,
+    missionIds: trace.missionIds,
+    completedMissions: trace.completedMissions,
+    blockedMissions: trace.blockedMissions ?? [],
+    stepCount: trace.steps.length,
+    abortedReason: trace.abortedReason,
+  };
+  appendFileSync(join(runsRoot, "history.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 /**

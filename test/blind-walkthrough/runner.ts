@@ -2,8 +2,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { assertIsolatedWorkspace, sanitizeAccessibilitySnapshot, type RawA11yNode } from "./context-barrier.ts";
+import { assertBlindPromptClean, assertIsolatedWorkspace, sanitizeAccessibilitySnapshot, type RawA11yNode } from "./context-barrier.ts";
 import { launchIsolatedBellwood, stopIsolatedBellwood, type IsolatedBellwoodHandle } from "./isolated-app.ts";
 import {
   BLIND_ACTION_RETRY_BACKOFF_MS,
@@ -15,7 +16,7 @@ import {
   BLIND_TRACE_SCHEMA_VERSION,
 } from "./limits.ts";
 import { buildMissionPrompt, selectMissions } from "./missions.ts";
-import { createWalkthroughRecorder, transcodeVideoToMp4 } from "./recorder.ts";
+import { createWalkthroughRecorder, transcodeVideoToMp4, type WalkthroughRecorder } from "./recorder.ts";
 import { extractPainPoints, renderPainPointReportMarkdown } from "./report.ts";
 import type {
   BlindAction,
@@ -24,9 +25,12 @@ import type {
   BlindMissionId,
   BlindObservation,
   BlindRunConfig,
+  ViewportSpec,
   WalkthroughStep,
   WalkthroughTrace,
 } from "./types.ts";
+
+const DEFAULT_REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 interface InPageDomNode {
   tagName: string;
@@ -102,6 +106,7 @@ async function captureRawA11yTree(page: Page): Promise<RawA11yNode | null> {
         innerText?: string;
         value?: string;
         disabled?: boolean;
+        labels?: ArrayLike<{ textContent?: string | null }>;
         children?: ArrayLike<DomLike>;
         getAttribute?(name: string): string | null;
         getBoundingClientRect?(): { width: number; height: number };
@@ -132,6 +137,7 @@ async function captureRawA11yTree(page: Page): Promise<RawA11yNode | null> {
         if (tag === "main") return "main";
         if (tag === "aside") return "complementary";
         if (tag === "dialog") return "dialog";
+        if (tag === "article") return "article";
         if (tag === "h1" || tag === "h2" || tag === "h3" || tag === "h4") return "heading";
         return "generic";
       };
@@ -140,6 +146,8 @@ async function captureRawA11yTree(page: Page): Promise<RawA11yNode | null> {
         if (el.getAttribute?.("aria-hidden") === "true") return false;
         const style = g.getComputedStyle?.(el);
         if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+        // SurfaceOutlet mounts visible workbench panels inside display:contents wrappers whose own box is 0x0.
+        if (style?.display === "contents") return true;
         const rect = el.getBoundingClientRect?.();
         if (rect && rect.width === 0 && rect.height === 0) return false;
         return true;
@@ -151,7 +159,8 @@ async function captureRawA11yTree(page: Page): Promise<RawA11yNode | null> {
         const placeholder = el.getAttribute?.("placeholder")?.trim();
         const title = el.getAttribute?.("title")?.trim();
         if (role === "textbox" || role === "combobox") {
-          return placeholder || title || "";
+          const assocLabel = el.labels?.[0]?.textContent?.replace(/\s+/g, " ").trim();
+          return assocLabel || placeholder || title || "";
         }
         if (role !== "generic") {
           const text = (el.innerText ?? el.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -163,7 +172,7 @@ async function captureRawA11yTree(page: Page): Promise<RawA11yNode | null> {
 
       let visited = 0;
       const visit = (el: DomLike): InPageDomNode | null => {
-        if (visited > 1500 || !isVisible(el)) return null;
+        if (visited > 3000 || !isVisible(el)) return null;
         visited += 1;
         const role = inferRole(el);
         const name = ownLabel(el, role);
@@ -204,12 +213,27 @@ async function captureRawA11yTree(page: Page): Promise<RawA11yNode | null> {
   }
 }
 
-async function performAction(page: Page, action: BlindAction): Promise<void> {
+function isNormalizedCoord(x: number, y: number): boolean {
+  return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1000 && y >= 0 && y <= 1000;
+}
+
+function mapNormalizedClickPoint(x: number, y: number, viewport: ViewportSpec): { readonly x: number; readonly y: number } {
+  if (!isNormalizedCoord(x, y)) {
+    throw new RangeError(`click_point (${x}, ${y}) is outside normalized [0, 1000] bounds`);
+  }
+  const pixelX = Math.min(Math.max(0, Math.round((x / 1000) * viewport.width)), Math.max(0, viewport.width - 1));
+  const pixelY = Math.min(Math.max(0, Math.round((y / 1000) * viewport.height)), Math.max(0, viewport.height - 1));
+  return { x: pixelX, y: pixelY };
+}
+
+async function performAction(page: Page, action: BlindAction, viewport: ViewportSpec): Promise<void> {
   const actionTimeout = 4_000;
   switch (action.kind) {
-    case "click_point":
-      await page.mouse.click(action.x, action.y);
+    case "click_point": {
+      const target = mapNormalizedClickPoint(action.x, action.y, viewport);
+      await page.mouse.click(target.x, target.y);
       break;
+    }
     case "click_label": {
       const candidates = [
         ...(action.role ? [page.getByRole(action.role as Parameters<Page["getByRole"]>[0], { name: action.label })] : []),
@@ -282,11 +306,15 @@ function actionSignature(action: BlindAction): string {
   return JSON.stringify(action);
 }
 
-function describeActionForJournal(action: BlindAction): string {
+function describeActionForJournal(action: BlindAction, viewport?: ViewportSpec): string {
   switch (action.kind) {
     case "click_label":
       return `clicked "${action.label}"`;
     case "click_point":
+      if (viewport && isNormalizedCoord(action.x, action.y)) {
+        const px = mapNormalizedClickPoint(action.x, action.y, viewport);
+        return `clicked normalized (${Math.round(action.x)}, ${Math.round(action.y)}) -> (${px.x}, ${px.y})px`;
+      }
       return `clicked (${Math.round(action.x)}, ${Math.round(action.y)})`;
     case "type":
       return `typed ${JSON.stringify(action.text.slice(0, 60))}${action.submit ? " and submitted" : ""}`;
@@ -357,6 +385,210 @@ async function safeScreenshot(page: Page, targetPath: string): Promise<boolean> 
   }
 }
 
+interface StepErrorBuffers {
+  consoleErrors: string[];
+  pageErrors: string[];
+  failedRequests: string[];
+}
+
+function assertStepPromptClean(
+  systemPrompt: string,
+  userGoal: string,
+  observation: BlindObservation,
+  repoRoot: string,
+  handle: IsolatedBellwoodHandle,
+): void {
+  const payload = [systemPrompt, userGoal, observation.url, ...observation.recentJournal, observation.a11yText].join("\n");
+  assertBlindPromptClean(payload, {
+    repoRoot,
+    forbiddenTerms: [handle.uiToken, handle.homeDir],
+  });
+}
+
+async function resetPageForViewport(page: Page, origin: string, viewport: ViewportSpec, needsEntryReset: boolean): Promise<void> {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  if (needsEntryReset) {
+    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded", timeout: 20_000 });
+  }
+  await page.waitForLoadState("networkidle", { timeout: 2_500 }).catch(() => {});
+}
+
+async function runMissionViewport(input: {
+  readonly page: Page;
+  readonly config: BlindRunConfig;
+  readonly handle: IsolatedBellwoodHandle;
+  readonly recorder: WalkthroughRecorder;
+  readonly mission: BlindMission;
+  readonly missionPrompt: { readonly systemPrompt: string; readonly userGoal: string };
+  readonly viewport: ViewportSpec;
+  readonly steps: WalkthroughStep[];
+  readonly maxTotalSteps: number;
+  readonly runDeadline: number;
+  readonly repoRoot: string;
+  readonly errors: StepErrorBuffers;
+  readonly saveCheckpoint: () => void;
+}): Promise<{ readonly achieved: boolean; readonly blocked: boolean; readonly abortedReason: string | null }> {
+  const { page, config, handle, recorder, mission, missionPrompt, viewport, steps, maxTotalSteps, runDeadline, repoRoot, errors, saveCheckpoint } = input;
+  const journal: string[] = [`Mission goal: ${missionPrompt.userGoal}`];
+  let missionStepCount = 0;
+  let lastSig = "";
+  let stuckRepeats = 0;
+  let achieved = false;
+  let blocked = false;
+  let abortedReason: string | null = null;
+
+  while (missionStepCount < mission.maxSteps && steps.length < maxTotalSteps) {
+    if (Date.now() > runDeadline) {
+      abortedReason = "run_budget_exceeded";
+      break;
+    }
+
+    errors.consoleErrors = [];
+    errors.pageErrors = [];
+    errors.failedRequests = [];
+
+    const stepIndex = steps.length + 1;
+    const stepStart = Date.now();
+    const screenshotBefore = recorder.nextScreenshotPath(stepIndex, "before");
+    const screenshotAfter = recorder.nextScreenshotPath(stepIndex, "after");
+    await safeScreenshot(page, screenshotBefore);
+    const beforeHash = sha256File(screenshotBefore);
+    const rawA11y = await captureRawA11yTree(page);
+    const sanitizedA11y = sanitizeAccessibilitySnapshot(rawA11y);
+
+    const observation: BlindObservation = {
+      stepIndex,
+      missionId: mission.id,
+      viewport,
+      url: page.url(),
+      screenshotPath: screenshotBefore,
+      visualHash: beforeHash,
+      a11yNodes: sanitizedA11y.nodes,
+      a11yText: sanitizedA11y.text,
+      recentJournal: [...journal.slice(-8)],
+    };
+
+    assertStepPromptClean(config.adapter.systemPrompt, missionPrompt.userGoal, observation, repoRoot, handle);
+
+    const decision = await decideWithRetries(config, handle, observation);
+    if (!decision.ok) {
+      await safeScreenshot(page, screenshotAfter);
+      const afterHash = sha256File(screenshotAfter);
+      steps.push({
+        index: stepIndex,
+        missionId: mission.id,
+        viewport: viewport.kind,
+        timestamp: new Date().toISOString(),
+        thought: "Step interrupted by harness or environment outage.",
+        confusion: decision.noiseReason,
+        action: { kind: "wait", reason: "harness_interrupted" },
+        screenshotBefore,
+        screenshotAfter,
+        telemetry: {
+          consoleErrors: [...errors.consoleErrors],
+          pageErrors: [...errors.pageErrors],
+          failedRequests: [...errors.failedRequests],
+          visualChanged: beforeHash !== afterHash,
+          daemonAlive: handle.isRunning(),
+          durationMs: Date.now() - stepStart,
+        },
+        noiseReason: decision.noiseReason,
+      });
+      abortedReason = decision.noiseReason;
+      saveCheckpoint();
+      break;
+    }
+
+    const { thought, confusion, action } = decision.response;
+    if (action.kind === "click_point" && !isNormalizedCoord(action.x, action.y)) {
+      await safeScreenshot(page, screenshotAfter);
+      const afterHash = sha256File(screenshotAfter);
+      steps.push({
+        index: stepIndex,
+        missionId: mission.id,
+        viewport: viewport.kind,
+        timestamp: new Date().toISOString(),
+        thought,
+        confusion: `Out-of-bounds click_point (${action.x}, ${action.y}); expected normalized [0, 1000] coordinates.`,
+        action,
+        screenshotBefore,
+        screenshotAfter,
+        telemetry: {
+          consoleErrors: [...errors.consoleErrors],
+          pageErrors: [...errors.pageErrors],
+          failedRequests: [...errors.failedRequests],
+          visualChanged: beforeHash !== afterHash,
+          daemonAlive: handle.isRunning(),
+          durationMs: Date.now() - stepStart,
+        },
+        noiseReason: "click_point_out_of_bounds",
+      });
+      missionStepCount += 1;
+      journal.push(`Step ${stepIndex}: rejected out-of-bounds click_point (${action.x}, ${action.y})`);
+      saveCheckpoint();
+      continue;
+    }
+
+    await performAction(page, action, viewport);
+    await safeScreenshot(page, screenshotAfter);
+    const afterHash = sha256File(screenshotAfter);
+    const visualChanged = beforeHash !== afterHash;
+
+    const sig = actionSignature(action);
+    if (sig === lastSig && !visualChanged && action.kind !== "note_friction" && action.kind !== "finish") {
+      stuckRepeats += 1;
+    } else {
+      lastSig = sig;
+      stuckRepeats = 1;
+    }
+
+    const isStuck = stuckRepeats >= BLIND_STUCK_REPEAT_THRESHOLD;
+    const recordedConfusion = isStuck
+      ? `${confusion ? `${confusion} | ` : ""}Stuck loop detected: repeated ${describeActionForJournal(action, viewport)} ${stuckRepeats} times with zero visual change`
+      : confusion;
+
+    steps.push({
+      index: stepIndex,
+      missionId: mission.id,
+      viewport: viewport.kind,
+      timestamp: new Date().toISOString(),
+      thought,
+      confusion: recordedConfusion,
+      action,
+      screenshotBefore,
+      screenshotAfter,
+      telemetry: {
+        consoleErrors: [...errors.consoleErrors],
+        pageErrors: [...errors.pageErrors],
+        failedRequests: [...errors.failedRequests],
+        visualChanged,
+        daemonAlive: handle.isRunning(),
+        durationMs: Date.now() - stepStart,
+      },
+      noiseReason: null,
+      ...(isStuck ? { stuckLoop: true } : {}),
+    });
+    missionStepCount += 1;
+    journal.push(`Step ${stepIndex}: ${describeActionForJournal(action, viewport)} (visualChanged=${String(visualChanged)})`);
+    saveCheckpoint();
+
+    if (action.kind === "finish") {
+      if (action.achieved) achieved = true;
+      else blocked = true;
+      break;
+    }
+    if (isStuck) {
+      blocked = true;
+      break;
+    }
+  }
+
+  if (abortedReason === null && !achieved && !blocked && missionStepCount >= mission.maxSteps) {
+    blocked = true;
+  }
+  return { achieved, blocked, abortedReason };
+}
+
 async function executeWalkthrough(
   config: BlindRunConfig,
   existingTrace: WalkthroughTrace | null,
@@ -366,11 +598,13 @@ async function executeWalkthrough(
   if (config.missionIds.length === 0) throw new RangeError("missionIds must be non-empty");
   if (config.viewports.length === 0) throw new RangeError("viewports must be non-empty");
 
+  const repoRoot = config.repoRoot ?? DEFAULT_REPO_ROOT;
   const missions = selectMissions(config.missionIds);
   const recorder = createWalkthroughRecorder(config.outDir);
   const maxTotalSteps = Math.min(config.maxTotalSteps ?? BLIND_MAX_TOTAL_STEPS_PER_RUN, BLIND_MAX_TOTAL_STEPS_PER_RUN);
   const startedAt = existingTrace?.startedAt ?? new Date().toISOString();
   const completedMissions: BlindMissionId[] = [...(existingTrace?.completedMissions ?? [])];
+  const blockedMissions: BlindMissionId[] = [...(existingTrace?.blockedMissions ?? [])];
   const steps: WalkthroughStep[] = [...(existingTrace?.steps ?? [])];
   let abortedReason: string | null = null;
   const runDeadline = Date.now() + BLIND_RUN_BUDGET_MS;
@@ -388,6 +622,7 @@ async function executeWalkthrough(
     appVendorMode: config.appVendorMode,
     missionIds: config.missionIds,
     completedMissions: [...completedMissions],
+    blockedMissions: [...blockedMissions],
     steps: [...steps],
     videoPath,
     systemPromptSha256,
@@ -434,160 +669,72 @@ async function executeWalkthrough(
       page = await context.newPage();
     }
 
-    let stepConsoleErrors: string[] = [];
-    let stepPageErrors: string[] = [];
-    let stepFailedRequests: string[] = [];
+    const errors: StepErrorBuffers = { consoleErrors: [], pageErrors: [], failedRequests: [] };
     page.on("console", (msg) => {
-      if (msg.type() === "error") stepConsoleErrors.push(msg.text());
+      if (msg.type() === "error") errors.consoleErrors.push(msg.text());
     });
     page.on("pageerror", (err) => {
-      stepPageErrors.push(err.message);
+      errors.pageErrors.push(err.message);
     });
     page.on("requestfailed", (req) => {
-      stepFailedRequests.push(`${req.method()} ${req.url()} (${req.failure()?.errorText ?? "failed"})`);
+      errors.failedRequests.push(`${req.method()} ${req.url()} (${req.failure()?.errorText ?? "failed"})`);
     });
     page.on("response", (res) => {
       if (res.status() >= 400) {
-        stepFailedRequests.push(`${res.request().method()} ${res.url()} (HTTP ${res.status()})`);
+        errors.failedRequests.push(`${res.request().method()} ${res.url()} (HTTP ${res.status()})`);
       }
     });
 
     await page.goto(handle.loginUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
-    await page.waitForURL(`${handle.origin}/`, { timeout: 20_000 }).catch(() => {});
+    await page.waitForURL(
+      (url) => url.origin === handle.origin && !url.pathname.startsWith("/auth") && !url.searchParams.has("token"),
+      { timeout: 20_000 },
+    );
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
 
+    let needsEntryReset = false;
     for (const mission of remainingMissions) {
       if (abortedReason !== null || steps.length >= maxTotalSteps) break;
       const missionPrompt = buildMissionPrompt(mission, handle.sampleProjectDir);
       let missionBlocked = false;
+      let allViewportsAchieved = true;
 
       for (const viewport of config.viewports) {
-        if (abortedReason !== null || steps.length >= maxTotalSteps) break;
-        await page.setViewportSize({ width: viewport.width, height: viewport.height });
-        await page.waitForLoadState("networkidle", { timeout: 1_500 }).catch(() => {});
-
-        const journal: string[] = [`Mission goal: ${missionPrompt.userGoal}`];
-        let missionStepCount = 0;
-        let lastSig = "";
-        let stuckRepeats = 0;
-
-        while (missionStepCount < mission.maxSteps && steps.length < maxTotalSteps) {
-          if (Date.now() > runDeadline) {
-            abortedReason = "run_budget_exceeded";
-            break;
-          }
-
-          stepConsoleErrors = [];
-          stepPageErrors = [];
-          stepFailedRequests = [];
-
-          const stepIndex = steps.length + 1;
-          const stepStart = Date.now();
-          const screenshotBefore = recorder.nextScreenshotPath(stepIndex, "before");
-          const screenshotAfter = recorder.nextScreenshotPath(stepIndex, "after");
-          await safeScreenshot(page, screenshotBefore);
-          const beforeHash = sha256File(screenshotBefore);
-          const rawA11y = await captureRawA11yTree(page);
-          const sanitizedA11y = sanitizeAccessibilitySnapshot(rawA11y);
-
-          const observation: BlindObservation = {
-            stepIndex,
-            missionId: mission.id,
-            viewport,
-            url: page.url(),
-            screenshotPath: screenshotBefore,
-            visualHash: beforeHash,
-            a11yNodes: sanitizedA11y.nodes,
-            a11yText: sanitizedA11y.text,
-            recentJournal: [...journal.slice(-8)],
-          };
-
-          const decision = await decideWithRetries(config, handle, observation);
-          if (!decision.ok) {
-            await safeScreenshot(page, screenshotAfter);
-            const afterHash = sha256File(screenshotAfter);
-            const noiseStep: WalkthroughStep = {
-              index: stepIndex,
-              missionId: mission.id,
-              viewport: viewport.kind,
-              timestamp: new Date().toISOString(),
-              thought: "Step interrupted by harness or environment outage.",
-              confusion: decision.noiseReason,
-              action: { kind: "wait", reason: "harness_interrupted" },
-              screenshotBefore,
-              screenshotAfter,
-              telemetry: {
-                consoleErrors: [...stepConsoleErrors],
-                pageErrors: [...stepPageErrors],
-                failedRequests: [...stepFailedRequests],
-                visualChanged: beforeHash !== afterHash,
-                daemonAlive: handle.isRunning(),
-                durationMs: Date.now() - stepStart,
-              },
-              noiseReason: decision.noiseReason,
-            };
-            steps.push(noiseStep);
-            abortedReason = decision.noiseReason;
-            recorder.saveCheckpoint(buildTraceSnapshot(null, null));
-            break;
-          }
-
-          const { thought, confusion, action } = decision.response;
-          await performAction(page, action);
-          await safeScreenshot(page, screenshotAfter);
-          const afterHash = sha256File(screenshotAfter);
-          const visualChanged = beforeHash !== afterHash;
-
-          const sig = actionSignature(action);
-          if (sig === lastSig && !visualChanged && action.kind !== "note_friction" && action.kind !== "finish") {
-            stuckRepeats += 1;
-          } else {
-            lastSig = sig;
-            stuckRepeats = 1;
-          }
-
-          const isStuck = stuckRepeats >= BLIND_STUCK_REPEAT_THRESHOLD;
-          const recordedConfusion = isStuck
-            ? `${confusion ? `${confusion} | ` : ""}Stuck loop detected: repeated ${describeActionForJournal(action)} ${stuckRepeats} times with zero visual change`
-            : confusion;
-
-          const stepRecord: WalkthroughStep = {
-            index: stepIndex,
-            missionId: mission.id,
-            viewport: viewport.kind,
-            timestamp: new Date().toISOString(),
-            thought,
-            confusion: recordedConfusion,
-            action,
-            screenshotBefore,
-            screenshotAfter,
-            telemetry: {
-              consoleErrors: [...stepConsoleErrors],
-              pageErrors: [...stepPageErrors],
-              failedRequests: [...stepFailedRequests],
-              visualChanged,
-              daemonAlive: handle.isRunning(),
-              durationMs: Date.now() - stepStart,
-            },
-            noiseReason: null,
-          };
-          steps.push(stepRecord);
-          missionStepCount += 1;
-          journal.push(`Step ${stepIndex}: ${describeActionForJournal(action)} (visualChanged=${String(visualChanged)})`);
-          recorder.saveCheckpoint(buildTraceSnapshot(null, null));
-
-          if (action.kind === "finish") {
-            if (!action.achieved) missionBlocked = true;
-            break;
-          }
-          if (isStuck) {
-            missionBlocked = true;
-            break;
-          }
+        if (abortedReason !== null || steps.length >= maxTotalSteps) {
+          allViewportsAchieved = false;
+          break;
         }
+        await resetPageForViewport(page, handle.origin, viewport, needsEntryReset);
+        needsEntryReset = true;
+
+        const outcome = await runMissionViewport({
+          page,
+          config,
+          handle,
+          recorder,
+          mission,
+          missionPrompt,
+          viewport,
+          steps,
+          maxTotalSteps,
+          runDeadline,
+          repoRoot,
+          errors,
+          saveCheckpoint: () => recorder.saveCheckpoint(buildTraceSnapshot(null, null)),
+        });
+        if (outcome.abortedReason !== null) {
+          abortedReason = outcome.abortedReason;
+          allViewportsAchieved = false;
+          break;
+        }
+        if (outcome.blocked) missionBlocked = true;
+        if (!outcome.achieved) allViewportsAchieved = false;
       }
 
-      if (abortedReason === null && !missionBlocked && !completedMissions.includes(mission.id)) {
+      if (missionBlocked && !blockedMissions.includes(mission.id)) {
+        blockedMissions.push(mission.id);
+        recorder.saveCheckpoint(buildTraceSnapshot(null, null));
+      } else if (abortedReason === null && allViewportsAchieved && !missionBlocked && !completedMissions.includes(mission.id)) {
         completedMissions.push(mission.id);
         recorder.saveCheckpoint(buildTraceSnapshot(null, null));
       }

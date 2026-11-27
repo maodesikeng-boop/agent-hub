@@ -36,6 +36,10 @@ function stepEvidence(step: WalkthroughStep): readonly string[] {
   return [...new Set(paths)];
 }
 
+function isStuckLoopStep(step: WalkthroughStep): boolean {
+  return step.stuckLoop === true || (step.confusion !== null && /\bStuck loop detected:/i.test(step.confusion));
+}
+
 function deterministicSignalsOf(step: WalkthroughStep): readonly string[] {
   const signals: string[] = [];
   if (step.telemetry.consoleErrors.length > 0) {
@@ -53,7 +57,10 @@ function deterministicSignalsOf(step: WalkthroughStep): readonly string[] {
   ) {
     signals.push(`no_visual_change:${step.action.kind}`);
   }
-  if (step.action.kind === "finish" && !step.action.achieved) {
+  if (isStuckLoopStep(step)) {
+    signals.push("stuck_loop");
+    signals.push("mission_blocked");
+  } else if (step.action.kind === "finish" && !step.action.achieved) {
     signals.push("mission_blocked");
   }
   return signals;
@@ -68,16 +75,20 @@ function classifyStepFriction(
     step.telemetry.pageErrors.length > 0 ||
     step.telemetry.failedRequests.length > 0;
   const isBlockedFinish = step.action.kind === "finish" && !step.action.achieved;
+  const isStuck = isStuckLoopStep(step);
   const isDeadInteraction = signals.some((s) => s.startsWith("no_visual_change:"));
   const notedSummary = step.action.kind === "note_friction" ? step.action.summary.trim() : "";
   const confusion = step.confusion?.trim() ?? "";
 
-  if (isBlockedFinish) {
-    const title = step.action.summary.trim() || confusion || `Blocked on mission ${step.missionId}`;
+  if (isBlockedFinish || isStuck) {
+    const title =
+      (isBlockedFinish ? step.action.summary.trim() : "") ||
+      confusion ||
+      `Blocked on mission ${step.missionId}`;
     return {
       severity: "P0",
       title,
-      impact: confusion || step.action.summary.trim() || "User could not complete the core onboarding goal.",
+      impact: confusion || (isBlockedFinish ? step.action.summary.trim() : "") || "User could not complete the core onboarding goal.",
     };
   }
   if (hasRuntimeError) {
@@ -160,7 +171,7 @@ export function extractPainPoints(trace: WalkthroughTrace, now: Date = new Date(
   }
   const harnessNoise: FrictionSignal[] = [];
   const groups = new Map<string, MutablePainGroup>();
-  const blockedMissions = new Set<BlindMissionId>();
+  const blockedMissions = new Set<BlindMissionId>(trace.blockedMissions ?? []);
 
   for (const step of trace.steps) {
     const evidence = stepEvidence(step);
@@ -181,7 +192,7 @@ export function extractPainPoints(trace: WalkthroughTrace, now: Date = new Date(
     const signals = deterministicSignalsOf(step);
     const classified = classifyStepFriction(step, signals);
     if (!classified) continue;
-    if (step.action.kind === "finish" && !step.action.achieved) {
+    if ((step.action.kind === "finish" && !step.action.achieved) || isStuckLoopStep(step)) {
       blockedMissions.add(step.missionId);
     }
 

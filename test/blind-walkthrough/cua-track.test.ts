@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +51,11 @@ describe("cua-track (S10, S13, S15)", () => {
       expect(result.appIdAlwaysDeniedPreserved).toBe(true);
       expect(result.launchCommand).toContain("AGENT_HUB_HOME=");
       expect(result.launchCommand).toContain("AGENT_HUB_PORT=4499");
+      expect(result.launchCommand).toMatch(/\bopen\b.*--env\b.*AGENT_HUB_HOME=/);
+      expect(result.launchCommand).toMatch(/\bopen\b.*--env\b.*AGENT_HUB_PORT=4499/);
+      expect(result.launchCommand).not.toMatch(/^AGENT_HUB_HOME=/);
+      const scriptText = readFileSync(join(outputDir, "launch-isolated-bellwood.sh"), "utf8");
+      expect(scriptText).toContain(result.launchCommand);
       expect(result.requiredManualGates.length).toBeGreaterThanOrEqual(2);
       expect(() => assertBlindPromptClean(result.blindBrief, { repoRoot })).not.toThrow();
     }
