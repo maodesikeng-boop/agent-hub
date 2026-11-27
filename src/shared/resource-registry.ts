@@ -73,6 +73,7 @@ import {
   UPLOADS_DISK_MAX_BYTES,
   USER_BLOCKERS_RESOLVED_KEEP,
   WATCHES_RETAIN_MS,
+  WATCHES_RUNNING_MAX,
   WATCHES_RETAIN_PER_PM,
   WORKER_RETENTION_DAYS,
   WORKER_RETENTION_MAX_ENDED,
@@ -291,10 +292,6 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("session_persona_seen", "growing", "src/daemon/ledger/persona.ts", "src/daemon/ledger/worker-retention.ts, src/daemon/ledger/router.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("session_preamble_seen", "growing", "src/daemon/ledger/handover.ts", "src/daemon/ledger/worker-retention.ts", "automatic", WORKER_RETENTION_LIMITS),
   table("pm_agenda_cursors", "retained_metadata", "src/daemon/ledger/pm-agenda.ts", "src/daemon/ledger/handover.ts, src/daemon/ledger/persona.ts", "on_archive_or_delete"),
-  table("pm_watches", "growing", "src/daemon/ledger/pm-watches.ts", "src/daemon/ledger/pm-watches.ts", "automatic", [
-    limit("WATCHES_RETAIN_MS", WATCHES_RETAIN_MS, "ms"),
-    limit("WATCHES_RETAIN_PER_PM", WATCHES_RETAIN_PER_PM, "rows"),
-  ]),
   table("turn_completions", "growing", "src/daemon/ledger/turn-completions.ts", "src/daemon/ledger/turn-completions.ts", "automatic", [
     limit("TURN_COMPLETION_UNPERSISTED_MAX", TURN_COMPLETION_UNPERSISTED_MAX, "rows"),
   ]),
@@ -332,6 +329,10 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("worker_capabilities", "retained_metadata", "src/daemon/ledger/workers.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("router_worker_origins", "retained_metadata", "src/daemon/ledger/router.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("schedules", "retained_metadata", "src/daemon/ledger/schedules.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
+  table("pm_watches", "growing", "src/daemon/ledger/pm-watches.ts", "src/daemon/ledger/pm-watches.ts, src/daemon/ledger/persona.ts", "automatic", [
+    limit("WATCHES_RETAIN_MS", WATCHES_RETAIN_MS, "ms"),
+    limit("WATCHES_RETAIN_PER_PM", WATCHES_RETAIN_PER_PM, "rows"),
+  ]),
   table("handoffs", "retained_metadata", "src/daemon/ledger/persona.ts", "src/daemon/ledger/persona.ts", "on_archive_or_delete"),
   table("health", "bounded_config", "src/daemon/ledger/context.ts", "src/daemon/ledger/context.ts", "overwrite"),
   table("router_settings", "bounded_config", "src/daemon/ledger/router.ts", "src/daemon/ledger/router.ts", "overwrite"),
@@ -429,11 +430,12 @@ const RUNTIME_RESOURCE_ENTRIES: readonly ResourceRegistryEntry[] = [
     kind: "process",
     target: "worker_process_tree",
     growth: "growing",
-    owner: "src/daemon/driver/base-driver.ts, src/daemon/setup/setup.ts",
+    owner: "src/daemon/driver/base-driver.ts, src/daemon/setup/setup.ts, src/daemon/watches/launch.ts",
     cleaner: "src/daemon/resources/session-processes.ts, src/daemon/platform/process-tag.ts, src/daemon/process-ledger.ts",
     cleanupMode: "automatic_or_hold",
     limits: [
       limit("PROCESS_LEDGER_MAX_ENTRIES", PROCESS_LEDGER_MAX_ENTRIES, "entries"),
+      limit("WATCHES_RUNNING_MAX", WATCHES_RUNNING_MAX, "entries"),
       limit("SESSION_TAG_MAX_DEPTH", SESSION_TAG_MAX_DEPTH, "entries"),
     ],
   },
@@ -469,7 +471,7 @@ const RUNTIME_RESOURCE_ENTRIES: readonly ResourceRegistryEntry[] = [
     target: "scratch_dirs",
     growth: "transient",
     owner:
-      "src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts",
+      "src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts, src/daemon/watches/launch.ts",
     cleaner: "the creating call removes its directory in a finally block before it returns",
     cleanupMode: "removed_by_creator",
     limits: [],

@@ -105,7 +105,7 @@ describe("S1 and S2: the per-graph list and the delivery row", () => {
     const note = f.pmSystemMessages().find(isGraphReadyNotice)!;
     expect(note.text).toContain("图里画的步骤都做完了，等你验收交付");
     expect(note.text).toContain("hub graph patch");
-    expect(note.text).not.toContain("watch add");
+    expect(note.text).toContain("hub watch add");
   });
 
   it("S1.3 (regression): a brief-less step after a finished step waits for the PM and wakes it once", async () => {

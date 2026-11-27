@@ -896,6 +896,8 @@ export interface TaskGraph {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+  /** The watch the PM handed this graph's wait to; delivery waits on it instead of on the PM. */
+  deliveryWatch?: { watchId: number; body: string };
 }
 
 export function isTaskGraphReadyToFinish(graph: Pick<TaskGraph, "status" | "nodes">): boolean {

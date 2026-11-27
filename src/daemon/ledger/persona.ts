@@ -771,6 +771,7 @@ export function createLedgerPersona(
         db.run(`DELETE FROM persona_changes WHERE pm_id = ? OR session_id IN ${inList(sessionIds)}`, pmId);
 
         db.run("DELETE FROM schedules WHERE pm_id = ?", pmId);
+        db.run("DELETE FROM pm_watches WHERE pm_id = ?", pmId);
         for (const scheduleId of scheduleIds) {
           p.changes.push({ type: "schedule.removed", data: { scheduleId } });
         }

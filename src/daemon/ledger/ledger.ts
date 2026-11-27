@@ -44,6 +44,7 @@ import type { HealthDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./r
 import { createLedgerRouter } from "./router.ts";
 import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
+import { createLedgerPmWatches, type PmWatchRunnerLedger } from "./pm-watch-commands.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions, idle } from "./sessions.ts";
 import { completedWorkPage } from "./completed-work.ts";
@@ -96,6 +97,8 @@ export interface SqliteLedger extends Ledger {
    * calls it on its scheduler tick. Returns how many reminders were enqueued.
    */
   runDueBackgroundWaits(nowMs?: number): number;
+  /** What the watch runner reads and settles; watches belong to the PM, not to a session. */
+  readonly watches: PmWatchRunnerLedger;
   /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
   close(): void;
 }
@@ -362,7 +365,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
+  const watches = createLedgerPmWatches(ctx, sessions, persona, taskGraphs.publishBranchChange);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, watches, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
   const { assertStart, init, ...capabilities } = createLedgerPmCapabilities(ctx);
 
@@ -600,6 +604,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     runDueSchedules: schedules.runDueSchedules,
     runDueBackgroundWaits: (nowMs = ctx.now()) => workers.backgroundWaits.runDue(nowMs),
+    watches: watches.runner,
     addSchedule: schedules.addForUser,
     setScheduleEnabled: schedules.setEnabledForUser,
     removeSchedule: schedules.removeForUser,

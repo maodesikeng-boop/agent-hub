@@ -7,6 +7,7 @@ import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import type { MessageDbRow } from "../rows.ts";
 import { parseJsonOr, toTaskNode } from "./rows.ts";
+import { graphWatchesOf } from "../pm-watches.ts";
 import { slotViewsOf, writeStepSlot } from "./slots.ts";
 import type { NewStep } from "./spec.ts";
 import type { GraphMaps, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
@@ -147,12 +148,14 @@ export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = tru
     "SELECT * FROM task_graph_edges WHERE graph_id = ? ORDER BY from_key ASC, to_key ASC",
     id,
   );
-  return graphOfRow(
+  const graph = graphOfRow(
     row,
     hydrateNodes(g, nodeRows, includeDetails),
     edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key })),
     includeDetails ? { goal: row.goal } : undefined,
   );
+  const watch = graphWatchesOf(g.db, [id]).get(id);
+  return watch === undefined ? graph : { ...graph, deliveryWatch: watch };
 }
 
 export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], includeAgentSettings = false): TaskGraph[] {
@@ -177,9 +180,12 @@ export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], 
     idsJson,
   );
   for (const e of edgeRows) byId.get(e.graph_id)?.edges.push({ fromKey: e.from_key, toKey: e.to_key });
+  const watches = graphWatchesOf(g.db, rows.map((row) => row.id));
   return rows.map((row) => {
     const children = byId.get(row.id)!;
-    return graphOfRow(row, children.nodes, children.edges);
+    const graph = graphOfRow(row, children.nodes, children.edges);
+    const watch = watches.get(row.id);
+    return watch === undefined ? graph : { ...graph, deliveryWatch: watch };
   });
 }
 
