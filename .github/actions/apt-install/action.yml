@@ -53,6 +53,9 @@ runs:
         shopt -s nullglob
         APT_SOURCES_ROOT="${APT_SOURCES_ROOT:-/etc/apt}"
         APT_ARCHIVES_DIR="${APT_ARCHIVES_DIR:-/var/cache/apt/archives}"
+        offline_apt_dir=""
+        apt_config=""
+        trap 'rm -rf "${offline_apt_dir:-}" "${apt_config:-}"' EXIT
         if timeout 15 bash -c "$PROBE"; then
           echo "Required packages are already installed"
           exit 0
@@ -60,15 +63,23 @@ runs:
 
         debs=("$DEBS"/*.deb)
         if [[ "${CACHE_HIT:-}" == true ]] && (( ${#debs[@]} > 0 )); then
-          if sudo timeout --kill-after=5s 60 env DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=- install -y --no-download --no-install-recommends "${debs[@]}" && timeout 15 bash -c "$PROBE"; then
+          offline_apt_dir="$(mktemp -d)"
+          : > "$offline_apt_dir/sources.list"
+          mkdir -p "$offline_apt_dir/sources.list.d" "$DEBS/partial"
+          if sudo timeout --kill-after=5s 60 env DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Dir::Etc::sourcelist="$offline_apt_dir/sources.list" \
+            -o Dir::Etc::sourceparts="$offline_apt_dir/sources.list.d" \
+            -o Dir::Cache::Archives="$DEBS" \
+            install -y --no-download --no-install-recommends "${debs[@]}" && timeout 15 bash -c "$PROBE"; then
+            rm -rf "$DEBS/partial" "$DEBS/lock"
             echo "Installed packages from cached debs"
             exit 0
           fi
+          rm -rf "$DEBS/partial" "$DEBS/lock"
           echo "::warning::Cached debs did not install all packages; trying apt"
         fi
 
         apt_config="$(mktemp)"
-        trap 'rm -f "$apt_config"' EXIT
         cat > "$apt_config" <<APT
         Acquire::Retries "1";
         Acquire::http::Timeout "15";
