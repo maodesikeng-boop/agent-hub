@@ -13,9 +13,19 @@ export const GraphDeliveryRow = memo(function GraphDeliveryRow({
   detail?: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
+  // A hidden workbench surface keeps this state but drops the interval, so re-read the clock whenever the row is shown again.
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), GRAPH_DELIVERY_AGE_TICK_MS);
-    return () => window.clearInterval(timer);
+    const tick = () => setNow(Date.now());
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    tick();
+    const timer = window.setInterval(tick, GRAPH_DELIVERY_AGE_TICK_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
   const elapsed = Math.max(0, now - row.since);
   return (
