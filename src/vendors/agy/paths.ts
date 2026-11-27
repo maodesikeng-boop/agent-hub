@@ -12,8 +12,14 @@ export const AGY_MACOS_LOGIN_KEYCHAIN_REL = "Library/Keychains/login.keychain-db
  * already explicitly set and <effectiveHome>/Library/Keychains/login.keychain-db does not exist; returns {}
  * on non-darwin platforms, when the login keychain exists, or when the caller explicitly set the variable.
  */
-export function agyIsolatedHomeEnv(_input: VendorRuntimeEnvInput): Readonly<Record<string, string>> {
-  throw new Error("Not implemented");
+export function agyIsolatedHomeEnv(input: VendorRuntimeEnvInput): Readonly<Record<string, string>> {
+  if (input.platform !== "darwin") return {};
+  const explicit = input.env[AGY_FORCE_FILE_TOKEN_STORAGE_ENV];
+  if (explicit !== undefined && explicit.trim() !== "") return {};
+  const effectiveHome = input.env.HOME?.trim() || input.userHome;
+  if (effectiveHome === "") return {};
+  if (input.exists(joinByStyle(effectiveHome, AGY_MACOS_LOGIN_KEYCHAIN_REL))) return {};
+  return { [AGY_FORCE_FILE_TOKEN_STORAGE_ENV]: "1" };
 }
 
 export const runtimeEnv: VendorPathsModule["runtimeEnv"] = agyIsolatedHomeEnv;

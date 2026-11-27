@@ -14,6 +14,7 @@ import {
   type HubPaths,
 } from "../../shared/paths.ts";
 import type { ManagedProviderSecrets } from "../../vendors/daemon-types.ts";
+import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
 
 const REG_QUERY_TIMEOUT_MS = 2_500;
 
@@ -217,6 +218,12 @@ export function createVendorRuntimeResolver(
     return resolved;
   };
 
+  const vendorRuntimeEnv = (
+    vendor: AgentVendor,
+    env: Readonly<Record<string, string | undefined>>,
+  ): Readonly<Record<string, string>> =>
+    VENDOR_PATHS[vendor].runtimeEnv?.({ userHome, platform, env, exists: existsSync }) ?? {};
+
   const resolveVendorEnv = (vendor: AgentVendor): Record<string, string | undefined> => {
     const out: Record<string, string | undefined> = { ...baseEnv };
     const mergedPath = effectivePath();
@@ -233,6 +240,10 @@ export function createVendorRuntimeResolver(
     for (const [k, v] of Object.entries(managed)) {
       out[k] = v;
     }
+    const runtime = vendorRuntimeEnv(vendor, out);
+    for (const [k, v] of Object.entries(runtime)) {
+      out[k] = v;
+    }
     return out;
   };
 
@@ -246,7 +257,10 @@ export function createVendorRuntimeResolver(
     installed: (vendor) => locateBinary(vendor) !== null,
     resolveExecutablePath: (vendor) => locateBinary(vendor) ?? paths.vendorPaths[vendor],
     resolveVendorEnv,
-    resolveManagedDriverEnv: (vendor) => ({ ...secrets.getEnv(vendor) }),
+    resolveManagedDriverEnv: (vendor) => {
+      const managed = secrets.getEnv(vendor);
+      return { ...vendorRuntimeEnv(vendor, { ...baseEnv, ...managed }), ...managed };
+    },
     catalogFingerprint(vendor) {
       const exe = locateBinary(vendor) ?? paths.vendorPaths[vendor];
       const env = resolveVendorEnv(vendor);

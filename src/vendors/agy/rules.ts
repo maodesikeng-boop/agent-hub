@@ -1,8 +1,14 @@
 // agy has no system prompt flag but injects always_on .agents/rules/*.md from each --add-dir into <user_rules>, which survives compaction.
 import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, realpathSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { writeFileAtomicSyncWithRetry } from "../../daemon/platform/index.ts";
-import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_TOTAL_BUDGET_BYTES, AGY_RULE_SINGLE_BUDGET_BYTES } from "./limits.ts";
+import {
+  AGY_RULE_FILE_MAX_BYTES,
+  AGY_RULE_FILES_MAX,
+  AGY_RULE_SINGLE_BUDGET_BYTES,
+  AGY_RULE_TOTAL_BUDGET_BYTES,
+  AGY_RULE_WARNING_MAX_FILES,
+} from "./limits.ts";
 
 export const AGY_RULES_WORKSPACE_DIR = "agy-rules";
 const RULES_SUBDIR = join(".agents", "rules");
@@ -114,34 +120,70 @@ export interface AgyRuleBudgetReport {
  * whose UTF-8 size exceeds AGY_RULE_SINGLE_BUDGET_BYTES sorted by bytes descending. Broken symlinks and
  * non-always_on workspace rules are skipped without throwing.
  */
-export function inspectAgyRuleBudget(_home: string, _workspaces: readonly string[]): AgyRuleBudgetReport {
-  throw new Error("Not implemented");
-}
-
-export function agyRuleBudgetWarning(home: string, workspaces: readonly string[]): string | null {
+export function inspectAgyRuleBudget(home: string, workspaces: readonly string[]): AgyRuleBudgetReport {
   const seen = new Set<string>();
-  let total = 0;
-  let oversized = 0;
+  const files: AgyRuleFileInfo[] = [];
+  let totalBytes = 0;
+
   const inspect = (file: string, needsTrigger: boolean) => {
-    if (!existsSync(file)) return;
-    const real = realpathSync(file);
-    if (seen.has(real)) return;
-    const text = readFileSync(real, "utf8");
+    let real: string;
+    let text: string;
+    try {
+      real = realpathSync(file);
+      if (seen.has(real)) return;
+      if (!statSync(real).isFile()) return;
+      text = readFileSync(real, "utf8");
+    } catch {
+      return;
+    }
     const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1] ?? "";
     if (needsTrigger && !/^trigger:\s*["']?always_on["']?\s*(?:#.*)?$/m.test(frontmatter)) return;
     seen.add(real);
-    const size = Buffer.byteLength(text, "utf8");
-    total += size;
-    if (size > AGY_RULE_SINGLE_BUDGET_BYTES) oversized++;
+    const bytes = Buffer.byteLength(text, "utf8");
+    totalBytes += bytes;
+    files.push({ path: file, bytes });
   };
+
   const root = (dir: string, rulesDir: string, needsTrigger: boolean) => {
     for (const name of ["AGENTS.md", "GEMINI.md"]) inspect(join(dir, name), false);
-    if (existsSync(rulesDir)) for (const entry of readdirSync(rulesDir, { withFileTypes: true })) {
-      if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md")) inspect(join(rulesDir, entry.name), needsTrigger);
+    if (!existsSync(rulesDir)) return;
+    for (const entry of readdirSync(rulesDir, { withFileTypes: true })) {
+      if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md")) {
+        inspect(join(rulesDir, entry.name), needsTrigger);
+      }
     }
   };
+
   for (const dir of [join(home, ".gemini"), join(home, ".gemini", "config")]) root(dir, join(dir, "rules"), false);
   for (const dir of new Set(workspaces)) root(dir, join(dir, RULES_SUBDIR), true);
-  if (total <= AGY_RULE_TOTAL_BUDGET_BYTES && oversized === 0) return null;
-  return `agy 规则预算告警：规则共 ${total} 字节（预算约 ${AGY_RULE_TOTAL_BUDGET_BYTES}），${oversized} 个文件超过单文件 ${AGY_RULE_SINGLE_BUDGET_BYTES} 字节。自动压缩后项目规则或产品提示词可能缺失；未自动裁剪或调整顺序。`;
+
+  files.sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path));
+  const oversizedFiles = files.filter((f) => f.bytes > AGY_RULE_SINGLE_BUDGET_BYTES);
+  return { totalBytes, files, oversizedFiles };
+}
+
+function shortRulePath(file: string, home: string, workspaces: readonly string[]): string {
+  for (const ws of workspaces) {
+    const rel = relative(ws, file);
+    if (rel !== "" && !rel.startsWith("..") && !rel.startsWith("/")) return rel;
+  }
+  const homeRel = relative(home, file);
+  if (homeRel !== "" && !homeRel.startsWith("..") && !homeRel.startsWith("/")) return `~/${homeRel}`;
+  return file;
+}
+
+function formatRuleFileList(files: readonly AgyRuleFileInfo[], home: string, workspaces: readonly string[]): string {
+  const shown = files.slice(0, AGY_RULE_WARNING_MAX_FILES);
+  const items = shown.map((f) => `${shortRulePath(f.path, home, workspaces)}（${f.bytes} 字节）`);
+  return files.length > shown.length ? `${items.join("、")} 等共 ${files.length} 个` : items.join("、");
+}
+
+export function agyRuleBudgetWarning(home: string, workspaces: readonly string[]): string | null {
+  const report = inspectAgyRuleBudget(home, workspaces);
+  if (report.totalBytes <= AGY_RULE_TOTAL_BUDGET_BYTES && report.oversizedFiles.length === 0) return null;
+  const detail =
+    report.oversizedFiles.length > 0
+      ? `超限文件：${formatRuleFileList(report.oversizedFiles, home, workspaces)}。`
+      : `主要占用文件：${formatRuleFileList(report.files, home, workspaces)}。`;
+  return `agy 规则预算告警：规则共 ${report.totalBytes} 字节（预算约 ${AGY_RULE_TOTAL_BUDGET_BYTES}），${report.oversizedFiles.length} 个文件超过单文件 ${AGY_RULE_SINGLE_BUDGET_BYTES} 字节。${detail}自动压缩后项目规则或产品提示词可能缺失；未自动裁剪或调整顺序。`;
 }
