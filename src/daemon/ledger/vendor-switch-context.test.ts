@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { assembleBudgetedPreamble, sliceUtf8TailSafe } from "./handover-budget.ts";
 import {
   VENDOR_SWITCH_ANCHOR_HINT,
   VENDOR_SWITCH_TRUNCATED_HINT,
-  buildVendorSwitchPreamble,
-  collectGenerationContext,
+  collectGenerationEntriesNewestFirst,
   describeGenerationTranscripts,
   formatGenerationMessage,
-  sliceTailUtf16Safe,
+  vendorSwitchPreambleHeader,
 } from "./vendor-switch-context.ts";
 import type { Message, SystemMessageMeta, WorkerMessageMeta } from "../../shared/domain.ts";
 
@@ -43,22 +43,17 @@ function makeMsg(over: Partial<Message> & { id: number }): Message {
   };
 }
 
-describe("sliceTailUtf16Safe", () => {
-  it("在 emoji UTF-16 代理对中间切分时自动跳过孤立低位代理项，绝不产生半截码元", () => {
+describe("sliceUtf8TailSafe", () => {
+  it("在 emoji UTF-16 代理对与多字节 UTF-8 边界切分时绝不产生半截码元", () => {
     const text = "甲😀乙🚀丙";
-    expect(text.length).toBe(7);
-    expect(sliceTailUtf16Safe(text, 7)).toBe("甲😀乙🚀丙");
-    expect(sliceTailUtf16Safe(text, 6)).toBe("😀乙🚀丙");
-    // 切点刚好落在 😀 的低位代理项上（index = 2）：向后挪 1 位从“乙”开始，无孤立代理项
-    const cutInEmoji = sliceTailUtf16Safe(text, 5);
-    expect(cutInEmoji).toBe("乙🚀丙");
-    expect(hasNoLoneSurrogates(cutInEmoji)).toBe(true);
-    // 切点落在 🚀 的低位代理项上（index = 5）
-    const cutInRocket = sliceTailUtf16Safe(text, 2);
-    expect(cutInRocket).toBe("丙");
-    expect(hasNoLoneSurrogates(cutInRocket)).toBe(true);
-    expect(sliceTailUtf16Safe("😀", 1)).toBe("");
-    expect(sliceTailUtf16Safe("abc", 0)).toBe("");
+    expect(sliceUtf8TailSafe(text, Buffer.byteLength(text, "utf8"))).toBe("甲😀乙🚀丙");
+    for (let limit = 0; limit <= Buffer.byteLength(text, "utf8"); limit++) {
+      const sliced = sliceUtf8TailSafe(text, limit);
+      expect(Buffer.byteLength(sliced, "utf8")).toBeLessThanOrEqual(limit);
+      expect(hasNoLoneSurrogates(sliced)).toBe(true);
+    }
+    expect(sliceUtf8TailSafe("😀", 3)).toBe("");
+    expect(sliceUtf8TailSafe("abc", 0)).toBe("");
   });
 });
 
@@ -209,18 +204,29 @@ describe("formatGenerationMessage 真值表", () => {
   });
 });
 
-describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
+describe("collectGenerationEntriesNewestFirst 与 assembleBudgetedPreamble", () => {
   it("keeps a delivered PM wakeup in the vendor switch log and leaves queued wakeups for delivery", () => {
     const meta: SystemMessageMeta = { event: "pm.wakeup", source: "task_graph", ref: "checkpoint-result" };
     const text = "【任务图 #6】用户已打回方案，等你处理";
-    const context = collectGenerationContext([
+    const collected = collectGenerationEntriesNewestFirst([
       makeMsg({ id: 2, sender: "system", status: "queued", text: "另一条尚未发送的通知", meta: { ...meta, ref: "queued" } }),
       makeMsg({ id: 1, sender: "system", status: "replied", text, meta }),
     ], { targetSessionId: 10, maxBytes: 10_000 });
-    const preamble = buildVendorSwitchPreamble({
-      fromVendor: "claude", toVendor: "codex", context, skills: null, transcriptSummary: "",
-      anchor: { summaryText: null, cutMessageId: 0, startSessionId: 1 },
-    });
+    const preamble = assembleBudgetedPreamble(
+      {
+        header: vendorSwitchPreambleHeader({ fromVendor: "claude", toVendor: "codex", hasSkills: false, transcriptSummary: "" }),
+        skillsIndex: null,
+        summaryHeading: "## 本代起点摘要（上次会话换代时保存的背景）",
+        summaryBody: null,
+        historyHeading: "## 本代完整对话与 Worker 汇报记录",
+        historyEntriesNewestFirst: collected.entries,
+        historyEmptyText: "（本代尚无历史消息）",
+        historyTruncatedHint: VENDOR_SWITCH_TRUNCATED_HINT,
+        pendingAsksSection: null,
+        agendaSection: null,
+      },
+      { vendor: "codex" },
+    ).text!;
     expect(preamble).toContain(text);
     expect(preamble).not.toContain("另一条尚未发送的通知");
   });
@@ -231,25 +237,39 @@ describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
       makeMsg({ id: 2, sender: "user", text: `中间长消息${"🔥".repeat(30)}结尾`, status: "replied" }),
       makeMsg({ id: 1, sender: "user", text: "最早的一句旧话", status: "replied" }),
     ];
-    const full = collectGenerationContext(newestFirst, { targetSessionId: 99, maxBytes: 10_000 });
+    const full = collectGenerationEntriesNewestFirst(newestFirst, { targetSessionId: 99, maxBytes: 10_000 });
     expect(full.truncated).toBe(false);
-    expect(full.body).toBe(`用户：最早的一句旧话\n\n用户：中间长消息${"🔥".repeat(30)}结尾\n\n你：最新回复🎯完成`);
+    expect([...full.entries].reverse().join("\n\n")).toBe(
+      `用户：最早的一句旧话\n\n用户：中间长消息${"🔥".repeat(30)}结尾\n\n你：最新回复🎯完成`,
+    );
 
-    const capped = collectGenerationContext(newestFirst, { targetSessionId: 99, maxBytes: 110 });
+    const capped = collectGenerationEntriesNewestFirst(newestFirst, { targetSessionId: 99, maxBytes: 160 });
     expect(capped.truncated).toBe(true);
-    expect(Buffer.byteLength(capped.body, "utf8")).toBeLessThanOrEqual(110);
-    expect(hasNoLoneSurrogates(capped.body)).toBe(true);
-    expect(capped.body).toContain("你：最新回复🎯完成");
-    expect(capped.body).not.toContain("最早的一句旧话");
-
-    const preamble = buildVendorSwitchPreamble({
-      fromVendor: "claude",
-      toVendor: "codex",
-      anchor: { summaryText: "早间自动换代摘要", cutMessageId: 10, startSessionId: 2 },
-      context: capped,
-      skills: null,
-      transcriptSummary: "本代前序会话的原始记录：Claude Code（claude）：/tmp/s1.jsonl",
-    });
+    const assembled = assembleBudgetedPreamble(
+      {
+        header: vendorSwitchPreambleHeader({
+          fromVendor: "claude",
+          toVendor: "codex",
+          hasSkills: false,
+          transcriptSummary: "本代前序会话的原始记录：Claude Code（claude）：/tmp/s1.jsonl",
+        }),
+        skillsIndex: null,
+        summaryHeading: "## 本代起点摘要（上次会话换代时保存的背景）",
+        summaryBody: `${VENDOR_SWITCH_ANCHOR_HINT}\n\n早间自动换代摘要`,
+        historyHeading: "## 本代完整对话与 Worker 汇报记录",
+        historyEntriesNewestFirst: capped.entries,
+        historyEmptyText: "（本代尚无历史消息）",
+        historyTruncatedHint: VENDOR_SWITCH_TRUNCATED_HINT,
+        pendingAsksSection: null,
+        agendaSection: null,
+      },
+      { vendor: "codex", historyMaxBytes: 160 },
+    );
+    const preamble = assembled.text!;
+    expect(assembled.historyTruncated).toBe(true);
+    expect(hasNoLoneSurrogates(preamble)).toBe(true);
+    expect(preamble).toContain("你：最新回复🎯完成");
+    expect(preamble).not.toContain("最早的一句旧话");
     expect(preamble).toContain("从 Claude Code（claude）切换到了 Codex（codex）");
     expect(preamble).toContain(`## 本代起点摘要（上次会话换代时保存的背景）\n\n${VENDOR_SWITCH_ANCHOR_HINT}\n\n早间自动换代摘要`);
     expect(preamble).toContain(VENDOR_SWITCH_TRUNCATED_HINT);

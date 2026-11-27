@@ -44,7 +44,3 @@ export function recentEntriesNewestFirst(picked: readonly RecentMessage[]): stri
   });
   return parts.reverse();
 }
-
-export function recentText(picked: readonly RecentMessage[]): string {
-  return recentEntriesNewestFirst(picked).reverse().join("\n\n");
-}
