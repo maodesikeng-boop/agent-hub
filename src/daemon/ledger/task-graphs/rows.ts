@@ -8,6 +8,7 @@ import {
   type WorkerId,
 } from "../../../shared/domain.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
+import type { StepSlotView } from "./slots.ts";
 import type { TaskNodeDbRow } from "./types.ts";
 
 export function parseJsonOr<T>(raw: string | null, fallback: T): T {
@@ -32,6 +33,15 @@ export const gateOptionsOf = (row: Pick<TaskNodeDbRow, "gate_options_json">): st
   parseJsonOr<string[]>(row.gate_options_json, []);
 
 export const hasText = (s: string | null | undefined): s is string => s !== null && s !== undefined && s.trim() !== "";
+
+/**
+ * What a ready step does once admitted: run its brief, settle a decided brief-less step nobody worked on, or ask the PM.
+ * A step waiting in a slot queue is promised the same outcome it gets when it leaves the queue.
+ */
+export function readyOutcomeOf(row: Pick<TaskNodeDbRow, "brief" | "decision_json" | "worker_ids_json">): "start" | "settle" | "pm" {
+  if (hasText(row.brief)) return "start";
+  return row.decision_json !== null && workerIdsOf(row).length === 0 ? "settle" : "pm";
+}
 
 type StoredTaskArtifact = TaskArtifact & { checkpointPending?: boolean; checkpointRejectionClientId?: string; reviewStamp?: unknown };
 
@@ -80,6 +90,7 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?:
   userBlocker?: UserBlocker;
   sandboxApproval?: TaskNode["sandboxApproval"];
   gateAskPending?: boolean;
+  slot?: StepSlotView;
 }): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const status = row.status as TaskNodeStatus;
@@ -106,6 +117,8 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?:
     ...(waitingDecision && checkpointPending ? { gateCheckpoint: true } : {}),
     userBlocker,
     ...(sandboxApproval !== undefined ? { sandboxApproval } : {}),
+    ...(waiting?.slot === undefined ? {} : { slot: waiting.slot.slot }),
+    ...(waiting?.slot?.queue === undefined ? {} : { slotQueue: waiting.slot.queue }),
     decision: decisionOf(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

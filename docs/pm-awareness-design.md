@@ -76,8 +76,8 @@ The PM can overturn any of these without asking the user.
 | **PR-3 (revised) One decision chain** | `confirm: true` pauses for the PM; escalation through `hub ask --node`; authored step questions removed from create and patch; friction PR-3's `doneSteps` and text-limit table unchanged; Task Graph manual and plan sequencing updated; vendor switches retain `pm.wakeup` | None. The friction plan's `checkpoint` column and migration are dropped | None |
 | **PR-4 PM notice entry** (friction plan) | Unchanged | None | Rebase after PR-3 |
 | **PR-6 Status list** | `pmAgendaOf` and its text; `hub status`; agenda sections in both preamble builders; the footer on every PM wake (snapshot plus changes, per-session cursor) with the busy line; the handover notice; the delivery note on PR-4's entry; the delivery row in `hub graph show` and in the web (D-A2 option 1) | `migrations/**` (`0057`) needs a stamp | PR-4, PR-1 (#463) |
-| **PR-7 Step slots** | `slot` on steps, admission at one boundary, release by invariant, queue position in text and web, Task Graph manual | `migrations/**` (`0058`) needs a stamp | PR-6 for the status lines |
-| **PR-8 Watches** | `hub watch add`, `list`, and `close`; the sandboxed runner; settle notices; restart recovery; retention | `migrations/**` (`0059`); `src/daemon/platform/**` or `write-scope.ts` if the runner needs a new entry point. Windows workflow runs | PR-6 |
+| **PR-7 Step slots** | `slot` on steps, admission at one boundary, release by invariant, queue position in text and web, Task Graph manual | `migrations/**` (`0059`) needs a stamp | PR-6 for the status lines |
+| **PR-8 Watches** | `hub watch add`, `list`, and `close`; the sandboxed runner; settle notices; restart recovery; retention | `migrations/**` (`0060`); `src/daemon/platform/**` or `write-scope.ts` if the runner needs a new entry point. Windows workflow runs | PR-6 |
 | **PR-9 Reminders** | Idle reminders, D-A1 option 1 | None | PR-6, PR-8 |
 
 Each PR rechecks its migration number against `main` and open PRs before it merges (`node scripts/wait-checks.ts` does this). PR #459 still claims `0055`, which `main` already uses; the PM resolves that when the friction PRs are cut.
@@ -384,16 +384,22 @@ The body is what the PM will do once the wait settles. The receipt is `已开始
 
 - `hub graph show` and `formatGraphText` add a last line, `[等你验收交付] 交付：图里画的步骤都做完了（已等 25 分钟）`, or `[在等] 交付：在等 #3「检查通过后交付」` when a watch is linked. `graphStatusLabel` drops `active · 待交付`.
 - The delivery note moves onto PR-4's entry with subject `{ kind: "graph.ready_to_finish", graphId, since }`. Its header becomes `【任务图 #141「取消残留」图里画的步骤都做完了，等你验收交付】`, plus `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 hub graph patch 补。` PR-8 adds `要等外部条件（比如检查通过）再交付，用 hub watch add 让后台盯着，结果出来叫醒你。` together with the command, so the note never names a command the daemon does not have.
-- The web (D-A2 option 1, decided) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`, both computed by `graphDeliveryOf`.
+- The web (D-A2 option 1, decided) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`, both computed by `graphDeliveryOf`. The row's age counts from `TaskGraph.readySince`, which the daemon fills from `task_graph_step_states` like the agenda's `ready@since`, so later writes to a done step (a branch rename, a Worker exit) do not restart it.
 - Q6: a brief-less step already waits for the PM and wakes it when its upstream finishes (`progress.ts:266-267`). The delivery row makes a drawn merge step optional, and the manual says so.
 
 #### B6. Step slots
 
 - Spec field `slot` on create and patch: 1 to 32 lowercase letters, digits, or hyphens.
-- **Holding.** A step holds its slot while it is `running`, or while its Worker still has a tracked background task after it stopped running (design B). Waiting for the PM, the user, or a sandbox approval with an idle Worker holds nothing.
-- **Admission at one boundary (design B).** Automatic dispatch, `hub worker start --node`, a retry, and a takeover all call `admitStepIn`. When another step anywhere on this daemon holds the slot, the step stays `pending` and its display state shows the holder and its position. There is no bypass flag.
+- **Holding.** A step holds its slot while it is `running`, or while its active Worker still has work it will do without anyone resuming it, whatever the step's own status says (design B). That work is a running turn (`turns.status = 'running'`), background commands (a `session_background_tasks` row, written with the live count and deleted when it reaches zero, at session start and exit, and at daemon restart), a worktree still being created or its setup command running, or input that is queued, delivered, or being processed. A Worker waiting for sandbox approval holds nothing until approved. `HOLDS_SLOT_SQL` in `slots.ts` is the only definition. So a `hub ask --node` card, a brake, or any other status change while the Worker is still preparing, has input queued, or finishes its turn keeps the slot until that work ends. Waiting for the PM, the user, or a sandbox approval with an idle Worker holds nothing.
+- **Admission at one boundary (design B).** A trigger built from `HOLDS_SLOT_SQL` aborts any write that moves a step into `running` while another step holds its slot, so no writer, present or future, can bypass admission. The ledger installs it each time it opens, and `migrate()` drops triggers named `code_*` before applying migrations, because the condition reads `messages` and `workers`, which older migrations rebuild. Callers check first through `admitStep` or `slotConflictOf` only to answer with a readable message:
+  - Automatic dispatch and `hub worker start --node` queue the step: it stays `pending` and its display state shows the holder and its position. A manual start queues only when the queued step will start exactly as asked, meaning a ready step with a brief, no predecessor to take over, and no override flags (`--vendor`, `--model`, `--effort`, `--max-time`, `--readonly`, `--caps`, `--allow`, `--no-worktree`, `--no-outer-sandbox`, `--title`, or an extra task). A brief-less step queues regardless, because the PM is asked to start it again; it leaves the queue the same way, even when it has a decision and an earlier Worker (`readyOutcomeOf` decides both the promise and what happens when the step leaves the queue). A brief-less step that was decided and never had a Worker settles without waiting for the slot, and a manual start on it is refused, because settling would not start the Worker that was asked for. Reopening a done step, replacing a user-blocked step, taking over a predecessor, or passing overrides is refused with `conflict` naming the holder, so nothing is silently dropped.
+  - Paths that hand a step back to its attached Worker refuse with `conflict` while another step holds the slot: `hub worker send`, a sandbox approval, a user's answer on a step card, and a checkpoint rejection. The user or PM tries again once the slot frees.
+  - A user-blocker release does not refuse the user's Done. A released step whose slot is held elsewhere goes to `waiting` for the PM with its Worker attached, the Worker is not resumed, and the PM is told to `hub worker send` once the slot frees.
+  - A user's direct chat with a Worker is outside admission: it is the user's explicit act on that Worker.
+  - Queued steps of an archived PM keep their rows for unarchive but take no place in line and are never dispatched or woken.
+  - There is no bypass flag.
 - **Order.** First in, first out by the time the step became ready.
-- **Release by invariant.** After any ledger write that changes a graph or a Worker's background count commits, one follow-up write starts the oldest waiting step of each free slot. Startup recovery reconciles holders of crashed Workers before it admits waiters. The invariant (at most one holder per slot, no free slot with a waiter) is tested on every exit path.
+- **Release by invariant.** After any ledger write commits, a follow-up write starts the oldest waiting step of each free slot, repeating while a drain frees another slot. Then every graph still queued on a slot whose holder or line changed is republished, so the web shows the new position even while the holder keeps running. Startup recovery zeroes background counts and reconciles holders of crashed Workers before it admits waiters. The invariant (at most one holder per slot, no free slot with a waiter) is tested on every exit path.
 - **Manual start receipt**: `步骤「review-real」要用名额「real-env」，现在被图 #86 的 review-real（Worker #1336）占着；已排在第 1 位，空出来自动开工。`
 - The status is computed, so a PM no longer writes status words into titles; the lock on running steps' titles stays.
 
@@ -605,14 +611,14 @@ PR-6, status list:
 
 PR-7, slots:
 
-- `migrations/0058_step_slots.sql`: the `task_graph_step_slots` side table and its index, registered in `src/shared/resource-registry.ts`.
+- `migrations/0059_step_slots.sql`: the `task_graph_step_slots` side table and its index, registered in `src/shared/resource-registry.ts`.
 - `src/shared/domain.ts`: `TaskNode.slot` and `TaskNode.slotQueue`; `src/shared/hub.ts`: the spec field.
 - `src/daemon/ledger/task-graphs/slots.ts`: `slotHolderOf`, `admitStepIn`, and `drainSlotsIn`. `spec.ts`, `progress.ts`, and `worker-hooks.ts` call them in PR-7.
 - `src/daemon/ledger/task-graph-slots.test.ts` (S7).
 
 PR-8, watches:
 
-- `migrations/0059_pm_watches.sql` and `src/daemon/ledger/pm-watches.ts` (add, list, close, settle, open rows for recovery), with the `pm_watches` entry in `src/shared/resource-registry.ts`. PR-8 adds `src/daemon/watches/runner.ts`, `src/hub/watch.ts`, the `watch.*` entries in `src/shared/hub.ts` and `src/daemon/agent-api/server.ts`, and the `RESOURCE_REGISTRY` entry.
+- `migrations/0060_pm_watches.sql` and `src/daemon/ledger/pm-watches.ts` (add, list, close, settle, open rows for recovery), with the `pm_watches` entry in `src/shared/resource-registry.ts`. PR-8 adds `src/daemon/watches/runner.ts`, `src/hub/watch.ts`, the `watch.*` entries in `src/shared/hub.ts` and `src/daemon/agent-api/server.ts`, and the `RESOURCE_REGISTRY` entry.
 - `src/daemon/ledger/pm-watches.test.ts` (S5). Runner tests per platform are written with the runner in PR-8.
 
 PR-9, reminders:

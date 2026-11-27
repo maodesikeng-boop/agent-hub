@@ -75,6 +75,7 @@ function makeGraph(id: number, title: string, nodes: TaskNode[], edges: TaskGrap
     createdAt: 1000,
     updatedAt: 1000 + id,
     completedAt: null,
+    readySince: null,
   };
 }
 
@@ -416,8 +417,10 @@ describe("CompletedTab", () => {
       { kind: "worker", conversationId: 2, workerId: 2, title: "Task B", outcome: "done", finishedAt: localTs(2026, 11, 25, 11, 5), prUrl: null },
       { kind: "worker", conversationId: 3, workerId: 3, title: "Task C", outcome: "done", finishedAt: localTs(2026, 11, 24, 22, 47), prUrl: null },
     ];
-    const days = completedDaysOf([{ items, total: 3, next: null }], now);
+    const days = completedDaysOf([{ items, total: 3, next: null }]);
+    vi.useFakeTimers({ now, toFake: ["Date"] });
     render(<CompletedTab query={makeQuery({ days, total: 3 })} onOpenWorker={vi.fn()} />);
+    vi.useRealTimers();
 
     expect(screen.getByText("Today")).toBeInTheDocument();
     expect(screen.getByText("Yesterday")).toBeInTheDocument();
@@ -426,7 +429,6 @@ describe("CompletedTab", () => {
   });
 
   it("shows the PR label as a link and the finish time", () => {
-    const now = localTs(2026, 11, 25, 16, 0);
     const items: CompletedWorkItem[] = [
       {
         kind: "worker",
@@ -438,7 +440,7 @@ describe("CompletedTab", () => {
         prUrl: "https://github.com/org/repo/pull/438",
       },
     ];
-    const days = completedDaysOf([{ items, total: 1, next: null }], now);
+    const days = completedDaysOf([{ items, total: 1, next: null }]);
     const onOpenWorker = vi.fn();
     render(<CompletedTab query={makeQuery({ days, total: 1 })} onOpenWorker={onOpenWorker} />);
 
@@ -451,7 +453,6 @@ describe("CompletedTab", () => {
   });
 
   it("expands a graph row into its steps as the vertical list", () => {
-    const now = localTs(2026, 11, 25, 16, 0);
     const items: CompletedWorkItem[] = [
       {
         kind: "graph",
@@ -471,7 +472,7 @@ describe("CompletedTab", () => {
         ],
       },
     ];
-    const days = completedDaysOf([{ items, total: 1, next: null }], now);
+    const days = completedDaysOf([{ items, total: 1, next: null }]);
     render(<CompletedTab query={makeQuery({ days, total: 1 })} onOpenWorker={vi.fn()} />);
 
     const trigger = screen.getByRole("button", { name: "Composer layout fix, done" });
@@ -490,7 +491,6 @@ describe("CompletedTab", () => {
   });
 
   it("greys out a cancelled row with the slashed ring", () => {
-    const now = localTs(2026, 11, 25, 16, 0);
     const items: CompletedWorkItem[] = [
       {
         kind: "worker",
@@ -502,7 +502,7 @@ describe("CompletedTab", () => {
         prUrl: null,
       },
     ];
-    const days = completedDaysOf([{ items, total: 1, next: null }], now);
+    const days = completedDaysOf([{ items, total: 1, next: null }]);
     const { container } = render(<CompletedTab query={makeQuery({ days, total: 1 })} onOpenWorker={vi.fn()} />);
 
     const row = container.querySelector('[data-completed-key="worker:20"]')!;
@@ -516,7 +516,7 @@ describe("CompletedTab", () => {
     const items: CompletedWorkItem[] = [
       { kind: "worker", conversationId: 1, workerId: 1, title: "Item 1", outcome: "done", finishedAt: now - 1000, prUrl: null },
     ];
-    const days = completedDaysOf([{ items, total: COMPLETED_WORK_MAX_PAGES * COMPLETED_WORK_PAGE_SIZE, next: null }], now);
+    const days = completedDaysOf([{ items, total: COMPLETED_WORK_MAX_PAGES * COMPLETED_WORK_PAGE_SIZE, next: null }]);
     const loadMore = vi.fn();
     const { rerender } = render(
       <CompletedTab query={makeQuery({ days, total: 400, hasMore: true, loadMore })} onOpenWorker={vi.fn()} />,
@@ -544,7 +544,6 @@ describe("CompletedTab", () => {
     const now = localTs(2026, 11, 25, 16, 0);
     const days = completedDaysOf(
       [{ items: [{ kind: "worker", conversationId: 1, workerId: 1, title: "First page item", outcome: "done", finishedAt: now, prUrl: null }], total: 2, next: null }],
-      now,
     );
     retry.mockClear();
     rerender(
@@ -720,7 +719,7 @@ describe("WorkerDetailHeader", () => {
       <WorkerDetailHeader
         title="Investigate readonly timeout"
         status="running"
-        facts={{ model: "Opus 5.5 Max", duration: "12m", branch: "hub/fix-timeout" }}
+        facts={{ model: "Opus 5.5 Max", duration: { startedAt: 0, endedAt: 12 * 60_000 }, branch: "hub/fix-timeout" }}
         onStop={vi.fn()}
         onEnd={vi.fn()}
         onBack={onBack}
@@ -746,7 +745,7 @@ describe("WorkerDetailHeader", () => {
       <WorkerDetailHeader
         title="Investigate readonly timeout"
         status="waiting"
-        facts={{ model: "GPT-6.2 Sol Extra high", duration: "4m", branch: "hub/1002-timeout" }}
+        facts={{ model: "GPT-6.2 Sol Extra high", duration: { startedAt: 0, endedAt: 4 * 60_000 }, branch: "hub/1002-timeout" }}
         onStop={onStop}
         onEnd={onEnd}
         onBack={vi.fn()}
@@ -774,7 +773,7 @@ describe("WorkerDetailHeader", () => {
       <WorkerDetailHeader
         title="Completed fix"
         status="done"
-        facts={{ model: "Sonnet High", duration: "8m", branch: null }}
+        facts={{ model: "Sonnet High", duration: { startedAt: 0, endedAt: 8 * 60_000 }, branch: null }}
         onStop={null}
         onEnd={null}
         onBack={vi.fn()}

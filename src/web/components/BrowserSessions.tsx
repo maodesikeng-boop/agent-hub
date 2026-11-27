@@ -1,8 +1,9 @@
 import { Loader2 } from "../ui/icons.ts";
-import { describeUserAgent, formatAgo, formatCountdown, userAgentDevice } from "../browser-sessions.ts";
+import { describeUserAgent, formatCountdown, userAgentDevice } from "../browser-sessions.ts";
 import { useBrowserSessions, useSignInLink } from "../settings-model.ts";
 import { PlatformIcon } from "./DeviceBadges.tsx";
 import { QrCode } from "./QrCode.tsx";
+import { TimeAgo } from "./TimeAgo.tsx";
 import { CollapsibleGroup, InfoAction, ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => void }) {
@@ -76,12 +77,11 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
         )}
         {sessions?.map((session) => {
           const name = describeUserAgent(session.userAgent);
-          const ago = formatAgo(session.lastSeenAt, signIn.now);
           const confirming = session.current && confirmingSelf;
           const detail = (
             <span className="inline-flex flex-wrap items-center justify-end gap-x-3">
               {session.current && <span>This browser</span>}
-              <span>{ago}</span>
+              <span><TimeAgo at={session.lastSeenAt} /></span>
             </span>
           );
           return (

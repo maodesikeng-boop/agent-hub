@@ -12,12 +12,18 @@ import {
 } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorText, formatSchedule, nameError, type ErrorLike } from "../format.ts";
+import { MINUTE_TICK_MS } from "../limits.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { cn } from "../lib/utils.ts";
+import { useNow } from "../useNow.ts";
 import { INFO_ROW, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+
+function NextRun({ at }: { at: number }) {
+  return `Next ${scheduledTimeText(at, useNow(MINUTE_TICK_MS))}`;
+}
 
 function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabled: boolean }) {
   const client = useClient();
@@ -35,7 +41,6 @@ function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabl
       setBusy(false);
     }
   };
-  const now = Date.now();
   const locked = busy || disabled;
   return (
     <SettingsRow
@@ -44,7 +49,7 @@ function ScheduleItem({ schedule, disabled }: { schedule: ScheduleRecord; disabl
       detail={
         <span className="flex flex-wrap gap-x-3 tabular-nums">
           <span>{formatSchedule(schedule)}</span>
-          <span>{schedule.enabled ? `Next ${scheduledTimeText(schedule.nextRunAt, now)}` : "Paused"}</span>
+          <span>{schedule.enabled ? <NextRun at={schedule.nextRunAt} /> : "Paused"}</span>
           {schedule.lastStatus === "failed" && (
             <span className="text-danger" title={schedule.lastError ?? undefined}>
               Last run failed

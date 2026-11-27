@@ -63,7 +63,7 @@ export interface GraphDelivery {
   row: { wait: GraphDeliveryWait; since: number } | null;
 }
 
-type DeliveryGraph = Pick<TaskGraph, "status" | "nodes">;
+type DeliveryGraph = Pick<TaskGraph, "status" | "nodes" | "readySince">;
 type DeliveryWatch = { watchId: number; body: string };
 const deliveryByGraph = new WeakMap<DeliveryGraph, { watch: DeliveryWatch | null; delivery: GraphDelivery }>();
 
@@ -75,11 +75,45 @@ export function graphDeliveryOf(graph: DeliveryGraph, watch: DeliveryWatch | nul
   const header = `${done}/${total} steps${ready ? " · awaiting delivery" : ""}`;
   const delivery: GraphDelivery = {
     header,
-    row: ready ? {
+    row: ready && graph.readySince !== null ? {
       wait: watch === null ? { kind: "pm" } : { kind: "watch", watchId: watch.watchId, body: watch.body },
-      since: graph.nodes.reduce((latest, node) => Math.max(latest, node.updatedAt), 0),
+      since: graph.readySince,
     } : null,
   };
   deliveryByGraph.set(graph, { watch, delivery });
   return delivery;
+}
+
+export interface SlotQueueRow {
+  key: TaskNode["key"];
+  title: string;
+  /** For example `Queued for real-env · behind #86 review-real`. */
+  text: string;
+}
+
+type SlotQueueGraph = Pick<TaskGraph, "status" | "nodes">;
+const NO_SLOT_QUEUE: readonly SlotQueueRow[] = [];
+const slotQueueByGraph = new WeakMap<SlotQueueGraph, readonly SlotQueueRow[]>();
+
+export function slotQueueTextOf(node: Pick<TaskNode, "slot" | "slotQueue">): string | null {
+  if (node.slotQueue === undefined || node.slot == null) return null;
+  const { position, holder } = node.slotQueue;
+  const more = position > 1 ? ` and ${position - 1} more` : "";
+  return `Queued for ${node.slot} · behind #${holder.graphId} ${holder.nodeKey}${more}`;
+}
+
+/** Steps of an active graph that wait for a slot held elsewhere, in step order. */
+export function graphSlotQueueOf(graph: SlotQueueGraph): readonly SlotQueueRow[] {
+  const cached = slotQueueByGraph.get(graph);
+  if (cached !== undefined) return cached;
+  const rows: SlotQueueRow[] = [];
+  if (graph.status === "active") {
+    for (const node of graph.nodes) {
+      const text = node.status === "pending" ? slotQueueTextOf(node) : null;
+      if (text !== null) rows.push({ key: node.key, title: node.title, text });
+    }
+  }
+  const result = rows.length === 0 ? NO_SLOT_QUEUE : rows;
+  slotQueueByGraph.set(graph, result);
+  return result;
 }

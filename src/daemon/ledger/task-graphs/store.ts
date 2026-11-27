@@ -7,6 +7,7 @@ import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import type { MessageDbRow } from "../rows.ts";
 import { parseJsonOr, toTaskNode } from "./rows.ts";
+import { slotViewsOf, writeStepSlot } from "./slots.ts";
 import type { NewStep } from "./spec.ts";
 import type { GraphMaps, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
@@ -108,7 +109,27 @@ export const lastReportText = (db: Db, conversationId: number, workerId: number)
     workerId,
   )?.text;
 
-const graphOfRow = (row: TaskGraphDbRow, nodes: TaskNode[], edges: TaskEdge[], goal?: { goal: string | null }): TaskGraph => ({
+function stepStatesSince(db: Db, rows: readonly TaskNodeDbRow[]): ReadonlyMap<number, number> {
+  if (rows.length === 0) return new Map();
+  const states = db.all<{ step_id: number; state_since: number }>(
+    "SELECT step_id, state_since FROM task_graph_step_states WHERE step_id IN (SELECT value FROM json_each(?))",
+    JSON.stringify(rows.map((r) => r.id)),
+  );
+  return new Map(states.map((s) => [s.step_id, s.state_since]));
+}
+
+function readySinceOf(rows: readonly TaskNodeDbRow[], statesSince: ReadonlyMap<number, number>): number | null {
+  if (rows.length === 0 || rows.some((r) => r.status !== "done")) return null;
+  return Math.max(...rows.map((r) => statesSince.get(r.id) ?? r.updated_at));
+}
+
+const graphOfRow = (
+  row: TaskGraphDbRow,
+  nodes: TaskNode[],
+  edges: TaskEdge[],
+  readySince: number | null,
+  goal?: { goal: string | null },
+): TaskGraph => ({
   id: row.id,
   projectId: row.project_id,
   pmId: row.pm_id,
@@ -122,6 +143,7 @@ const graphOfRow = (row: TaskGraphDbRow, nodes: TaskNode[], edges: TaskEdge[], g
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   completedAt: row.completed_at,
+  readySince,
 });
 
 export function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], includeDetails: boolean): TaskNode[] {
@@ -129,10 +151,12 @@ export function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], in
   const waitingIds = rows.filter((n) => n.status === "waiting" && n.waiting_for === "user" && n.active_worker_id !== null).map((n) => n.id);
   const approvals = pendingSandboxCardsForSteps(g.db, waitingIds);
   const pendingAsks = pendingStepAskIds(g.db, rows);
+  const slots = slotViewsOf(g.db, rows.map((n) => n.id));
   return rows.map((n) => toTaskNode(n, includeDetails, {
     userBlocker: blockers.get(n.id),
     sandboxApproval: approvals.get(n.id),
     ...(n.gate_ask_message_id !== null ? { gateAskPending: pendingAsks.has(n.gate_ask_message_id) } : {}),
+    slot: slots.get(n.id),
   }));
 }
 
@@ -148,13 +172,14 @@ export function loadGraph(g: TaskGraphCtx, id: TaskGraphId, includeDetails = tru
     row,
     hydrateNodes(g, nodeRows, includeDetails),
     edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key })),
+    readySinceOf(nodeRows, stepStatesSince(g.db, nodeRows)),
     includeDetails ? { goal: row.goal } : undefined,
   );
 }
 
 export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], includeAgentSettings = false): TaskGraph[] {
   if (rows.length === 0) return [];
-  const byId = new Map<number, { nodes: TaskNode[]; edges: TaskEdge[] }>(rows.map((r) => [r.id, { nodes: [], edges: [] }]));
+  const byId = new Map<number, { nodes: TaskNode[]; edges: TaskEdge[]; rows: TaskNodeDbRow[] }>(rows.map((r) => [r.id, { nodes: [], edges: [], rows: [] }]));
   const idsJson = JSON.stringify(rows.map((r) => r.id));
   const nodeRows = g.db.all<TaskNodeDbRow>(
     `SELECT n.* FROM task_graph_steps n
@@ -165,7 +190,9 @@ export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], 
   const nodes = hydrateNodes(g, nodeRows, false);
   for (const [i, node] of nodes.entries()) {
     const n = nodeRows[i]!;
-    byId.get(n.graph_id)?.nodes.push(includeAgentSettings ? { ...node, vendor: n.vendor, model: n.model, effort: n.effort } : node);
+    const children = byId.get(n.graph_id);
+    children?.nodes.push(includeAgentSettings ? { ...node, vendor: n.vendor, model: n.model, effort: n.effort } : node);
+    children?.rows.push(n);
   }
   const edgeRows = g.db.all<TaskEdgeDbRow>(
     `SELECT e.* FROM task_graph_edges e
@@ -174,9 +201,10 @@ export function hydrateGraphs(g: TaskGraphCtx, rows: readonly TaskGraphDbRow[], 
     idsJson,
   );
   for (const e of edgeRows) byId.get(e.graph_id)?.edges.push({ fromKey: e.from_key, toKey: e.to_key });
+  const statesSince = stepStatesSince(g.db, nodeRows);
   return rows.map((row) => {
     const children = byId.get(row.id)!;
-    return graphOfRow(row, children.nodes, children.edges);
+    return graphOfRow(row, children.nodes, children.edges, readySinceOf(children.rows, statesSince));
   });
 }
 
@@ -243,6 +271,7 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
   ).lastInsertRowid;
   writeWorkerCapabilities(db, { table: "task_graph_step_capabilities", stepId }, n.capabilities);
   if (n.noOuterSandbox) writeStepNoOuterSandbox(db, stepId, true);
+  if (n.slot !== null) writeStepSlot(db, Number(stepId), n.slot);
 }
 
 export const insertEdgeRow = (db: Db, graphId: TaskGraphId, e: TaskEdge): void => {

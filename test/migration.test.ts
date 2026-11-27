@@ -1194,6 +1194,7 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
       { name: "messages_in_flight" },
       { name: "messages_pm_tools" },
       { name: "messages_session" },
+      { name: "messages_unanswered_input" },
       { name: "messages_worker" },
       { name: "messages_worker_lines" },
     ]);

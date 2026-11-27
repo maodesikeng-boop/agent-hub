@@ -249,6 +249,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
   table("task_graphs", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_steps", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_states", "growing", "migrations/0057_pm_agenda.sql", "src/daemon/ledger/pm-agenda.ts", "automatic", GRAPH_RETENTION_LIMITS),
+  table("task_graph_step_slots", "growing", "src/daemon/ledger/task-graphs/slots.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_edges", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_capabilities", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
   table("task_graph_step_sandbox", "growing", "src/daemon/ledger/task-graphs.ts", "src/daemon/ledger/task-graphs/overview.ts", "automatic", GRAPH_RETENTION_LIMITS),
@@ -298,6 +299,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
     ...TURN_HISTORY_LIMITS,
     limit("TURN_TOOLS_MAX_PER_SESSION", TURN_TOOLS_MAX_PER_SESSION, "rows"),
   ]),
+  table("session_background_tasks", "transient", "src/daemon/ledger/messages.ts", "src/daemon/ledger/messages.ts, src/daemon/ledger/sessions.ts", "automatic"),
   table("turn_background_waits", "growing", "src/daemon/ledger/turn-background-waits.ts", "src/daemon/ledger/turn-background-waits.ts, src/daemon/ledger/worker-retention.ts", "automatic", [
     limit("MAX_BACKGROUND_TASKS_TRACKED", MAX_BACKGROUND_TASKS_TRACKED, "entries"),
     ...WORKER_RETENTION_LIMITS,
@@ -461,7 +463,7 @@ const RUNTIME_RESOURCE_ENTRIES: readonly ResourceRegistryEntry[] = [
     target: "scratch_dirs",
     growth: "transient",
     owner:
-      "src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts",
+      "src/daemon/git/branches.ts, src/daemon/git/git.ts, src/daemon/provider-manager/recipes.ts, src/daemon/worktree-cleanup.ts, src/vendors/agy/connectors.ts, src/vendors/_common/setup/browser-capture.ts",
     cleaner: "the creating call removes its directory in a finally block before it returns",
     cleanupMode: "removed_by_creator",
     limits: [],

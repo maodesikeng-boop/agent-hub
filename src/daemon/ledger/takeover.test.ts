@@ -442,6 +442,47 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     expect(candidates[0]!.endedAt).toBe(w2EndedAt);
     expect(candidates[0]!.endedAt).toBeGreaterThan(w1EndedAt + WORKTREE_RETENTION_MS);
   });
+
+  it("图还 active 的长图：步骤做完且没有下游会接手这个目录时照常清；步骤没做完、或下游（隔着审查步骤也算）还会接手时挡住", () => {
+    hub("graph.create", {
+      title: "长图",
+      specJson: JSON.stringify({
+        nodes: [
+          { key: "s1", title: "实现" },
+          { key: "s2", title: "审查", deps: ["s1"], review: true },
+          { key: "s3", title: "修复", deps: ["s2"] },
+          { key: "s4", title: "下一个 PR", deps: ["s3"], base: "main" },
+          { key: "s5", title: "再下一个 PR", deps: ["s4"] },
+        ],
+      }),
+    });
+    const w1 = start({ title: "实现", task: "原始任务", node: "s1" });
+    worktreeReady(w1);
+    hub("worker.end", { workerId: w1.id });
+    db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w1.id);
+    const setStep = (key: string, status: string) =>
+      db.run(
+        "UPDATE task_graph_steps SET status = ?, waiting_for = ?, active_worker_id = NULL WHERE node_key = ?",
+        status,
+        status === "waiting" ? "pm" : null,
+        key,
+      );
+
+    setStep("s1", "waiting");
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
+
+    // s3 沿着审查步骤 s2 往上找到 s1，会接着用 s1 的目录
+    setStep("s1", "done");
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
+    setStep("s2", "done");
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
+
+    // s4 从主干新开目录，s5 接手的是 s4 的目录，都不碰 s1 的
+    setStep("s3", "done");
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(true);
+    setStep("s3", "cancelled");
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(true);
+  });
 });
 
 describe("单轮超时计时落盘：守护进程重启后照常提醒", () => {

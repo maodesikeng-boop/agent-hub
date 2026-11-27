@@ -1,4 +1,4 @@
-import { graphDeliveryOf } from "./work-status.ts";
+import { graphDeliveryOf, graphSlotQueueOf } from "./work-status.ts";
 // 网页 selector 的缓存守卫：按“跑了一个月”的规模（300 个 Worker、3 万条消息）算，重算要快，输入没变要返回同一个引用，
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
@@ -676,6 +676,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
       createdAt: 1_000,
       updatedAt: 1_000,
       completedAt: null,
+      readySince: null,
       ...over,
     });
 
@@ -735,13 +736,22 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
         { fromKey: "gate-scope", toKey: "impl" },
       ],
     });
-    const ready = makeGraph({ id: 12, title: "Delivery", nodes: [makeNode({ key: "impl", title: "Implement", status: "done" })] });
+    const ready = makeGraph({ id: 12, title: "Delivery", readySince: 1_000, nodes: [makeNode({ key: "impl", title: "Implement", status: "done" })] });
     const delivery = graphDeliveryOf(ready);
     expect(graphDeliveryOf(ready)).toBe(delivery);
     expect(delivery.row).not.toBeNull();
-    const patched = { ...ready, nodes: [...ready.nodes, makeNode({ key: "check", title: "Check", status: "pending" })] };
+    const patched = { ...ready, readySince: null, nodes: [...ready.nodes, makeNode({ key: "check", title: "Check", status: "pending" })] };
     expect(graphDeliveryOf(patched).row).toBeNull();
     expect(graphDeliveryOf(ready)).toBe(delivery);
+
+    const holder = { graphId: 86, nodeKey: "review-real", workerId: 1336 };
+    const queued = makeGraph({ id: 13, title: "Queue", nodes: [makeNode({ key: "review-real", title: "Real run", status: "pending", slot: "real-env", slotQueue: { position: 1, holder } })] });
+    const queueRows = graphSlotQueueOf(queued);
+    expect(graphSlotQueueOf(queued)).toBe(queueRows);
+    expect(graphSlotQueueOf(ready)).toBe(graphSlotQueueOf(patched));
+    const moved = { ...queued, nodes: [{ ...queued.nodes[0]!, slotQueue: { position: 1, holder: { ...holder, graphId: 90 } } }] };
+    expect(graphSlotQueueOf(moved)[0]!.text).toBe("Queued for real-env · behind #90 review-real");
+    expect(graphSlotQueueOf(queued)).toBe(queueRows);
 
     const g2 = makeGraph({
       id: 11,
@@ -1245,6 +1255,7 @@ describe("shell list and rail selectors", () => {
       createdAt: 1000,
       updatedAt: 1000 + i,
       completedAt: null,
+      readySince: null,
     }));
 
     const work0 = activeWorkOf(graphs, workers);
@@ -1273,10 +1284,10 @@ describe("shell list and rail selectors", () => {
         };
       }),
     }));
-    const days0 = completedDaysOf(pages, now);
-    expect(completedDaysOf(pages, now)).toBe(days0);
+    const days0 = completedDaysOf(pages);
+    expect(completedDaysOf(pages)).toBe(days0);
     expect(days0.reduce((sum, d) => sum + d.items.length, 0)).toBe(400);
-    expect(medianMs(21, () => void completedDaysOf([...pages], now))).toBeLessThan(15);
+    expect(medianMs(21, () => void completedDaysOf([...pages]))).toBeLessThan(15);
   });
 });
 

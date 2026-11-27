@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskNode } from "../shared/index.ts";
-import { completedWorkStatusOf, graphDeliveryOf, graphProgressOf, nodeWorkStatusOf, workerWorkStatusOf } from "./work-status.ts";
+import { completedWorkStatusOf, graphDeliveryOf, graphProgressOf, graphSlotQueueOf, nodeWorkStatusOf, workerWorkStatusOf } from "./work-status.ts";
 
 describe("nodeWorkStatusOf", () => {
   it("maps done and skipped steps to done", () => {
@@ -81,22 +81,51 @@ describe("graphProgressOf", () => {
 });
 
 describe("graphDeliveryOf (D-A2 option 1)", () => {
-  const node = (key: string, status: TaskNode["status"], updatedAt: number): Pick<TaskNode, "key" | "status" | "updatedAt"> => ({ key, status, updatedAt });
-  const graphOf = (status: "active" | "completed", nodes: Pick<TaskNode, "key" | "status" | "updatedAt">[]) =>
-    ({ status, nodes }) as unknown as Parameters<typeof graphDeliveryOf>[0];
+  type DeliveryNode = Pick<TaskNode, "key" | "status" | "updatedAt">;
+  const node = (key: string, status: TaskNode["status"], updatedAt: number): DeliveryNode => ({ key, status, updatedAt });
+  const graphOf = (status: "active" | "completed", nodes: DeliveryNode[], readySince: number | null = null) =>
+    ({ status, nodes, readySince }) as unknown as Parameters<typeof graphDeliveryOf>[0];
 
   it("S1.1: a finished active graph reads awaiting delivery and ends with a row waiting for the PM", () => {
-    const delivery = graphDeliveryOf(graphOf("active", [node("impl", "done", 100), node("review", "done", 250)]));
+    const delivery = graphDeliveryOf(graphOf("active", [node("impl", "done", 100), node("review", "done", 250)], 250));
     expect(delivery).toEqual({ header: "2/2 steps · awaiting delivery", row: { wait: { kind: "pm" }, since: 250 } });
   });
 
   it("S1.1: a linked watch replaces the PM in the delivery row", () => {
-    const delivery = graphDeliveryOf(graphOf("active", [node("impl", "done", 100)]), { watchId: 3, body: "checks to pass" });
+    const delivery = graphDeliveryOf(graphOf("active", [node("impl", "done", 100)], 100), { watchId: 3, body: "checks to pass" });
     expect(delivery.row).toEqual({ wait: { kind: "watch", watchId: 3, body: "checks to pass" }, since: 100 });
+  });
+
+  it("dates the wait from when the last step finished, not from later writes to a finished step", () => {
+    const delivery = graphDeliveryOf(graphOf("active", [node("impl", "done", 100), node("review", "done", 9_000)], 250));
+    expect(delivery.row?.since).toBe(250);
   });
 
   it("S1.2: a graph with unfinished steps, or one already finished, has no delivery row", () => {
     expect(graphDeliveryOf(graphOf("active", [node("impl", "done", 100), node("review-real", "running", 200)]))).toEqual({ header: "1/2 steps", row: null });
-    expect(graphDeliveryOf(graphOf("completed", [node("impl", "done", 100)]))).toEqual({ header: "1/1 steps", row: null });
+    expect(graphDeliveryOf(graphOf("completed", [node("impl", "done", 100)], 100))).toEqual({ header: "1/1 steps", row: null });
+  });
+});
+
+describe("graphSlotQueueOf (S7.2)", () => {
+  type QueueNode = Pick<TaskNode, "key" | "title" | "status" | "slot" | "slotQueue">;
+  const graphOf = (status: "active" | "completed", nodes: QueueNode[]) => ({ status, nodes }) as unknown as Parameters<typeof graphSlotQueueOf>[0];
+  const holder = { graphId: 86, nodeKey: "review-real", workerId: 1336 };
+
+  it("names the slot and the holder, and counts the steps ahead after the first", () => {
+    const rows = graphSlotQueueOf(graphOf("active", [
+      { key: "review", title: "Review", status: "running", slot: null },
+      { key: "review-real", title: "Real run", status: "pending", slot: "real-env", slotQueue: { position: 1, holder } },
+      { key: "bench", title: "Bench", status: "pending", slot: "real-env", slotQueue: { position: 3, holder } },
+    ]));
+    expect(rows).toEqual([
+      { key: "review-real", title: "Real run", text: "Queued for real-env · behind #86 review-real" },
+      { key: "bench", title: "Bench", text: "Queued for real-env · behind #86 review-real and 2 more" },
+    ]);
+  });
+
+  it("has no rows for a running holder, a step without a queue, or a graph that is no longer active", () => {
+    expect(graphSlotQueueOf(graphOf("active", [{ key: "a", title: "A", status: "running", slot: "real-env" }]))).toEqual([]);
+    expect(graphSlotQueueOf(graphOf("completed", [{ key: "a", title: "A", status: "pending", slot: "real-env", slotQueue: { position: 1, holder } }]))).toEqual([]);
   });
 });

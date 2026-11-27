@@ -322,6 +322,9 @@ export const WORKTREE_RETENTION_DAYS = 3;
 export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
+export const SQUASH_MERGE_CANDIDATES_MAX = 20;
+export const SQUASH_MERGE_CONTAINING_REFS_MAX = 20;
+export const SQUASH_MERGE_RELAY_DEPTH_MAX = 500;
 
 export const WORKER_PICK_CACHE_MAX = 64;
 export const REWIND_SCAN_LIMIT = 20;
@@ -762,3 +765,4 @@ export const PM_AGENDA_STEP_LINES_MAX = 8;
 export const PM_AGENDA_DELTA_LINES_MAX = 8;
 // A model rebuilding state from a long chain of changes drifts, so a snapshot replaces the chain this often.
 export const PM_AGENDA_DELTAS_PER_SNAPSHOT = 20;
+export const STEP_SLOT_NAME_MAX_CHARS = 32;

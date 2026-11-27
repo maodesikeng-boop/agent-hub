@@ -15,10 +15,12 @@ import {
   type AgentVendor,
   type ModelCatalog,
 } from "../../../shared/vendors.ts";
+import { STEP_SLOT_NAME_MAX_CHARS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { assertHubLimit, fail } from "../context.ts";
 
 const NODE_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const SLOT_NAME_RE = /^[a-z0-9-]+$/;
 /** Mirrors `git check-ref-format`. */
 const BRANCH_NAME_RE = /^(?![-./])(?!.*(?:\.\.|\/\/|@\{|\/\.))(?!.*(?:[/.]|\.lock)$)[^\s\p{Cc}~^:?*[\\]+$/u;
 
@@ -73,6 +75,16 @@ export function validateStepBase(raw: string | null | undefined, review: boolean
     throw fail("invalid", `审查步骤的 base 写被审分支的名字（不能是 main），现在是 ${JSON.stringify(base)}`);
   }
   return base;
+}
+
+export function validateStepSlot(raw: string | null | undefined, key: TaskNodeKey): string | null {
+  if (raw === undefined || raw === null) return null;
+  const slot = raw.trim();
+  if (slot === "") return null;
+  if (slot.length > STEP_SLOT_NAME_MAX_CHARS || !SLOT_NAME_RE.test(slot)) {
+    throw fail("invalid", `步骤「${key}」的名额「${raw}」不合法：只能用 1～${STEP_SLOT_NAME_MAX_CHARS} 个小写字母、数字或 -`);
+  }
+  return slot;
 }
 
 export function assertReviewStepsHaveTarget(
@@ -265,6 +277,7 @@ export interface NewStep {
   confirm: number;
   review: number;
   base: string | null;
+  slot: string | null;
   deps: TaskNodeKey[];
 }
 
@@ -297,6 +310,7 @@ export function normalizeNewStep(
     confirm: n.confirm === true ? 1 : 0,
     review: n.review === true ? 1 : 0,
     base,
+    slot: validateStepSlot(n.slot, key),
     deps: rawDeps.map(validateNodeKey),
   };
 }
@@ -341,6 +355,7 @@ const createStepItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   confirm: z.boolean().optional(),
   review: z.boolean().optional(),
   base: z.string().optional(),
+  slot: z.string().optional(),
   draft: z.boolean().optional(),
   deps: z.array(z.string()).optional(),
 }));
@@ -371,6 +386,7 @@ const patchUpdateItemSchema = z.preprocess(withoutAuthoredDecision, z.object({
   confirm: z.boolean().optional(),
   review: z.boolean().optional(),
   base: z.string().nullable().optional(),
+  slot: z.string().nullable().optional(),
   deps: z.array(z.string()).optional(),
 }));
 
