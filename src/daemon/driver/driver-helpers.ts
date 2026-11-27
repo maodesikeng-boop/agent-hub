@@ -1,3 +1,4 @@
+import { MACOS_NESTED_SANDBOX_MESSAGE, isNestedMacOsSandboxError } from "../../shared/errors.ts";
 import type { WrittenAgendaFooter } from "../../shared/driver.ts";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
@@ -191,4 +192,24 @@ export function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fi
     launched.addDirs.length !== row.addDirs.length ||
     launched.addDirs.some((d, i) => d !== row.addDirs[i])
   );
+}
+
+interface StartupExitDetailInput {
+  vendorLabel: string;
+  phase: string;
+  exitCode: number | null;
+  signal: string | null;
+  stderr: string;
+  errorMessage?: string;
+}
+
+export function formatStartupExitDetail(input: StartupExitDetailInput): string {
+  const stderr = input.stderr.trim();
+  const errMsg = input.errorMessage?.trim() ?? "";
+  if (isNestedMacOsSandboxError(stderr, input.exitCode) || isNestedMacOsSandboxError(errMsg, input.exitCode)) {
+    return MACOS_NESTED_SANDBOX_MESSAGE;
+  }
+  const detail = errMsg || stderr;
+  const how = input.signal ? `signal ${input.signal}` : `exit code ${input.exitCode}`;
+  return `${input.vendorLabel} exited before ${input.phase} (${how})${detail ? `: ${detail}` : ""}`;
 }
