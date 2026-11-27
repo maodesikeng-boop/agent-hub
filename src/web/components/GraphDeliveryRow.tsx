@@ -18,6 +18,7 @@ export const GraphDeliveryRow = memo(function GraphDeliveryRow({
     return () => window.clearInterval(timer);
   }, []);
   const elapsed = Math.max(0, now - row.since);
+  const wait = row.wait.kind === "pm" ? "Waiting for the PM" : `Waiting for #${row.wait.watchId}: ${row.wait.body}`;
   return (
     <div
       data-graph-delivery
@@ -28,8 +29,8 @@ export const GraphDeliveryRow = memo(function GraphDeliveryRow({
     >
       <WorkStatusIcon status="waiting" />
       <span className="font-medium">Delivery</span>
-      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-        {row.wait.kind === "pm" ? "Waiting for the PM" : `Waiting for #${row.wait.watchId}: ${row.wait.body}`}
+      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={wait}>
+        {wait}
       </span>
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
         {elapsed < GRAPH_DELIVERY_AGE_TICK_MS ? "<1m" : formatDurationShort(Math.floor(elapsed / GRAPH_DELIVERY_AGE_TICK_MS) * GRAPH_DELIVERY_AGE_TICK_MS)}
