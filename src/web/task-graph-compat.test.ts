@@ -42,6 +42,7 @@ function graphOf(nodes: TaskNode[], id = 1): TaskGraph {
     createdAt: 1,
     updatedAt: 1,
     completedAt: null,
+    readySince: null,
   };
 }
 
@@ -84,6 +85,19 @@ describe("任务图读入处的新旧状态映射", () => {
     expect(normalizeTaskGraphs(mixed)).toBe(normalized);
     expect(normalized[0]).toBe(fresh);
     expect(normalized[1]).toBe(first);
+  });
+
+  it("a peer that predates readySince gets its latest step time as the ready time", () => {
+    const done = { ...legacyNode("a", "piece", "pending"), status: "done", waitingFor: null, skipped: false, updatedAt: 40 } as TaskNode;
+    delete (done as unknown as { kind?: string }).kind;
+    const older = graphOf([done, { ...done, key: "b", updatedAt: 70 }], 3);
+    delete (older as Partial<TaskGraph>).readySince;
+    const next = normalizeTaskGraph(older);
+    expect(next.readySince).toBe(70);
+    expect(normalizeTaskGraph(next)).toBe(next);
+    const unfinished = graphOf([{ ...done, status: "running" }], 4);
+    delete (unfinished as Partial<TaskGraph>).readySince;
+    expect(normalizeTaskGraph(unfinished).readySince).toBeNull();
   });
 
   it("状态归约：快照和 task_graph.updated 推来的旧状态都换好，下游拿到的是新的四个", () => {

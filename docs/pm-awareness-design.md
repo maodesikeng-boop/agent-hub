@@ -384,7 +384,7 @@ The body is what the PM will do once the wait settles. The receipt is `已开始
 
 - `hub graph show` and `formatGraphText` add a last line, `[等你验收交付] 交付：图里画的步骤都做完了（已等 25 分钟）`, or `[在等] 交付：在等 #3「检查通过后交付」` when a watch is linked. `graphStatusLabel` drops `active · 待交付`.
 - The delivery note moves onto PR-4's entry with subject `{ kind: "graph.ready_to_finish", graphId, since }`. Its header becomes `【任务图 #141「取消残留」图里画的步骤都做完了，等你验收交付】`, plus `图里只有上面这些步骤；项目规矩或用户要求、但没画进图的步骤（比如审查），后台看不出来，缺了用 hub graph patch 补。` PR-8 adds `要等外部条件（比如检查通过）再交付，用 hub watch add 让后台盯着，结果出来叫醒你。` together with the command, so the note never names a command the daemon does not have.
-- The web (D-A2 option 1, decided) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`, both computed by `graphDeliveryOf`.
+- The web (D-A2 option 1, decided) shows the delivery row and `2/2 steps · awaiting delivery` in `WorkPanel` and `TaskGraphDialog`, both computed by `graphDeliveryOf`. The row's age counts from `TaskGraph.readySince`, which the daemon fills from `task_graph_step_states` like the agenda's `ready@since`, so later writes to a done step (a branch rename, a Worker exit) do not restart it.
 - Q6: a brief-less step already waits for the PM and wakes it when its upstream finishes (`progress.ts:266-267`). The delivery row makes a drawn merge step optional, and the manual says so.
 
 #### B6. Step slots
