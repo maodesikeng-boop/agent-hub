@@ -1,11 +1,12 @@
 // agy has no fork API: copy its undocumented per-conversation sqlite db and rewrite the cascade and trajectory ids.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmodSync, cpSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 import { DB_BUSY_TIMEOUT_MS, agentLaunchArgs } from "../../shared/index.ts";
 import type { TokenUsage } from "../../shared/index.ts";
-import { agyCliDataDir, agyDataPaths } from "./paths.ts";
+import { agyCliDataDir, agyDataPaths, agyIsolatedHomeEnv } from "./paths.ts";
 import {
   AGY_PLAN_PERMISSION_ARGS,
   AGY_PRINT_ARGS,
@@ -32,6 +33,7 @@ const SQLITE_NOTADB = 26;
 
 export interface AgyCopyOptions {
   root?: string;
+  platform?: string;
 }
 
 const isUuid = (id: string): boolean => UUID_PATTERN.test(id);
@@ -152,6 +154,7 @@ function buildForkArgs(src: ForkSource, forkId: string): string[] {
 export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker {
   const paths = agyDataPaths(options.root ?? AGY_DATA_DIR);
   const { root } = paths;
+  const platform = options.platform ?? process.platform;
 
   return {
     id: "agy-copy",
@@ -198,7 +201,16 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
 
     async write(src: ForkSource, fork: ForkHandle, prompt: string, signal: AbortSignal): Promise<ForkWriteResult> {
       signal.throwIfAborted();
-      const env = buildChildEnv(process.env, src.launch.env);
+      const baseEnv = buildChildEnv(process.env, src.launch.env);
+      const env = {
+        ...baseEnv,
+        ...agyIsolatedHomeEnv({
+          userHome: baseEnv.HOME ?? homedir(),
+          platform,
+          env: baseEnv,
+          exists: existsSync,
+        }),
+      };
       const spawned = spawnOwnedProcess(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
       const child: ChildProcessWithoutNullStreams = spawned.child;
       trackChild(child, "handover:agy", { detached: spawned.detached });

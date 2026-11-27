@@ -12,6 +12,7 @@ import type { ProviderStatusItem } from "../../src/shared/providers.ts";
 import { vendorSpec, type AgentVendor } from "../../src/shared/vendors.ts";
 import { vendorConfigHome } from "../../src/shared/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
+import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../../src/vendors/agy/paths.ts";
 import { AGY_CLI_HOME_REL } from "../../src/vendors/agy/spec.ts";
 import { TESTER_INSTALL_TIMEOUT_MS, TESTER_STDERR_TAIL_LINES } from "./limits.ts";
 import { isInsideBench } from "./bench-paths.ts";
@@ -172,6 +173,7 @@ export async function installVendor(vendor: AgentVendor, target: InstallTarget):
     ...target.env,
     HOME: target.userHome,
     USERPROFILE: target.userHome,
+    ...(vendor === "agy" && target.platform === "darwin" ? { [AGY_FORCE_FILE_TOKEN_STORAGE_ENV]: "1" } : {}),
     PATH: target.path,
     npm_config_prefix: target.npmPrefix,
     NPM_CONFIG_PREFIX: target.npmPrefix,
@@ -182,7 +184,7 @@ export async function installVendor(vendor: AgentVendor, target: InstallTarget):
   mkdirSync(target.installDir, { recursive: true });
   const resolved = result.exitCode === 0 ? target.resolveCli() : null;
   writeFileSync(installRecordFile(target.installDir, vendor), `${JSON.stringify({ ...record, exitCode: resolved === null && result.exitCode === 0 ? -1 : result.exitCode }, null, 2)}\n`);
-  if (resolved !== null) return withRecipe({ vendor, instance: target.instance, status: "signed_out", version: null, detail: `installed at ${resolved}`, fix: loginFix(vendor, target.instance, target.userHome) });
+  if (resolved !== null) return withRecipe({ vendor, instance: target.instance, status: "signed_out", version: null, detail: `installed at ${resolved}`, fix: loginFix(vendor, target.instance, target.userHome, target.platform) });
   const why = result.exitCode === 0 ? "exited 0 but the CLI is not inside the bench HOME" : `exited ${result.exitCode}`;
   return withRecipe({ vendor, instance: target.instance, status: "install_failed", version: null, detail: `${command} ${why}\n${record.stderrTail}`, fix: installFix(vendor, target.platform) });
 }
@@ -191,12 +193,14 @@ function installFix(vendor: AgentVendor, platform: NodeJS.Platform): string {
   return `node test/tester/cli.ts vendors install (runs: ${installCommandFor(vendor, platform)})`;
 }
 
-function loginFix(vendor: AgentVendor, role: InstanceRole, userHome: string | null): string {
+function loginFix(vendor: AgentVendor, role: InstanceRole, userHome: string | null, platform: NodeJS.Platform): string {
   const recipe = VENDOR_BENCH[vendor][role];
   if (recipe.coverage === "accepted_gap") return `No sign-in needed: ${recipe.reason}`;
   if (vendor === "claude" && role === "local") return recipe.signIn;
   const how = recipe.signIn;
-  return userHome === null ? `${loginCommandFor(vendor)} as the bench user; ${how}` : `HOME=${userHome} ${loginCommandFor(vendor)}; ${how}`;
+  if (userHome === null) return `${loginCommandFor(vendor)} as the bench user; ${how}`;
+  const agyEnv = vendor === "agy" && platform === "darwin" ? `${AGY_FORCE_FILE_TOKEN_STORAGE_ENV}=1 ` : "";
+  return `HOME=${userHome} ${agyEnv}${loginCommandFor(vendor)}; ${how}`;
 }
 
 /** Sets acceptedGap when the vendor's recipe accepts exactly this status. */
@@ -281,10 +285,10 @@ export function probeVendor(vendor: AgentVendor, target: ProbeTarget): VendorRea
     return withRecipe({ ...base, status: "not_installed", detail: "the CLI does not resolve inside the bench HOME", fix: installFix(vendor, target.platform) });
   }
   const availability = target.provider.availability;
-  if (availability === "signed_out") return withRecipe({ ...base, status: "signed_out", detail: "installed, not signed in", fix: loginFix(vendor, target.instance, home) });
+  if (availability === "signed_out") return withRecipe({ ...base, status: "signed_out", detail: "installed, not signed in", fix: loginFix(vendor, target.instance, home, target.platform) });
   if (availability !== "available") return withRecipe({ ...base, status: "unknown", detail: `the daemon reports ${availability}`, fix: "Open Settings, Providers on that computer and read the vendor's error." });
   if (target.local && target.platform === "darwin" && !benchHoldsCredential(vendor, target.local)) {
-    return withRecipe({ ...base, status: "login_blocked", detail: "signed in, but no credential lives in the bench HOME or bench env; the login comes from somewhere shared such as the keychain", fix: loginFix(vendor, target.instance, home) });
+    return withRecipe({ ...base, status: "login_blocked", detail: "signed in, but no credential lives in the bench HOME or bench env; the login comes from somewhere shared such as the keychain", fix: loginFix(vendor, target.instance, home, target.platform) });
   }
   return withRecipe({ ...base, status: "ready", detail: target.provider.accountSummary ?? "signed in", fix: "" });
 }

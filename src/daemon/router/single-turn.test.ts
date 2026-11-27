@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DriverError,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   type Driver,
@@ -14,6 +15,7 @@ import {
   type SessionId,
 } from "../../shared/index.ts";
 import { sessionLaunchDir } from "../../shared/paths.ts";
+import { MACOS_NESTED_SANDBOX_MESSAGE } from "../../shared/errors.ts";
 import { createSessionTokens } from "../agent-api/tokens.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import { getAgentSession } from "../store/index.ts";
@@ -152,6 +154,40 @@ describe("createRouterTurnRunner", () => {
     driver.sendResult = { kind: "written" };
     driver.onTurn = (emit) => emit({ type: "session.exited", reason: "crash", hadResult: false, at: at() } as unknown as DriverEvent);
     expect(await runner()(request())).toMatchObject({ ok: false, reason: "error", error: expect.stringContaining("crash") });
+  });
+
+  it("acceptance S2: surfaces actionable macOS nested sandbox-exec exit 71 message instead of bare 进程提前退出（startup_failed）", async () => {
+    const startErr = new DriverError(
+      "spawn_failed",
+      "claude exited before system/init (exit code 71): sandbox-exec: sandbox_apply: Operation not permitted",
+    );
+    const origStart = driver.start.bind(driver);
+    driver.start = async (sessionId) => {
+      // Real drivers emit session.exited(startup_failed) synchronously before start() rejects.
+      for (const fn of (driver as unknown as { listeners: Set<DriverEventListener> }).listeners) {
+        fn(sessionId, {
+          type: "session.exited",
+          reason: "startup_failed",
+          exitCode: 71,
+          signal: null,
+          hadResult: false,
+          messageIds: [],
+          at: at(),
+        });
+      }
+      throw startErr;
+    };
+    try {
+      const result = await runner()(request());
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "error",
+        error: MACOS_NESTED_SANDBOX_MESSAGE,
+      });
+      expect(result.ok ? "" : result.error).not.toContain("进程提前退出");
+    } finally {
+      driver.start = origStart;
+    }
   });
 
   it("不管成败都撤令牌、结束会话、删掉临时启动目录，onSession 返回的收尾函数被调一次", async () => {

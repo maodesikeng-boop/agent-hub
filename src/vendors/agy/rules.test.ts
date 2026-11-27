@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, symlinkSync, mkdtempSync, readdirSync, readFileS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX } from "./limits.ts";
-import { agyRuleBudgetWarning, AGY_RULES_WORKSPACE_DIR, splitPromptForRules, writeAgyPromptRules } from "./rules.ts";
+import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_WARNING_MAX_FILES } from "./limits.ts";
+import { agyRuleBudgetWarning, AGY_RULES_WORKSPACE_DIR, inspectAgyRuleBudget, splitPromptForRules, writeAgyPromptRules } from "./rules.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -118,5 +118,49 @@ describe("agyRuleBudgetWarning", () => {
     expect(agyRuleBudgetWarning(join(d, "home"), [d])).toContain("1 个文件超过");
     writeFileSync(join(d, "AGENTS.md"), "x".repeat(24_000));
     expect(agyRuleBudgetWarning(join(d, "home"), [d])).toBeNull();
+  });
+
+  it("acceptance S1/S7/S10/S11: lists oversized filenames and byte sizes sorted largest-first, caps at AGY_RULE_WARNING_MAX_FILES, lists top files on total-only overflow, and skips broken symlinks", () => {
+    const d = launchDir();
+    const home = join(d, "home");
+    const project = join(d, "project");
+    mkdirSync(join(project, ".agents", "rules"), { recursive: true });
+    writeFileSync(join(project, "AGENTS.md"), "a".repeat(24_500));
+    writeFileSync(join(project, ".agents", "rules", "huge.md"), "---\ntrigger: always_on\n---\n" + "b".repeat(26_000));
+    symlinkSync(join(project, "missing-target.md"), join(project, ".agents", "rules", "broken.md"));
+
+    const report = inspectAgyRuleBudget(home, [project]);
+    expect(report.oversizedFiles.map((f) => f.path)).toEqual([
+      expect.stringContaining("huge.md"),
+      expect.stringContaining("AGENTS.md"),
+    ]);
+    expect(report.oversizedFiles[0]!.bytes).toBeGreaterThan(report.oversizedFiles[1]!.bytes);
+
+    const warning = agyRuleBudgetWarning(home, [project])!;
+    expect(warning).toContain("huge.md");
+    expect(warning).toContain("AGENTS.md");
+    expect(warning).toContain("24500");
+
+    // Total-only overflow (each file <= 24,000 bytes) still identifies top contributing files.
+    const dTotal = launchDir();
+    const pTotal = join(dTotal, "proj");
+    mkdirSync(join(pTotal, ".agents", "rules"), { recursive: true });
+    for (let i = 1; i <= 4; i++) {
+      writeFileSync(join(pTotal, ".agents", "rules", `part-${i}.md`), "---\ntrigger: always_on\n---\n" + "c".repeat(16_000 + i * 100));
+    }
+    const totalWarn = agyRuleBudgetWarning(join(dTotal, "home"), [pTotal])!;
+    expect(totalWarn).toContain("part-4.md");
+
+    // Large workspace volume: 15 oversized files are capped at AGY_RULE_WARNING_MAX_FILES with overflow count.
+    const dMany = launchDir();
+    const pMany = join(dMany, "many");
+    mkdirSync(join(pMany, ".agents", "rules"), { recursive: true });
+    for (let i = 1; i <= AGY_RULE_WARNING_MAX_FILES + 5; i++) {
+      writeFileSync(join(pMany, ".agents", "rules", `over-${String(i).padStart(2, "0")}.md`), "---\ntrigger: always_on\n---\n" + "d".repeat(24_100 + i));
+    }
+    const manyWarn = agyRuleBudgetWarning(join(dMany, "home"), [pMany])!;
+    const listedMatches = manyWarn.match(/over-\d{2}\.md/g) ?? [];
+    expect(listedMatches.length).toBeLessThanOrEqual(AGY_RULE_WARNING_MAX_FILES);
+    expect(manyWarn).toMatch(/等共\s*15\s*个|其余\s*5\s*个/);
   });
 });
