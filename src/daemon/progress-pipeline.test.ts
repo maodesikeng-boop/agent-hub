@@ -29,7 +29,6 @@ interface ReplayCase {
   pending?: true;
 }
 
-const agyDone = progressFrame<{ step_update: { tool_info: unknown } }>("agy-tool.done.docs-capture.json");
 const probeList = [{ title: "Read probe", status: "in_progress" }, { title: "Confirm marker", status: "pending" }];
 const completedProbe = probeList.map((item) => ({ ...item, status: "completed" }));
 const cursorFrames = progressFrames<{
@@ -45,7 +44,7 @@ const cursorNotification = {
 };
 const cases = {
   agy: {
-    frames: [{ ...agyDone, step_update: { ...agyDone.step_update, state: "ACTIVE" } }, agyDone],
+    frames: [acpTool("illustrative-session", "read_file")],
     snapshots: [],
     action: "tool_use",
   },

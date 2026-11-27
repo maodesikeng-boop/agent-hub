@@ -11,6 +11,7 @@ import {
   DATA_DIR_READABLE_ENTRIES,
   DriverError,
   RUN_DIR_READABLE_ENTRIES,
+  prependMissingArgs,
   protectedRootsOf,
   vendorSpec,
   type AgentVendor,
@@ -542,7 +543,7 @@ export function bwrapArgs(
   remaskNestedWslDirs(args, masked, [...bound, ...seenWritable]);
   if (boundary.dataDir !== null) args.push("--remount-ro", boundary.dataDir);
 
-  args.push("--", base.command, ...ownSandboxOffArgs, ...base.args);
+  args.push("--", base.command, ...prependMissingArgs(ownSandboxOffArgs, base.args));
   return args;
 }
 
@@ -889,8 +890,7 @@ export function win32WorkerSandboxArgs(
       ...(reader === null ? [] : ["--reader", reader]),
       "--",
       base.command,
-      ...ownSandboxOffArgs,
-      ...base.args,
+      ...prependMissingArgs(ownSandboxOffArgs, base.args),
     ],
   };
 }
@@ -919,8 +919,7 @@ export function win32ReadonlyFallbackSandboxArgs(
       ...(reader === null ? [] : ["--reader", reader]),
       "--",
       base.command,
-      ...ownSandboxOffArgs,
-      ...base.args,
+      ...prependMissingArgs(ownSandboxOffArgs, base.args),
     ],
   };
 }
@@ -973,7 +972,7 @@ const seatbeltBackend: OsSandboxBackend = {
   available: () => true,
   wrap: (base, scope, options) => ({
     command: SANDBOX_EXEC,
-    args: ["-p", seatbeltProfile(scope), base.command, ...(options?.ownSandboxOffArgs ?? []), ...base.args],
+    args: ["-p", seatbeltProfile(scope), base.command, ...prependMissingArgs(options?.ownSandboxOffArgs ?? [], base.args)],
   }),
   wrapReadonly: (base, input) => ({
     command: SANDBOX_EXEC,

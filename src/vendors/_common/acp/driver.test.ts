@@ -1326,7 +1326,11 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
   );
 
   it("伪装成 kind: 'execute' 但属于未标只读的 MCP 工具仍被拒绝", async () => {
-    const policy = buildReadonlyPolicy({
+    const defaultPolicy = buildReadonlyPolicy({
+      homeDir: homedir(),
+      stateDir: "/tmp/acp-policy",
+    });
+    const extraAllowPolicy = buildReadonlyPolicy({
       homeDir: homedir(),
       stateDir: "/tmp/acp-policy",
       connectors: { extraAllow: ["runner/*"] },
@@ -1349,7 +1353,7 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
             toolCall: { toolCallId: "t1", title: "Run command", name: "mcp__runner__exec", kind: "execute" },
             options,
           },
-          readonlyPolicy: policy,
+          readonlyPolicy: defaultPolicy,
           closing: false,
           signal: new AbortController().signal,
         },
@@ -1372,7 +1376,7 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
             },
             options,
           },
-          readonlyPolicy: policy,
+          readonlyPolicy: defaultPolicy,
           closing: false,
           signal: new AbortController().signal,
         },
@@ -1380,7 +1384,7 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
       ),
     ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
 
-    // 3. _meta 仅给 mcpServer（未重复给 tool 字段）或残缺 MCP 前缀 mcp_<flat>，伪装成 kind: "execute"
+    // 3. _meta 仅给 mcpServer（工具名回落到 name）伪装成 kind: "execute" 且未标只读时拒绝
     await expect(
       decideAcpPermission(
         {
@@ -1395,7 +1399,29 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
             },
             options,
           },
-          readonlyPolicy: policy,
+          readonlyPolicy: defaultPolicy,
+          closing: false,
+          signal: new AbortController().signal,
+        },
+        bypassAttemptCfg,
+      ),
+    ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
+
+    // 4. 残缺 MCP 身份（缺工具名或残缺前缀 mcp_<flat>），即使 extraAllow 存在也必须拒绝
+    await expect(
+      decideAcpPermission(
+        {
+          request: {
+            sessionId: "s",
+            toolCall: {
+              toolCallId: "t3b",
+              title: "",
+              kind: "execute",
+              _meta: { mcpServer: "runner" },
+            },
+            options,
+          },
+          readonlyPolicy: extraAllowPolicy,
           closing: false,
           signal: new AbortController().signal,
         },
@@ -1416,7 +1442,7 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
             },
             options,
           },
-          readonlyPolicy: policy,
+          readonlyPolicy: extraAllowPolicy,
           closing: false,
           signal: new AbortController().signal,
         },
@@ -1425,16 +1451,43 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
   });
 
-  it("MCP 手动白名单也不能放行缺少 readOnlyHint 的请求", async () => {
-    const result = await decideAcpPermission({
+  it("MCP 决策走 connectorToolAllowed：extraAllow 放行省略 annotations 的显式白名单，deny 压过 extraAllow，未解析身份永不放行", async () => {
+    const allowed = await decideAcpPermission({
+      request: {
+        sessionId: "s", toolCall: { toolCallId: "t", title: "mcp__docs__search", kind: "other" },
+        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+      },
+      readonlyPolicy: buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy", connectors: { extraAllow: ["docs/search"] } }),
+      closing: false, signal: new AbortController().signal,
+    });
+    expect(allowed).toEqual({ outcome: "selected", optionId: "allow" });
+
+    const denied = await decideAcpPermission({
       request: {
         sessionId: "s", toolCall: { toolCallId: "t", title: "mcp__docs__write", kind: "other" },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
       },
-      readonlyPolicy: buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy", connectors: { extraAllow: ["docs/*"] } }),
+      readonlyPolicy: buildReadonlyPolicy({
+        homeDir: homedir(),
+        stateDir: "/tmp/acp-policy",
+        connectors: { extraAllow: ["docs/*"], deny: ["docs/write"] },
+      }),
       closing: false, signal: new AbortController().signal,
     });
-    expect(result).toEqual({ outcome: "cancelled" });
+    expect(denied).toEqual({ outcome: "cancelled" });
+
+    const unresolvedDenied = await decideAcpPermission(
+      {
+        request: {
+          sessionId: "s", toolCall: { toolCallId: "t", name: "call_mcp_tool", title: "call_mcp_tool", kind: "other" },
+          options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+        },
+        readonlyPolicy: buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy", connectors: { extraAllow: ["*/*"] } }),
+        closing: false, signal: new AbortController().signal,
+      },
+      { extractMcpTool: () => ({ server: "?", tool: "?", annotations: null }) },
+    );
+    expect(unresolvedDenied).toEqual({ outcome: "cancelled" });
   });
 
   it("单个超大 Unicode chunk 分段后每条消息仍在字节上限内且内容完整", async () => {
