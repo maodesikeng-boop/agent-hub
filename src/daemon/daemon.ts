@@ -39,7 +39,8 @@ import {
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startWorkerRetention } from "./db-retention.ts";
-import { createBusySessions, createSelfReload, createStagedWebBuild, type SelfReloadController } from "./self-reload.ts";
+import { createBusySessions, createSelfReload, createStagedWebBuild, describeSelfReload, type SelfReloadController } from "./self-reload.ts";
+import { describeBusySessionsForReload } from "./self-reload-busy.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createDaemonSessionScope } from "./session-tmp.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
@@ -444,8 +445,17 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sandboxGuard,
       ...(options.onSelfReload
         ? {
-            selfReload: ({ sessionId, build }: { sessionId: number; build: boolean }) => {
+            selfReload: ({ sessionId, build, cancel, status }: { sessionId: number; build: boolean; cancel?: boolean; status?: boolean }) => {
               if (!parts.selfReload) throw new LedgerRequestError("conflict", "守护进程还没启动完，稍后再试");
+              if (status) {
+                const current = parts.selfReload.status();
+                const described = describeSelfReload(current);
+                return { text: described === "" ? "当前没有进行中的热重启任务。" : described, data: current };
+              }
+              if (cancel) {
+                const result = parts.selfReload.cancel({ by: `项目经理会话 ${sessionId}` });
+                return { text: result.text, data: result.status };
+              }
               const result = parts.selfReload.request({ build, by: `项目经理会话 ${sessionId}` });
               return { text: result.text, data: result.status };
             },
@@ -939,8 +949,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       parts.selfReload = createSelfReload({
         busyReasons: () => {
           const reasons: string[] = [];
-          const sessionsBusy = busySessions.count();
-          if (sessionsBusy > 0) reasons.push(`${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令`);
+          const snapshots = ledger.busySessionSnapshots();
+          if (snapshots.length > 0) {
+            reasons.push(...describeBusySessionsForReload(snapshots, Date.now()));
+          } else {
+            const sessionsBusy = busySessions.count();
+            if (sessionsBusy > 0) reasons.push(`${sessionsBusy} 个会话仍在忙碌`);
+          }
           if (routerDispatcher.busy()) reasons.push("总助分派引擎有规划中或在途分派");
           if (handoverRunner.busy()) reasons.push("后台在写交接");
           if (catalogRunner.busy()) reasons.push("后台在写项目档案");
@@ -957,7 +972,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         },
         subscribe: (listener) => ledger.onChange(listener),
         initialFailure: initialReloadFailure,
-        ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
+        ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply(), cancelBuild: () => webBuild.cleanup() } : {}),
         restart: onSelfReload,
         ...(options.selfReloadDrainMaxMs !== undefined ? { drainMaxMs: options.selfReloadDrainMaxMs } : {}),
         log,

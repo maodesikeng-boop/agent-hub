@@ -25,6 +25,7 @@ export interface SelfReloadOptions {
   subscribe(listener: () => void): () => void;
   build?: (signal: AbortSignal) => Promise<BuildOutcome>;
   applyBuild?: () => void;
+  cancelBuild?: () => void;
   initialFailure?: string | null;
   restart(): void;
   log?: (line: string) => void;
@@ -209,8 +210,18 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
         status: current,
       };
     },
-    cancel(_input) {
-      throw new Error("Not implemented");
+    cancel({ by }) {
+      if (closed) throw new LedgerRequestError("conflict", "守护进程正在关闭，无法取消热重启");
+      if (state === "restarting") throw new LedgerRequestError("conflict", "已经在关机重启中，无法取消");
+      if (state === "idle") {
+        return { text: "当前没有进行中的热重启任务。", status: status() };
+      }
+      const hadBuild = wantBuild || built;
+      reset();
+      lastFailure = null;
+      if (hadBuild) options.cancelBuild?.();
+      log(`${LOG_PREFIX} ${by} 取消了待执行的热重启。`);
+      return { text: "已取消待执行的热重启。", status: status() };
     },
     status,
     close() {
@@ -286,6 +297,7 @@ export interface StagedWebBuildOptions {
 export interface StagedWebBuild {
   build(signal: AbortSignal): Promise<BuildOutcome>;
   apply(): void;
+  cleanup(): void;
   recover(): string | null;
 }
 
@@ -383,6 +395,10 @@ export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebB
       return { ok: false, reason: `${how}，日志 ${options.logPath}${tail === "" ? "" : `；最后几行：\n${tail}`}` };
     },
     apply,
+    cleanup() {
+      removeDir(ready);
+      removeDir(staging);
+    },
     recover() {
       try {
         return recoverAtStartup();

@@ -14,6 +14,7 @@ import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../..
 import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { AgentTextMeta } from "../../shared/sent-files.ts";
+import type { BusySessionSnapshot } from "../self-reload-busy.ts";
 import type { LocalLink } from "../sent-files.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -96,6 +97,7 @@ export interface SqliteLedger extends Ledger {
    * calls it on its scheduler tick. Returns how many reminders were enqueued.
    */
   runDueBackgroundWaits(nowMs?: number): number;
+  busySessionSnapshots(): BusySessionSnapshot[];
   /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
   close(): void;
 }
@@ -253,6 +255,44 @@ function createSessionStateRefresh(
   });
 }
 
+function busySessionSnapshotsOf(
+  db: Db,
+  sessions: ReturnType<typeof createLedgerSessions>,
+  workers: ReturnType<typeof createLedgerWorkers>,
+): BusySessionSnapshot[] {
+  const waitSessionIds = db
+    .all<{ session_id: SessionId }>("SELECT session_id FROM turn_background_waits WHERE active_count > 0")
+    .map((r) => r.session_id);
+  const ids = [...new Set([...sessions.workingSessionIds(), ...waitSessionIds])];
+  const out: BusySessionSnapshot[] = [];
+  for (const sessionId of ids) {
+    const session = getAgentSession(db, sessionId);
+    if (session === null || session.status === "ended" || session.status === "broken") continue;
+    const live = sessions.liveOf(sessionId);
+    const wait = workers.backgroundWaits.waitOf(sessionId);
+    const bgTasks =
+      live.backgroundTaskList && live.backgroundTaskList.length > 0
+        ? live.backgroundTaskList
+        : wait !== null && wait.activeCount > 0
+          ? wait.tasks
+          : undefined;
+    if (live.activity === "idle" && bgTasks === undefined) continue;
+    const workerTitle =
+      session.workerId !== null ? db.get<{ title: string }>("SELECT title FROM workers WHERE id = ?", session.workerId)?.title : undefined;
+    const pmName = session.pmId !== null ? db.get<{ name: string }>("SELECT name FROM pms WHERE id = ?", session.pmId)?.name : undefined;
+    out.push({
+      sessionId,
+      role: session.role,
+      activity: live.activity === "idle" ? "background" : live.activity,
+      ...(session.workerId !== null ? { workerId: session.workerId } : {}),
+      ...(workerTitle !== undefined ? { workerTitle } : {}),
+      ...(pmName !== undefined ? { pmName } : {}),
+      ...(bgTasks !== undefined && bgTasks.length > 0 ? { backgroundTasks: bgTasks } : {}),
+    });
+  }
+  return out;
+}
+
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   installSlotAdmission(db);
   const ctx = createLedgerContext(db, options);
@@ -270,6 +310,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     worktreesDir: files.worktreesDir,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     dataHome,
+    ...(files.pmMemoryDir !== undefined ? { pmMemoryDir: files.pmMemoryDir } : {}),
     userHome,
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
@@ -362,7 +403,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual, options.workerPlatform ?? process.platform);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
   const { assertStart, init, ...capabilities } = createLedgerPmCapabilities(ctx);
 
@@ -600,6 +641,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     runDueSchedules: schedules.runDueSchedules,
     runDueBackgroundWaits: (nowMs = ctx.now()) => workers.backgroundWaits.runDue(nowMs),
+    busySessionSnapshots: () => busySessionSnapshotsOf(db, sessions, workers),
     addSchedule: schedules.addForUser,
     setScheduleEnabled: schedules.setEnabledForUser,
     removeSchedule: schedules.removeForUser,

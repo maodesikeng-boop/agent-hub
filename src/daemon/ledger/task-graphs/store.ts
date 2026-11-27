@@ -1,6 +1,7 @@
 import { pendingSandboxCardsForSteps, writeStepNoOuterSandbox } from "../sandbox-approvals.ts";
 import { askOf, type AskMeta, type MessageId, type PmId, type ProjectId, type TaskEdge, type TaskGraph, type TaskGraphId, type TaskGraphStatus, type TaskNode, type TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { parseWorkerCapabilitiesJson, type WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { Db } from "../../store/index.ts";
 import { writeWorkerCapabilities } from "../capability-rows.ts";
@@ -125,17 +126,39 @@ const graphOfRow = (row: TaskGraphDbRow, nodes: TaskNode[], edges: TaskEdge[], g
   completedAt: row.completed_at,
 });
 
+function stepDetailsFor(db: Db, stepIds: readonly number[]): {
+  capabilities: ReadonlyMap<number, WorkerCapabilities>;
+  noOuterSandbox: ReadonlySet<number>;
+} {
+  if (stepIds.length === 0) return { capabilities: new Map(), noOuterSandbox: new Set() };
+  const idsJson = JSON.stringify(stepIds);
+  const capRows = db.all<{ step_id: number; capabilities_json: string }>(
+    "SELECT step_id, capabilities_json FROM task_graph_step_capabilities WHERE step_id IN (SELECT value FROM json_each(?))",
+    idsJson,
+  );
+  const capabilities = new Map<number, WorkerCapabilities>();
+  for (const row of capRows) capabilities.set(row.step_id, parseWorkerCapabilitiesJson(row.capabilities_json));
+  const sandboxRows = db.all<{ step_id: number }>(
+    "SELECT step_id FROM task_graph_step_sandbox WHERE no_outer_sandbox = 1 AND step_id IN (SELECT value FROM json_each(?))",
+    idsJson,
+  );
+  return { capabilities, noOuterSandbox: new Set(sandboxRows.map((row) => row.step_id)) };
+}
+
 export function hydrateNodes(g: TaskGraphCtx, rows: readonly TaskNodeDbRow[], includeDetails: boolean): TaskNode[] {
   const blockers = blockersOf(g, rows);
   const waitingIds = rows.filter((n) => n.status === "waiting" && n.waiting_for === "user" && n.active_worker_id !== null).map((n) => n.id);
   const approvals = pendingSandboxCardsForSteps(g.db, waitingIds);
   const pendingAsks = pendingStepAskIds(g.db, rows);
-  const slots = slotViewsOf(g.db, rows.map((n) => n.id));
+  const stepIds = rows.map((n) => n.id);
+  const slots = slotViewsOf(g.db, stepIds);
+  const details = includeDetails ? stepDetailsFor(g.db, stepIds) : null;
   return rows.map((n) => toTaskNode(n, includeDetails, {
     userBlocker: blockers.get(n.id),
     sandboxApproval: approvals.get(n.id),
     ...(n.gate_ask_message_id !== null ? { gateAskPending: pendingAsks.has(n.gate_ask_message_id) } : {}),
     slot: slots.get(n.id),
+    ...(details !== null ? { capabilities: details.capabilities.get(n.id), noOuterSandbox: details.noOuterSandbox.has(n.id) } : {}),
   }));
 }
 

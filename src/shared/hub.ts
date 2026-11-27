@@ -19,6 +19,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { HubFileArg } from "./deliverables.ts";
+import type { HubCapsArgs, HubCapsData } from "./hub-caps.ts";
 import type { HubChecklistRequest } from "./hub-checklist.ts";
 import type { WorkerCapabilityMode } from "./pm-capabilities.ts";
 import type { RouterItem, RouterReportLink } from "./router.ts";
@@ -59,6 +60,7 @@ export const HUB_COMMANDS = [
   "worker.log",
   "worker.search",
   "models",
+  "caps",
   "ask",
   "ask.close",
   "ask.list",
@@ -100,6 +102,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.log": ["pm"],
   "worker.search": ["pm"],
   models: ["pm"],
+  caps: ["pm"],
   ask: ["pm"],
   "ask.close": ["pm"],
   "ask.list": ["pm"],
@@ -127,6 +130,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
  * Each value is the hint printed in the output where the PM needs that command; the producer of that output must print it verbatim.
  */
 export const HUB_HELP_ONLY_COMMANDS = {
+  caps: `查看可用外接能力：${HUB_COMMAND} caps`,
   "ask.list": `看全部在等用户的卡：${HUB_COMMAND} ask list`,
   "ask.show": `看全文：${HUB_COMMAND} ask show <编号>`,
   "schedule.show": `看全文和最近几次结果：${HUB_COMMAND} schedule show <编号>`,
@@ -177,6 +181,7 @@ export interface HubArgsMap {
   "worker.search": { keywords: string[]; limit?: number };
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
   models: { vendor?: AgentVendor; refresh?: boolean };
+  caps: HubCapsArgs;
   ask: {
     text: string;
     options?: string[];
@@ -469,6 +474,7 @@ interface HubDataMap {
   "worker.log": { worker: WorkerRecord; steps: WorkerLogStep[] };
   "worker.search": { hits: WorkerSearchHit[] };
   models: { vendors: HubVendorModels[] };
+  caps: HubCapsData;
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
   "ask.close": { item: RouterItem } | { messageId: MessageId };
   "ask.list": { asks: PendingAsk[] };

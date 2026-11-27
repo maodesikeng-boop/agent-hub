@@ -71,10 +71,9 @@ const isLocked = (n: TaskNodeDbRow): boolean => n.status === "running" || n.stat
 const statusOf = (n: TaskNodeDbRow): string => taskNodeStatusText(toTaskNode(n), "pm");
 
 function parsePatchSpec(raw: unknown): { patch: PatchTaskGraphSpecInput; lists: PatchLists } {
-  const patch = parseSpecJson<PatchTaskGraphSpecInput>(raw, patchSpecSchema, {
+  const patch = parseSpecJson<PatchTaskGraphSpecInput>(raw, patchSpecSchema, "patch", {
     empty: "patch JSON 不能为空",
     badJson: "patch 内容不是合法的 JSON",
-    badShape: "patch 字段格式不正确",
   });
   for (const [a, b] of [["addSteps", "addNodes"], ["updateSteps", "updateNodes"], ["removeSteps", "removeNodes"], ["skipSteps", "skipNodes"]] as const) {
     if (patch[a] !== undefined && patch[b] !== undefined) throw fail("invalid", `patch 中 ${a} 和 ${b} 只能传其中一个`);

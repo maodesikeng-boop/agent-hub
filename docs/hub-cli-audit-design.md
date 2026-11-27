@@ -23,9 +23,13 @@ This plan audits Bellwood's `hub` CLI and daemon handlers against Claude Code's 
 - **Verification categories.** Section 8 covers all nine categories from `docs/plan-standard.md`, and addresses every matching rule in `REVIEW.md` on `main`.
 - **Structurally distinct designs.** Section 3 compares three distinct structures: a unified CLI command metadata registry with layered diagnostics (Design A, chosen), a full schema-first tool compiler with an optional native MCP bridge (Design B, day-one design), and minimal point patches on the current layout (Design C).
 
-### Decisions needed
+### Decisions (settled by Project Manager)
 
-None of the choices below changes what a human user sees in the web workbench or Feishu, so no user decision card is required. The Project Manager decides three agent-facing CLI tradeoffs before implementation starts:
+None of the choices below changes what a human user sees in the web workbench or Feishu, so no user decision card is required. The Project Manager approved **Design A** and all three recommended options before implementation:
+
+- **D1 -> Option 1 (Approved):** Bare `hub help` outputs a compact ~2.5 KB grouped index; `hub help <group> [<action>]` and `<cmd> --help` / `-h` output scoped help; `hub help --all` outputs the full manual (`HUB_USAGE`).
+- **D2 -> Option 1 (Approved):** `hub graph create` and `hub graph patch` enable `.strict()` to reject unknown JSON keys with closest-key suggestions.
+- **D3 -> Option 1 (Approved):** `hub caps` is read-only inspection (`hub caps [--kind skill|mcp|connector] [--vendor <vendor>]`) and does not mutate Settings capability switches.
 
 #### D1. Output of bare `hub help`
 

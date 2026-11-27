@@ -150,7 +150,7 @@ export function askOnStepIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args:
       ? `用户拍板后定案会直接发给该步的 Worker #${node.active_worker_id} 接着推进，不会叫醒你。`
       : "等用户拍板后再往下推进。";
   return {
-    text: `已在任务图 #${graph.id} 的步骤「${nodeKey}」上挂出拍板卡 #${askMsg.id}：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。${workerHint}`,
+    text: `已在任务图 #${graph.id} 的步骤「${nodeKey}」上挂出拍板卡 #${askMsg.id}（查看或关闭用 ${HUB_COMMAND} ask show/close --message ${askMsg.id}）：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。${workerHint}`,
     data: { messageId: askMsg.id, graph },
   };
 }
