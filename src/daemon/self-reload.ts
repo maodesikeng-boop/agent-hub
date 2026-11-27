@@ -281,6 +281,21 @@ function formatMinutes(ms: number): string {
   return ms % 60_000 === 0 ? `${ms / 60_000} 分钟` : `${Math.round(ms / 1000)} 秒`;
 }
 
+export function handleSelfReloadCall(
+  controller: SelfReloadController | undefined,
+  input: { sessionId: SessionId; build: boolean; cancel?: boolean; status?: boolean },
+): { text: string; data: SelfReloadStatus } {
+  if (!controller) throw new LedgerRequestError("conflict", "守护进程还没启动完，稍后再试");
+  if (input.status) {
+    const current = controller.status();
+    const described = describeSelfReload(current);
+    return { text: described === "" ? "当前没有进行中的热重启任务。" : described, data: current };
+  }
+  const by = `项目经理会话 ${input.sessionId}`;
+  const result = input.cancel ? controller.cancel({ by }) : controller.request({ build: input.build, by });
+  return { text: result.text, data: result.status };
+}
+
 export function describeSelfReload(status: SelfReloadStatus): string {
   if (status.state === "idle") return status.lastFailure === null ? "" : `热重启：上次没成功——${status.lastFailure}`;
   if (status.requestedAt === null || status.deadlineAt === null) return "";

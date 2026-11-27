@@ -40,7 +40,7 @@ import {
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startWorkerRetention } from "./db-retention.ts";
-import { createBusySessions, createSelfReload, createStagedWebBuild, describeSelfReload, type SelfReloadController } from "./self-reload.ts";
+import { createBusySessions, createSelfReload, createStagedWebBuild, handleSelfReloadCall, type SelfReloadController } from "./self-reload.ts";
 import { describeBusySessionsForReload } from "./self-reload-busy.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createDaemonSessionScope } from "./session-tmp.ts";
@@ -454,20 +454,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sandboxGuard,
       ...(options.onSelfReload
         ? {
-            selfReload: ({ sessionId, build, cancel, status }: { sessionId: number; build: boolean; cancel?: boolean; status?: boolean }) => {
-              if (!parts.selfReload) throw new LedgerRequestError("conflict", "守护进程还没启动完，稍后再试");
-              if (status) {
-                const current = parts.selfReload.status();
-                const described = describeSelfReload(current);
-                return { text: described === "" ? "当前没有进行中的热重启任务。" : described, data: current };
-              }
-              if (cancel) {
-                const result = parts.selfReload.cancel({ by: `项目经理会话 ${sessionId}` });
-                return { text: result.text, data: result.status };
-              }
-              const result = parts.selfReload.request({ build, by: `项目经理会话 ${sessionId}` });
-              return { text: result.text, data: result.status };
-            },
+            selfReload: (input: { sessionId: number; build: boolean; cancel?: boolean; status?: boolean }) =>
+              handleSelfReloadCall(parts.selfReload, input),
             selfReloadStatus: () => parts.selfReload?.status(),
           }
         : {}),
