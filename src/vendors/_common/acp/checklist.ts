@@ -4,6 +4,7 @@ import { checklistFromTodoList, isChecklistTool } from "../checklist.ts";
 
 export interface AcpChecklistConfig {
   fromExtension?: (method: string, params: unknown) => ChecklistUpdate | null;
+  fromToolCall?: (name: string, input: unknown) => ChecklistUpdate | null;
 }
 
 export function acpChecklistFromSessionUpdate(vendor: AgentVendor, update: SessionNotification["update"]): ChecklistUpdate | null {
@@ -16,6 +17,7 @@ export function acpChecklistFromToolUpdate(
   name: string,
   toolCall: ToolCall | ToolCallUpdate,
   input: unknown = toolCall.rawInput,
+  fromToolCall?: (name: string, input: unknown) => ChecklistUpdate | null,
 ): ChecklistUpdate | null {
   const spec = vendorSpec(vendor);
   if (!isChecklistTool(spec, name)) return null;
@@ -23,10 +25,12 @@ export function acpChecklistFromToolUpdate(
   if (toolCall.status === "failed" || toolCall.status === "pending") return null;
   const confirmed = toolCall.status === "completed" && rawOutput && typeof rawOutput === "object" && "metadata" in rawOutput
     ? checklistFromTodoList(rawOutput.metadata) : null;
-  const requested = checklistFromTodoList(input);
+  const requested = fromToolCall ? fromToolCall(name, input) : checklistFromTodoList(input);
   if (spec.checklist.sources.includes("plan_update")) {
     // ACP plan omits clears. Ignore nonempty tool lists when plan supplies the same data.
-    return confirmed?.items.length === 0 ? confirmed : requested?.items.length === 0 ? requested : null;
+    const emptyConfirmed = confirmed?.kind === "replace" && confirmed.items.length === 0 ? confirmed : null;
+    const emptyRequested = requested?.kind === "replace" && requested.items.length === 0 ? requested : null;
+    return emptyConfirmed ?? emptyRequested;
   }
   return confirmed ?? requested;
 }

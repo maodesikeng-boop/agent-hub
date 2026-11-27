@@ -28,6 +28,7 @@ import {
   MAX_MESSAGE_BYTES,
   SESSION_STEPS_KEEP,
   handoverMaxSingleMessageBytesOf,
+  prependMissingArgs,
   vendorSpec,
   type AgentSessionRow,
   type ComposerCommand,
@@ -535,7 +536,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     const { input } = await buildAcpReadonlySandboxInput(this.#config.readonlySandbox, launchCtx, files.readonly, files.tmpDir);
     const ownOffArgs = vendorSpec(this.vendor).capabilities.ownSandboxOffArgs ?? [];
     const wrapped = this.#readonlySpawn(
-      { command: exePath, args: [...ownOffArgs, ...rawLaunchArgs] },
+      { command: exePath, args: prependMissingArgs(ownOffArgs, rawLaunchArgs) },
       input,
     );
     if (!wrapped.osSandboxed) {

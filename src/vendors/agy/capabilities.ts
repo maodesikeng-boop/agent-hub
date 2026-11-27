@@ -1,4 +1,4 @@
-// agy 1.5.9 has no per-session MCP switch; deny mcp(<server>/*) in this session's --settings instead.
+// agy has no per-session MCP switch; deny rules feed launch fingerprinting and .agents/hooks.json.
 import type { SessionCapabilities } from "../../shared/pm-capabilities.ts";
 
 function cmpStr(a: string, b: string): number {

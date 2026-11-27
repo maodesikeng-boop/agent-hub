@@ -408,15 +408,21 @@ export async function decideAcpPermission(
     const defaultMcp = extractDefaultMcpTool(context.request);
     const mcp = cfg?.extractMcpTool?.(context.request) ?? defaultMcp;
     if (mcp !== null) {
+      const unresolved =
+        mcp.server.trim() === "" ||
+        mcp.tool.trim() === "" ||
+        mcp.server === "?" ||
+        mcp.tool === "?";
       const defaultBlocksReadonly =
         defaultMcp?.annotations !== null &&
         defaultMcp?.annotations !== undefined &&
         (defaultMcp.annotations.readOnlyHint === false || defaultMcp.annotations.destructiveHint === true);
+      const annotations = defaultBlocksReadonly
+        ? defaultMcp!.annotations
+        : (mcp.annotations ?? defaultMcp?.annotations ?? null);
       allow =
-        !defaultBlocksReadonly &&
-        mcp.annotations?.readOnlyHint === true &&
-        mcp.annotations.destructiveHint !== true &&
-        connectorToolAllowed(context.readonlyPolicy, mcp.server, mcp.tool, mcp.annotations);
+        !unresolved &&
+        connectorToolAllowed(context.readonlyPolicy, mcp.server, mcp.tool, annotations);
     } else if (hasUnresolvedMcpIdentity(context.request)) {
       allow = false;
     } else {

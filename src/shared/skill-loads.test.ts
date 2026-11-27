@@ -66,7 +66,7 @@ const SAMPLES: Record<AgentVendor, { user: string; model: { call: ToolCall; outp
   agy: {
     user: "/poteto-mode",
     model: [
-      { call: { name: "read_file", input: { Path: `${ROOT}/poteto-mode/SKILL.md` } }, output: "14 lines, 310 bytes" },
+      { call: { name: "read_file", input: { Path: `${ROOT}/poteto-mode/SKILL.md` } }, output: "completed" },
       {
         call: { name: "run_command", input: { CommandLine: "cat .agents/skills/poteto-mode/SKILL.md" } },
         output: `Created At: 2026-11-16T15:42:56+08:00\nCompleted At: 2026-11-16T15:42:56+08:00\nCommand exited with code 0.\n\nCommand output:\n${POTETO.replaceAll("\n", "\r\n")}`,
@@ -219,7 +219,7 @@ describe("按返回内容认", () => {
 });
 
 describe("agy 的 read_file：返回里没有正文，按路径参数认", () => {
-  const read = (input: Record<string, unknown>, output = "14 lines, 310 bytes") => names("agy", { name: "read_file", input }, output);
+  const read = (input: Record<string, unknown>, output = "completed") => names("agy", { name: "read_file", input }, output);
 
   it("路径指的是名单里的文件才算；软链 .claude/skills 照常认", () => {
     expect(read({ Path: `${ROOT}/poteto-mode/SKILL.md` })).toEqual(["poteto-mode"]);
@@ -228,7 +228,7 @@ describe("agy 的 read_file：返回里没有正文，按路径参数认", () =>
     expect(read({ Path: "/elsewhere/skills/poteto-mode/SKILL.md" })).toEqual([]);
   });
 
-  it("读失败（返回不是“N lines, B bytes”）不算", () => {
+  it("读失败（返回不是 completed）不算", () => {
     expect(read({ Path: `${ROOT}/poteto-mode/SKILL.md` }, "file does not exist")).toEqual([]);
     expect(read({ Path: `${ROOT}/poteto-mode/SKILL.md` }, "")).toEqual([]);
   });
@@ -242,7 +242,7 @@ describe("agy 的 read_file：返回里没有正文，按路径参数认", () =>
 
   it("参数不是字符串路径：不认，不抛错", () => {
     expect(read({ Path: 42 })).toEqual([]);
-    expect(names("agy", { name: "read_file", input: null }, "1 lines, 1 bytes")).toEqual([]);
+    expect(names("agy", { name: "read_file", input: null }, "completed")).toEqual([]);
   });
 });
 
