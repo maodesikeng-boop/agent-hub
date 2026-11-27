@@ -1,4 +1,4 @@
-// gh 替身（docs/orchestration-eval-design.md 3.3）：放在评测 PATH 的最前面，按场景回放真实的 PR、检查结果、失败日志，
+// Offline gh shim prepended to PATH to replay PR metadata, checks, and failure logs without network access.
 // 每次调用记一行（calls.jsonl），绝不联网。真 gh 那边另有三道挡：GH_CONFIG_DIR 指到空目录、GH_TOKEN 清空、
 // 真模型项目经理的沙箱禁止执行真 gh（isolation.ts）。
 //

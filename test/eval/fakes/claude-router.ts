@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 评测里 claude 的分流脚本（docs/orchestration-eval-design.md 3.3）：守护进程按 AGENT_HUB_CLAUDE 起的就是它。
+// Trial CLI router invoked via AGENT_HUB_CLAUDE to route Workers to replay fakes and PMs to sandboxed or scripted CLIs.
 // - Worker 的会话（环境变量里有 Worker 才设的 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1，src/vendors/claude/settings.ts 的 WORKER_ENV）：
 //   换成假 claude（test/fake-claude/fake-claude.ts），按场景剧本交回真实提交和真实汇报；
 // - 其余（项目经理、厂商探测、写交接的复制）：scripted 模式也给假 claude（剧本项目经理，自测用）；
