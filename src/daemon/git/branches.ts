@@ -98,7 +98,8 @@ type ContentResult = { verdict: ContentVerdict; files: ReadonlySet<string> | nul
 
 type TouchingCommit = { sha: string; sameFiles: boolean };
 
-const TEXT_MERGE_ATTRIBUTE_VALUES = new Set(["unspecified", "set", "text"]);
+// binary and unset (-merge) keep every two-sided change as a conflict, so only union and unknown drivers can hide one.
+const SAFE_MERGE_ATTRIBUTE_VALUES = new Set(["unspecified", "set", "text", "unset", "binary"]);
 
 /** Non-merge commits on target past mergeBase that touch every file the branch changed, newest first; only these can hold the branch's squash. */
 async function commitsTouchingAll(probe: ContentProbe, mergeBase: string, targetCommit: string, files: ReadonlySet<string>): Promise<TouchingCommit[]> {
@@ -155,8 +156,8 @@ async function mergeTreeUsable(probe: ContentProbe): Promise<boolean> {
   return probe.mergeTree === "usable";
 }
 
-/** Only paths that differ between the two sides can reach a content merge; a union, binary or unknown merge attribute on any of them makes the merge result untrustworthy. */
-async function differingPathsUseTextMerge(probe: ContentProbe, onto: string, commit: string): Promise<boolean> {
+/** Only paths that differ between the two sides can reach a content merge; a union or unknown merge attribute on any of them makes the merge result untrustworthy. */
+async function differingPathsMergeSafely(probe: ContentProbe, onto: string, commit: string): Promise<boolean> {
   const diff = await runGit(probe.repoFolder, [...GIT_READONLY_ARGS, "diff-tree", "-r", "-z", "--no-renames", "--name-only", onto, commit], probe.timeoutMs, PROBE_ENV);
   if (diff.code !== 0) throw failedGit("git diff-tree", diff);
   if (diff.stdout.split("\0").every((path) => path === "")) return true;
@@ -164,14 +165,14 @@ async function differingPathsUseTextMerge(probe: ContentProbe, onto: string, com
   if (attrs.code !== 0) throw failedGit("git check-attr", attrs);
   const fields = attrs.stdout.split("\0");
   for (let i = 2; i < fields.length; i += 3) {
-    if (!TEXT_MERGE_ATTRIBUTE_VALUES.has(fields[i] ?? "")) return false;
+    if (!SAFE_MERGE_ATTRIBUTE_VALUES.has(fields[i] ?? "")) return false;
   }
   return true;
 }
 
 /** True when merging commit into onto leaves onto's tree unchanged; merge-tree writes its result objects into a throwaway object directory so the repository stays untouched. */
 async function mergeLeavesTreeUnchanged(probe: ContentProbe, onto: string, commit: string): Promise<boolean | "unusable"> {
-  if (!(await differingPathsUseTextMerge(probe, onto, commit))) return "unusable";
+  if (!(await differingPathsMergeSafely(probe, onto, commit))) return "unusable";
   const scratch = await scratchObjectDir(probe);
   const run = await runGit(
     probe.repoFolder,
@@ -302,7 +303,7 @@ function carriesEveryFile(own: ContentResult, containing: ContentResult): boolea
 
 /**
  * Precondition: repoFolder is a git repository and branch names a local branch under refs/heads/.
- * Postcondition: returns true when the branch's changes since its merge-base with a main/master target ref already sit in that target or in one commit on its history (merging the branch there changes nothing), or when a branch or remote-tracking ref built on the branch along its first-parent line passes the same test while its own net changes still touch every file the branch changed; any conflict, leftover change, or doubt counts as not merged. Uses merge-tree only while git config defines no custom merge driver and every path it could merge has git's text merge attribute, so no configured command ever runs; otherwise, or when git lacks merge-tree --write-tree, falls back to comparing git patch-ids. Never writes an object or ref into the repository.
+ * Postcondition: returns true when the branch's changes since its merge-base with a main/master target ref already sit in that target or in one commit on its history (merging the branch there changes nothing), or when a branch or remote-tracking ref built on the branch along its first-parent line passes the same test while its own net changes still touch every file the branch changed; any conflict, leftover change, or doubt counts as not merged. Uses merge-tree only while git config defines no custom merge driver and every path it could merge uses git's text or binary merge, so no configured command ever runs; otherwise, or when git lacks merge-tree --write-tree, falls back to comparing git patch-ids. Never writes an object or ref into the repository.
  */
 export async function isBranchSquashMergedToMain(
   repoFolder: string,

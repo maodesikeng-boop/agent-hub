@@ -285,6 +285,18 @@ describe("isBranchSquashMergedToMain never runs repository merge drivers", () =>
     expect(existsSync(marker)).toBe(false);
   });
 
+  it("still recognizes a squash merge when binary files differ between the branch and main", async () => {
+    const { repo } = makeRepo();
+    commitFiles(repo, { ".gitattributes": "*.png binary\n" }, "attributes");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-q", "-b", "hub/1-feat");
+    commitFiles(repo, { "README.md": readme({ 5: "feature" }) }, "feat");
+    git(repo, "checkout", "-q", "main");
+    commitFiles(repo, { "README.md": readme({ 3: "other PR" }), "shot.png": "\u0089PNG screenshot\n" }, "other PR with a screenshot");
+    squashInto(repo, "hub/1-feat", "feat (#1)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-feat", base)).toBe(true);
+  });
+
   it("does not let the built-in union driver drop a line the branch deleted", async () => {
     const { repo } = makeRepo();
     commitFiles(repo, { ".gitattributes": "README.md merge=union\n" }, "attributes");
