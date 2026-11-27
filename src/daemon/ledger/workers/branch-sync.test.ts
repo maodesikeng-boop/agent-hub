@@ -129,6 +129,27 @@ describe("linked worktree branch reconciliation", () => {
     expect(f.ledger.listWorktreeBranchTargets?.({ workerId: main.id })).toEqual([]);
   });
 
+  it("keeps the graph's ready time when a branch rename refreshes a finished step", async () => {
+    prepareRepo();
+    const { id: graphId } = f.hub("graph.create", { specJson: '{"title":"Ready time","nodes":[{"key":"impl","title":"Implement"}]}' }).data.graph;
+    const impl = start("Implementation", graphId, "impl");
+    await checkout(impl.id);
+    f.advance(60_000);
+    await complete(impl);
+    const readyAt = f.now();
+    expect(f.hub("graph.show", { graphId }).data.graph.readySince).toBe(readyAt);
+
+    f.advance(7 * 60_000);
+    const onChange = vi.fn();
+    f.ledger.onChange(onChange);
+    git(impl.worktreePath!, "branch", "-m", "feature/after-ready");
+    await f.ledger.reconcileHubBranches?.(f.pm.sessionId, "graph.list", {}, new AbortController().signal);
+    const pushed = onChange.mock.calls.map(([change]) => change).find((change) => change.type === "task_graph.updated")?.data.graph as TaskGraph;
+    expect(pushed.nodes[0]).toMatchObject({ status: "done", updatedAt: f.now(), artifact: expect.objectContaining({ branch: "feature/after-ready" }) });
+    expect(pushed.readySince).toBe(readyAt);
+    expect(f.ledger.snapshot().activeTaskGraphs.find((graph) => graph.id === graphId)?.readySince).toBe(readyAt);
+  });
+
   it.each(["manual start", "takeover", "user decision", "user skip", "background exit"])(
     "checks out the renamed upstream branch after %s",
     async (trigger) => {

@@ -608,6 +608,7 @@ export class FakeLedger {
       createdAt: 1,
       updatedAt: 2,
       completedAt: status === "active" ? null : 2,
+      readySince: null,
     };
   }
 

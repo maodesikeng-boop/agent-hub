@@ -63,7 +63,7 @@ export interface GraphDelivery {
   row: { wait: GraphDeliveryWait; since: number } | null;
 }
 
-type DeliveryGraph = Pick<TaskGraph, "status" | "nodes">;
+type DeliveryGraph = Pick<TaskGraph, "status" | "nodes" | "readySince">;
 type DeliveryWatch = { watchId: number; body: string };
 const deliveryByGraph = new WeakMap<DeliveryGraph, { watch: DeliveryWatch | null; delivery: GraphDelivery }>();
 
@@ -75,9 +75,9 @@ export function graphDeliveryOf(graph: DeliveryGraph, watch: DeliveryWatch | nul
   const header = `${done}/${total} steps${ready ? " · awaiting delivery" : ""}`;
   const delivery: GraphDelivery = {
     header,
-    row: ready ? {
+    row: ready && graph.readySince !== null ? {
       wait: watch === null ? { kind: "pm" } : { kind: "watch", watchId: watch.watchId, body: watch.body },
-      since: graph.nodes.reduce((latest, node) => Math.max(latest, node.updatedAt), 0),
+      since: graph.readySince,
     } : null,
   };
   deliveryByGraph.set(graph, { watch, delivery });
