@@ -59,6 +59,7 @@ export interface TurnReservedParts {
   readonly prefixes?: readonly string[];
   readonly systemPrompt?: string | null;
   readonly deliverySuffix?: string | null;
+  readonly extraReserveBytes?: number;
 }
 
 /**

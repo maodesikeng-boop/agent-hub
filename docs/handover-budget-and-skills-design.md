@@ -73,6 +73,63 @@ Intended outcome: Stop handover and vendor-switch preambles from stuffing full h
 
 ## 2. Current state and history
 
+### Subsystem architecture (`/how` synthesis)
+
+#### Overview
+
+Bellwood renews long-running Project Manager (`role = 'pm'`) sessions in two ways: background handover (when `usage.context >= handoverTokenThresholdOf(vendor)` or the user clicks "New session") and instant vendor switch (when the user changes the PM's vendor in Profile). Both paths end the old `agent_sessions` row, insert a `generation + 1` row, prespawn the new CLI process, and inject an opening brief (`sessionPreamble`) ahead of the very first message delivered to the new session. Once the driver reports `message.processing { preamble: true }`, the ledger marks `session_preamble_seen` and never injects the preamble again.
+
+#### Key concepts
+
+- **`loaded_skills` and `createLedgerLoadedSkills` (`src/daemon/ledger/loaded-skills.ts`):** Records every skill loaded by a PM session via user slash command (`message.processing`), native `Skill` tool (`agent.tool`), or `Read`/`Bash` output matching (`agent.tool_result` via `src/shared/skill-loads.ts` and `src/daemon/skill-files.ts`). On handover, `carryIn` resolves recorded rows against disk and renders `handovers.skills_section`.
+- **Handover state machine (`src/daemon/ledger/handover.ts`) and background runner (`src/daemon/handover/runner.ts`):** Drives `queued -> forking -> writing -> ready -> switched` for normal handovers (falling back to `in_session` writing when a vendor has no forker), and writes `method = 'vendor_switch', status = 'ready'` for instant vendor switches. Both converge in `switchIn`.
+- **Turn 1 batch assembly (`src/daemon/driver/base-driver.ts`, `src/daemon/driver/driver-helpers.ts`, `src/daemon/driver/session-preamble.ts`):** `ActionExecutor` (`src/daemon/actions/executor.ts:28-36`) prioritizes `session.start` (`0`) ahead of `session.send` (`1..3`) on the same session lane. When a message arrives, `takePendingBatch` coalesces consecutive queued user messages (`mergeUserTexts`) and riders, `takeNotesPrefixes` fetches `sessionPreamble(sessionId)` plus recovery/persona notes, and each vendor driver serializes `[...prefixes, body.text]` with `deliverySuffix` appended at write time.
+- **Live ledger suffixes (`src/daemon/ledger/pm-agenda.ts`, `src/daemon/ledger/pm-delivery.ts`):** `sessionPreamble` appends live `pendingAsksSection` and `preambleAgendaSection`. Later, `withDeliverySuffix` calls `pmAgendaFooterFor(db, sessionId, now, preamble)`, suppressing the agenda footer only when `preamble.includes(preambleAgendaSection(agenda, now))` matches verbatim (`pm-agenda.ts:216`).
+
+#### How it works
+
+```mermaid
+flowchart TD
+    A["Trigger: autoRenew / renewSession / switchVendorIn"] --> B["handover.ts: switchIn (sync tx)"]
+    B --> C["loadedSkills.carryIn -> handovers.skills_section"]
+    B --> D["Enqueue session.start (priority 0) & held session.send"]
+    D --> E["ActionExecutor runs session.start -> prepareLaunch -> prespawn CLI"]
+    E --> F["session.send -> BaseDriver.takeBatch -> takePendingBatch"]
+    F --> G["BaseDriver.takeNotesPrefixes -> sessionPreamble(sessionId)"]
+    G --> H{"Vendor wire format"}
+    H -->|Claude / Agy| I["NDJSON content array: preamble block ... latest user block"]
+    H -->|Codex / Pi| J["Single joined string: preamble + '\\n\\n' + latest user text"]
+    H -->|ACP: DeepSeek / Cursor / OpenCode / Kimi| K["ContentBlock[]: systemPrompt? + preamble + latest user + suffix"]
+    K --> L["checkAcpUserBlocks(userBlocks) -> rejects if > 100 KiB"]
+    I --> M["Agy truncates tail past ~145-150 KiB -> drops latest user message"]
+```
+
+1. **Skill tracking during a session:** `ledger.ts:411` feeds every scoped driver event to `loadedSkills.afterDriverEvent`. `SkillFiles` (`src/daemon/skill-files.ts`) discovers skills under `<launchDir>/<sessionId>/skills`, project `.agents/skills`, vendor sync targets, and user-home directories, verifying `realpathSync` inside trusted roots.
+2. **Switch transaction (`switchIn`, `handover.ts:414-500`):** Inserts `next` (`generation + 1`), runs `loadedSkills.carryIn(conversationId, old.generation, next)`, ends `old`, moves queued messages to `next`, and enqueues `session.start`. For normal handovers, `switchIn` pre-bakes `handovers.preamble` right here before Turn 1's triggering message exists; for `vendor_switch`, it leaves `preamble = NULL`.
+3. **Turn 1 delivery (`BaseDriver` and vendor drivers):** `takeBatch` coalesces pending user entries via `takePendingBatch`, calls `takeNotesPrefixes` (placing `preamble` at index 0 and the latest user message at the tail), and hands the batch to `writeBatch` or `startup`. `withDeliverySuffix` appends live agenda/busy lines at write time. For `first_message` ACP vendors (`cursor`, `opencode`, `kimi`), `runAcpHandshake` (`src/vendors/_common/acp/handshake.ts:58-68`) reads `files.promptFile` into `proc.pendingSystemPromptBlock`, and `writeBatch` prepends it via `buildAcpPromptBlocks`.
+4. **Compaction (`context.compacted`):** Compaction lowers `usage.context`, flags `reinjectPending` on `first_message` ACP vendors (`src/vendors/_common/acp/driver.ts:119-133`), and resets `pmAgendaFooterFor` (`pm-agenda.ts:214`). It does not create a handover row, and `vendor-switch-context.ts:75` skips `context.compacted` rows, so a post-compaction vendor switch still replays the full generation.
+5. **Consumption and cleanup:** On `message.processing { preamble: true }`, `handover.ts:860-865` inserts `session_preamble_seen` and calls `clearConsumedHandoverBlobsIn` to null `handovers.preamble` and `handovers.skills_section`. On startup crash or untaken release, `batch.notes.preamble.restore()` resets `preambleTaken = false` so the retry re-fetches `sessionPreamble`.
+
+#### Where things live
+
+- `src/daemon/ledger/handover.ts`: Handover state machine, `switchIn`, and `sessionPreamble`.
+- `src/daemon/ledger/handover-text.ts` and `src/daemon/ledger/handover-recent.ts`: Normal handover prompt templates and recent-message selection.
+- `src/daemon/ledger/vendor-switch-context.ts`: Generation message filtering, transcript path listing, and vendor-switch preamble builder.
+- `src/daemon/ledger/loaded-skills.ts`, `src/daemon/skill-files.ts`, and `src/shared/skill-loads.ts`: Skill detection, trusted-root catalog, and carryover persistence.
+- `src/daemon/handover/runner.ts`: Background fork-and-write scheduler.
+- `src/daemon/driver/base-driver.ts`, `src/daemon/driver/driver-helpers.ts`, `src/daemon/driver/session-preamble.ts`, and `src/daemon/ledger/pm-delivery.ts`: Batch coalescing, preamble/persona prefixing, and delivery suffix attachment.
+- `src/vendors/agy/driver.ts`, `src/vendors/claude/driver.ts`, `src/vendors/codex/driver.ts`, `src/vendors/pi/driver.ts`, and `src/vendors/_common/acp/{driver,handshake,protocol}.ts`: Vendor wire serialization and input checks.
+- `src/shared/limits.ts`, `src/shared/vendors.ts`, and `src/vendors/types.ts`: Shared numeric limits and per-vendor specifications.
+
+#### Gotchas
+
+- **ACP `writeBatch` 100 KiB hard rejection (`src/vendors/_common/acp/driver.ts:396`, `protocol.ts:133-145`):** `checkAcpUserBlocks` checks combined `userBlocks` (which already includes `preamble` and `deliverySuffix`) against `MAX_MESSAGE_BYTES` (102,400 bytes). Any handover or vendor-switch Turn 1 exceeding 100 KiB on `deepseek`, `cursor`, `opencode`, or `kimi` fails with `invalid_input`.
+- **Cold-start ACP `pendingSystemPromptBlock` timing (`src/vendors/_common/acp/driver.ts:312-335`, `handshake.ts:58-68`):** When `st.proc` is prespawned by `session.start`, `proc.pendingSystemPromptBlock` is already in memory when `takeBatch` runs. On a cold start (for example after a daemon restart before Turn 1), `st.proc` is `null` during `takeBatch`, so `systemPromptBlock` is not read until `#spawn` runs. Drivers must reserve `ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES` when `proc === null` and use exact `Buffer.byteLength(proc.pendingSystemPromptBlock)` when `proc !== null`.
+- **Built-in `fusa-task-graph` skill timing trap (`src/daemon/launch.ts:259`, `src/daemon/skill-files.ts:108`, `src/daemon/ledger/handover.ts:441`):** `writeProductSkills` writes `<launchDir>/<next.id>/skills/fusa-task-graph/SKILL.md` inside `prepareLaunch(next)` after `session.start` runs, whereas `switchIn` calls `loadedSkills.carryIn` synchronously before `session.start`. Looking up `fusa-task-graph` in `next`'s launch directory at `switchIn` time therefore misses and falsely reports it as missing, even though `prompt.ts` already points to `next`'s exact `taskGraphSkillFile` path.
+- **`deliverySuffix` agenda fallback (`src/daemon/ledger/pm-agenda.ts:216`):** If `preamble` trims or omits `preambleAgendaSection`, `pmAgendaFooterFor` will not match and will append the agenda snapshot (~1 to 3 KiB) to the tail of the user message. Reserving `HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES` and keeping live agenda in Priority 1 prevents late overflow.
+- **`AgyDriver.startup()` skips `checkAgyUserLine` (`src/vendors/agy/driver.ts:295-296`):** Only `writeBatch` validates the serialized NDJSON line; `startup` writes directly to stdin, so enforcing the byte budget before serialization is the only guard on cold-start Turn 1.
+- **Unbounded coalesced user batches (`src/daemon/driver/driver-helpers.ts:124-162`):** `takePendingBatch` merges every queued user message into one batch (`mergeUserTexts`), so the triggering Turn 1 payload can exceed `MAX_MESSAGE_BYTES` if multiple messages queued during handover. Computing `reservedBytes` from the coalesced `body` protects all queued user text from being pushed over the vendor limit.
+
 ### Design history
 
 Inspecting the current code and three retired design documents from git commit `3437df1f~1` (`docs/background-handover-design.md`, `docs/vendor-switch-context-design.md`, and `docs/skill-carryover-design.md`) shows a stack of four independent features added without a shared byte budget:
@@ -86,12 +143,11 @@ The original premise that Turn 1 preambles stay small (~35 KB) no longer holds. 
 
 ### Core concepts
 
-- **Loaded skill records (`loaded_skills` table):** Written by `createLedgerLoadedSkills` (`src/daemon/ledger/loaded-skills.ts:78-99`) on `agent.tool`, `agent.tool_result`, and `message.processing` for `role = 'pm'`. Read and updated on handover by `carryIn` (`loaded-skills.ts:146-188`).
-- **Handover rows (`handovers` table):** Written by `createLedgerHandover` (`src/daemon/ledger/handover.ts`). Stores `text` (summary), `cut_message_id`, `preamble` (pre-baked for normal handover, `NULL` for `vendor_switch`), and `skills_section` (full skill XML section).
-- **Turn 1 delivery (`BaseDriver` and vendor drivers):** `takeNotesPrefixes` (`src/daemon/driver/base-driver.ts:456-486`) calls `sessionPreamble(sessionId)` and places the preamble first in `prefixes`, followed by recovery/persona notes, message prefixes, the latest user message at the tail, and `deliverySuffix`. For `first_message` ACP vendors (`cursor`, `opencode`, `kimi`), `buildAcpPromptBlocks` (`src/vendors/_common/acp/protocol.ts:147-159`) also prepends `<system_instructions>` before `userBlocks`.
-- **Compaction path (`context.compacted`):** Compaction does not create a handover row directly. It lowers `usage.context`, triggers `<system_instructions>` re-injection on `first_message` ACP vendors (`src/vendors/_common/acp/driver.ts:119-133`), and resets `pmAgendaFooterFor` (`src/daemon/ledger/pm-agenda.ts:214`). A subsequent manual handover or vendor switch after compaction still scans the full generation (`vendor-switch-context.ts:75` ignores `context.compacted`) and hits the same unbounded concatenation bug.
-- **Facts stored in more than one place:** For normal handovers, `skills_section` is stored both inside `handovers.skills_section` and duplicated inside the pre-baked `handovers.preamble` blob (`handover.ts:470-495`).
-- **Missing concept:** A single-owner, priority-tiered Turn 1 UTF-8 byte budgeter parameterized by the target vendor's single-message byte ceiling and the exact UTF-8 bytes reserved by the triggering turn payload.
+- **Write authority and duplicate storage:**
+  - `loaded_skills` is written only by `createLedgerLoadedSkills` and deleted on PM purge (`src/daemon/ledger/persona.ts:755`).
+  - `handovers` is written only by `createLedgerHandover` and cleaned by `src/daemon/ledger/db-table-retention.ts`.
+  - Duplicate storage: for normal handovers, `skills_section` is stored both in `handovers.skills_section` and embedded inside `handovers.preamble` (`handover.ts:470-495`).
+- **Missing concept:** A single-owner, priority-tiered Turn 1 UTF-8 byte budgeter parameterized by the target vendor's single-message byte ceiling and the exact UTF-8 bytes reserved by the triggering turn payload (coalesced user messages, riders, recovery/persona notes, ACP `first_message` system prompt, and delivery suffix reserve).
 
 ### Verified evidence
 
@@ -99,8 +155,9 @@ The original premise that Turn 1 preambles stay small (~35 KB) no longer holds. 
 - `[Measured]` `src/daemon/ledger/loaded-skills.ts:178-185` updates `generation = next.generation` for every carried skill regardless of `source` (`user` or `model`), causing skills loaded many generations earlier to carry forward indefinitely (inspected directly).
 - `[Measured]` Real session transcript `transcript_full.jsonl` inspected on 2026-11-26 17:35 (recorded in `/tmp/handover-skill-bloat/context.md`): a vendor-switch opening message to `agy` exceeded 220 KB, and `agy` silently truncated the trailing 75,262 bytes (~145 to 150 KB retained), dropping the user's latest message at the end. Local CLI version confirmed via `agy --version` (`1.5.18`).
 - `[Measured]` `src/vendors/_common/acp/protocol.ts:133-145` and `src/vendors/_common/acp/driver.ts:392-402` validate combined `userBlocks` (including `preamble` and `deliverySuffix`) against `MAX_MESSAGE_BYTES` (102,400 bytes) in `writeBatch` (inspected directly). Any handover or vendor-switch Turn 1 payload over 100 KiB to `deepseek`, `cursor`, `opencode`, or `kimi` is rejected with `invalid_input` ("message exceeds 102400 bytes").
-- `[Measured]` `src/daemon/driver/base-driver.ts:456-486` and `src/daemon/driver/protocol.ts:17-21` place `preamble` at index 0 of `prefixes` and the triggering user message at the very end of the content array (inspected directly).
+- `[Measured]` `src/daemon/driver/base-driver.ts:456-486`, `src/daemon/driver/driver-helpers.ts:124-162`, and `src/daemon/driver/protocol.ts:17-21` coalesce queued user messages, place `preamble` at index 0 of `prefixes`, and put the triggering user message at the tail (inspected directly).
 - `[Measured]` `src/daemon/ledger/handover.ts:470-495,922-980` pre-bakes `handovers.preamble` at `switchIn` time for normal handovers without knowing the triggering Turn 1 message size, while `vendor_switch` builds dynamically in `sessionPreamble` without any byte budget (inspected directly).
+- `[Measured]` `src/daemon/launch.ts:259` and `src/daemon/skill-files.ts:108` write per-session `fusa-task-graph/SKILL.md` only when `prepareLaunch` runs on `session.start`, after `switchIn` has already called `loadedSkills.carryIn` (inspected directly).
 - `[Measured]` `src/daemon/prompt.ts` (searched with `git grep`) does not reference carried skill bodies; system prompts across all 8 vendors do not need edits.
 
 ## 3. Reference designs and approach comparison
@@ -162,6 +219,8 @@ New `src/shared/limits.ts` constants:
 | `DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES` | `160 * 1024` (163,840 B) | Leaves >= 60 KiB for preamble even with a `MAX_MESSAGE_BYTES` (100 KiB) user message; fits ~54K CJK chars while staying well below provider and ACP frame caps (`800 KiB`). |
 | `AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES` | `120 * 1024` (122,880 B) | Leaves ~20 to 25 KiB safety margin below `agy`'s measured ~145 to 150 KiB silent tail-truncation limit (including JSON escaping), while leaving 20 KiB above `MAX_MESSAGE_BYTES`. |
 | `HANDOVER_MIN_PREAMBLE_BYTES` | `512` | Minimum bytes needed for a meaningful handover header; below this, preamble returns `null` rather than pushing the triggering message past the vendor ceiling. |
+| `HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES` | `2 * 1024` (2,048 B) | Headroom reserved for late-attached `deliverySuffix` (`PM_AGENDA_BUSY_LINE` or agenda snapshot fallback when agenda was omitted). |
+| `ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES` | `24 * 1024` (24,576 B) | Conservative reserve for `first_message` ACP vendors (`cursor`, `opencode`, `kimi`) on cold-start Turn 1 when `proc.pendingSystemPromptBlock` is not yet loaded; prespawned turns measure the exact block bytes. |
 | `HANDOVER_SUMMARY_MAX_BYTES` | `24 * 1024` (24,576 B) | Caps summary or generation anchor (~8,000 CJK chars) so a long summary cannot crowd out live asks, live agenda, or recent turns. |
 | `HANDOVER_LIVE_STATE_MAX_BYTES` | `12 * 1024` (12,288 B) | Bounds live pending asks plus PM agenda (up to 20 active graphs and 30 pending decisions) without starving Turn 1 on extreme backlog. |
 | `HANDOVER_REPORTS_MAX_BYTES` | `8 * 1024` (8,192 B) | Fits ~80 one-line post-cut Worker report pointers while capping bursty 300-Worker histories. |
@@ -176,8 +235,9 @@ New `src/shared/limits.ts` constants:
 - **Cross-vendor:** One shared field `VendorSpec.handover.maxSingleMessageBytes` (`src/vendors/types.ts`) and one shared lookup `handoverMaxSingleMessageBytesOf(vendor)` (`src/shared/vendors.ts`) cover all eight registered vendors in `src/vendors/registry.ts` (`claude`, `agy`, `codex`, `pi`, `deepseek`, `cursor`, `opencode`, `kimi`).
   - `agy` declares `handover.maxSingleMessageBytes: AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES` in `src/vendors/agy/spec.ts`.
   - The other seven vendors inherit `DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES` automatically.
-  - `BaseDriver.takeNotesPrefixes` (`src/daemon/driver/base-driver.ts`) computes `reservedBytes` via `measureTurnReservedBytes` once for all drivers (`ClaudeDriver`, `AgyDriver`, `CodexDriver`, `PiDriver`, and `AcpSessionDriver`).
-  - `AcpSessionDriver` (`src/vendors/_common/acp/driver.ts`) adds `systemPromptBlock` bytes for `capabilities.systemPrompt === "first_message"` vendors (`cursor`, `opencode`, `kimi`) into `reservedBytes`, and passes `handoverMaxSingleMessageBytesOf(this.vendor)` to `checkAcpUserBlocks` in `writeBatch` while keeping `MAX_MESSAGE_BYTES` in `send()`.
+  - `BaseDriver.takeNotesPrefixes` (`src/daemon/driver/base-driver.ts`) computes `reservedBytes` via `measureTurnReservedBytes` once for all drivers (`ClaudeDriver`, `AgyDriver`, `CodexDriver`, `PiDriver`, and `AcpSessionDriver`), including `HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES` for late-attached delivery suffixes and all coalesced user messages from `takePendingBatch`.
+  - `AcpSessionDriver` (`src/vendors/_common/acp/driver.ts`) adds exact `Buffer.byteLength(proc.pendingSystemPromptBlock)` (when prespawned) or `ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES` (on cold start with `proc === null`) for `capabilities.systemPrompt === "first_message"` vendors (`cursor`, `opencode`, `kimi`) into `reservedBytes`, and passes `handoverMaxSingleMessageBytesOf(this.vendor)` to `checkAcpUserBlocks` in `writeBatch` while keeping `MAX_MESSAGE_BYTES` in `send()`.
+  - Built-in product skill `fusa-task-graph` (written asynchronously on `session.start` by `prepareLaunch`) is excluded from `loaded_skills` missing-file false alarms during `switchIn` because `prompt.ts` already carries `next`'s exact `taskGraphSkillFile` path.
   - **Single file for a future vendor:** A future vendor only declares `handover.maxSingleMessageBytes` (if stricter than the default) in its own `src/vendors/<vendor>/spec.ts`.
 - **Cross-platform (`macOS`, `Windows`, `Linux`):**
   - Byte budgets use `Buffer.byteLength(text, "utf8")`, independent of OS locale or path separator.

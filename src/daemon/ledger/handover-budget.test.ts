@@ -5,14 +5,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import {
+  ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES,
   AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES,
   DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES,
+  HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
   HANDOVER_MIN_PREAMBLE_BYTES,
   MAX_MESSAGE_BYTES,
   SKILL_CARRYOVER_DESCRIPTION_MAX_CHARS,
   SKILL_CARRYOVER_INDEX_MAX_BYTES,
   SKILL_CARRYOVER_LIST_MAX,
 } from "../../shared/limits.ts";
+import { TASK_GRAPH_SKILL_NAME } from "../../shared/task-graph-skill.ts";
 import { AGENT_VENDORS, handoverMaxSingleMessageBytesOf } from "../../shared/vendors.ts";
 import { checkAcpUserBlocks } from "../../vendors/_common/acp/protocol.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -109,8 +112,14 @@ describe("handover-budget unit contracts (new behavior — expected to fail befo
       prefixes: ["【系统提示】"],
       systemPrompt: "<system_instructions>rules</system_instructions>",
       deliverySuffix: "[任务图状态]",
+      extraReserveBytes: HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
     });
-    expect(reserved).toBeGreaterThanOrEqual(utf8Bytes("最".repeat(10_000)));
+    expect(reserved).toBeGreaterThanOrEqual(utf8Bytes("最".repeat(10_000)) + HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES);
+    const coldAcpReserved = measureTurnReservedBytes({
+      text: "继续",
+      extraReserveBytes: ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES + HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
+    });
+    expect(coldAcpReserved).toBeGreaterThanOrEqual(ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES + HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES);
     expect(computePreambleByteBudget("agy", reserved)).toBe(AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES - reserved);
     expect(computePreambleByteBudget("agy", -100)).toBe(AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES);
     expect(computePreambleByteBudget("agy", Number.NaN)).toBe(AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES);
@@ -274,6 +283,19 @@ describe("end-to-end ledger handover & skill carryover acceptance scenarios", ()
       const preambleG3 = ledger.sessionPreamble(g3)!;
       expect(preambleG3).toContain("poteto-mode");
       expect(preambleG3).not.toContain("hist-0");
+    });
+
+    it("S1: built-in fusa-task-graph skill is not falsely marked missing when switchIn runs before next prepareLaunch", () => {
+      const oldSkillDir = join(root, "launch", String(firstSession), "skills", TASK_GRAPH_SKILL_NAME);
+      mkdirSync(oldSkillDir, { recursive: true });
+      const oldSkillPath = join(oldSkillDir, "SKILL.md");
+      writeFileSync(oldSkillPath, `---\nname: ${TASK_GRAPH_SKILL_NAME}\ndescription: Task graph manual\n---\n\nTASK_GRAPH_MANUAL_BODY\n`);
+      modelReadSkill(firstSession, oldSkillPath);
+
+      const g2 = manualRenew();
+      const preamble = ledger.sessionPreamble(g2)!;
+      expect(preamble).not.toContain("TASK_GRAPH_MANUAL_BODY");
+      expect(preamble).not.toContain("读不到了");
     });
 
     it("S2 & S5: switching to agy with >200 KiB history and a 50 KiB latest user message bounds preamble strictly under AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES", () => {
