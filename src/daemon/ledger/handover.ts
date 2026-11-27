@@ -16,7 +16,7 @@ import {
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
-import { handoverTokenThresholdOf, vendorLabel, vendorSpec, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
+import { handoverTokenThresholdOf, isAgentVendor, vendorLabel, vendorSpec, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
 import { commandNameOf } from "../../vendors/types.ts";
 import { deletePendingSessionSend, hasRunningSessionAction } from "../actions/index.ts";
 import { getAgentSession } from "../store/index.ts";
@@ -713,7 +713,7 @@ export function createLedgerHandover(
       ...messageIds,
       session.id,
     );
-    const prefix = vendorSpec(session.vendor).composer.commandPrefix;
+    const prefix = isAgentVendor(session.vendor) ? vendorSpec(session.vendor).composer.commandPrefix : "/";
     return rows.some((r) => r.sender !== "user" || commandNameOf(r.text, prefix) === null);
   };
 
