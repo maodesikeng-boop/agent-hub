@@ -151,6 +151,24 @@ export const CardBody = memo(function CardBody({
 
 const NOTE_MAX_HEIGHT_PX = 144;
 
+export interface CardNoteFormProps {
+  disabled: boolean;
+  pending: boolean;
+  value?: string;
+  onChange?: (value: string) => void;
+  onFocus?: () => void;
+  onSubmitNote: (rawNote: string) => void;
+  className?: string;
+  inputClassName?: string;
+  buttonSize?: "sm";
+  /** `row` is the last row of a decision card or reply popover: full-bleed with concentric bottom corners. */
+  variant?: "row";
+  label?: string;
+  placeholder?: string;
+  /** Why the note cannot be sent as typed; blocks sending and marks the field invalid. */
+  invalid?: string;
+}
+
 export function CardNoteForm({
   disabled,
   pending,
@@ -161,27 +179,11 @@ export function CardNoteForm({
   className,
   inputClassName,
   buttonSize,
-  variant = "field",
+  variant = "row",
   label = "Your reply",
   placeholder = "Reply or add a note…",
   invalid,
-}: {
-  disabled: boolean;
-  pending: boolean;
-  value?: string;
-  onChange?: (value: string) => void;
-  onFocus?: () => void;
-  onSubmitNote: (rawNote: string) => void;
-  className?: string;
-  inputClassName?: string;
-  buttonSize?: "sm";
-  /** `row` is the last row of a decision card's option list: no frame of its own, a pencil in the letter column. */
-  variant?: "field" | "row";
-  label?: string;
-  placeholder?: string;
-  /** Why the note cannot be sent as typed; blocks sending and marks the field invalid. */
-  invalid?: string;
-}) {
+}: CardNoteFormProps) {
   const id = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [localNote, setLocalNote] = useState("");
@@ -207,26 +209,19 @@ export function CardNoteForm({
 
   const canSend = !disabled && invalid === undefined && note.trim() !== "";
   const small = buttonSize === "sm";
-  const row = variant === "row";
   return (
     <div
       data-card-reply={variant}
+      data-invalid={invalid === undefined ? undefined : "true"}
       className={cn(
-        row
-          ? cn(
-              "-mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4 transition-shadow",
-              invalid === undefined ? "focus-within:shadow-[inset_0_0_0_1px_var(--border-focus)]" : "shadow-[inset_0_0_0_1px_var(--danger)]",
-            )
-          : "mt-3 flex items-end gap-1.5 rounded-sm border border-border-strong bg-background py-1 pr-1 pl-3 shadow-[var(--shadow-tile)] transition-[border-color,box-shadow] focus-within:field-focus",
+        "card-reply-row -mx-4 -mb-4 flex items-end gap-3 border-t border-border py-1.5 pr-1.5 pl-4",
         disabled && "opacity-60",
         className,
       )}
     >
-      {row && (
-        <span aria-hidden="true" className={cn("mt-1 flex w-4 shrink-0 items-center self-start text-muted-foreground", small ? "h-5" : "h-6")}>
-          <PencilLine className="size-pixel-sm" />
-        </span>
-      )}
+      <span aria-hidden="true" className={cn("mt-1 flex w-4 shrink-0 items-center self-start text-muted-foreground", small ? "h-5" : "h-6")}>
+        <PencilLine className="size-pixel-sm" />
+      </span>
       <label htmlFor={id} className="sr-only">
         {label}
       </label>
