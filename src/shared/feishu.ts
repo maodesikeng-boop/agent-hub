@@ -63,6 +63,37 @@ export type FeishuTriggerMode = (typeof FEISHU_TRIGGER_MODES)[number];
 export const FEISHU_GUEST_TIERS = ["chat_only", "collaborator", "observer"] as const;
 export type FeishuGuestTier = (typeof FEISHU_GUEST_TIERS)[number];
 
+export interface FeishuGuestTierPolicy {
+  tier: FeishuGuestTier;
+  label: string;
+  description: string;
+  wakesUnsandboxedPm: boolean;
+  hostPrivilegeWarning: string | null;
+}
+
+/**
+ * Precondition: raw is any persisted, wire, or runtime guest tier value.
+ * Postcondition: returns raw when it is a valid FeishuGuestTier, or "observer" when missing or unrecognized.
+ */
+export function resolveFeishuGuestTier(_raw: unknown): FeishuGuestTier {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Postcondition: returns all FeishuGuestTier values ordered from least privileged ("observer") to most privileged ("collaborator").
+ */
+export function feishuGuestTierOrder(): readonly FeishuGuestTier[] {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: tier is a valid FeishuGuestTier.
+ * Postcondition: returns the canonical label, description, PM wakeup flag, and a non-null host-privilege warning whenever wakesUnsandboxedPm is true.
+ */
+export function feishuGuestTierPolicy(_tier: FeishuGuestTier): FeishuGuestTierPolicy {
+  throw new Error("Not implemented");
+}
+
 export type FeishuGuestAction = "talk" | "answer_card" | "stop" | "send_files";
 
 const GUEST_ACTIONS: Readonly<Record<FeishuGuestTier, readonly FeishuGuestAction[]>> = {
