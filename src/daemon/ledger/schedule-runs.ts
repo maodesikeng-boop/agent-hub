@@ -1,5 +1,5 @@
 import type { ConversationId, MessageId, PmId } from "../../shared/domain.ts";
-import type { HubArgs, HubResult } from "../../shared/hub.ts";
+import { HUB_HELP_ONLY_COMMANDS, type HubArgs, type HubResult } from "../../shared/hub.ts";
 import { SCHEDULE_RUN_REPLY_PREVIEW_CHARS, SCHEDULE_SHOW_RUNS_MAX } from "../../shared/limits.ts";
 import { scheduleLabel, scheduledTimeText, type ScheduleId, type ScheduleRecord, type ScheduleRunState, type ScheduleRunSummary } from "../../shared/schedule.ts";
 import type { Db } from "../store/index.ts";
@@ -114,6 +114,8 @@ export function scheduleShowIn(
     "",
     "最近运行：",
     ...(runs.length === 0 ? ["没有运行记录。"] : runs.map((run) => scheduleRunText(run, now))),
+    "",
+    HUB_HELP_ONLY_COMMANDS["schedule.edit"],
   ].join("\n");
   return { text, data: { schedule, runs } };
 }

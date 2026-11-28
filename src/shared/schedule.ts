@@ -1,4 +1,6 @@
+import { normalizeName } from "./domain.ts";
 import { WORKER_MAX_TIME_ERRORS } from "./errors.ts";
+import { checkHubLimit, formatHubLimitViolations, HUB_LIMITS } from "./hub-limits.ts";
 import { MAX_SCHEDULE_EVERY_MINUTES, MAX_WORKER_MAX_TIME_MS, MIN_SCHEDULE_EVERY_MINUTES, MIN_WORKER_MAX_TIME_MS } from "./limits.ts";
 
 export type ScheduleId = number;
@@ -56,6 +58,43 @@ export interface ScheduleEditPlan {
   nextRunAt: number;
 }
 
+export type ScheduleFrequency = Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">;
+
+export function validateScheduleName(raw: unknown): { ok: true; name: string } | { ok: false; error: string } {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  const limit = checkHubLimit("schedule.name", trimmed);
+  if (limit !== null) return { ok: false, error: formatHubLimitViolations([limit]) };
+  const name = normalizeName(trimmed, HUB_LIMITS["schedule.name"].max);
+  if (name === null) return { ok: false, error: "定时任务的名字不能是空的，也不能带换行等控制字符" };
+  if (name.includes("【") || name.includes("】")) return { ok: false, error: "定时任务的名字里不能有“【”“】”" };
+  return { ok: true, name };
+}
+
+export function validateSchedulePrompt(raw: unknown): { ok: true; prompt: string } | { ok: false; error: string } {
+  if (typeof raw !== "string" || raw.trim() === "") return { ok: false, error: "任务说明不能是空的" };
+  const limit = checkHubLimit("schedule.prompt", raw);
+  if (limit !== null) return { ok: false, error: formatHubLimitViolations([limit]) };
+  return { ok: true, prompt: raw };
+}
+
+export function validateScheduleFrequency(
+  daily: unknown,
+  everyMinutes: unknown,
+): { ok: true; frequency: ScheduleFrequency } | { ok: false; error: string } {
+  if ((daily === undefined) === (everyMinutes === undefined)) {
+    return { ok: false, error: "频率要写 --daily HH:MM（每天）或 --every 30m / 2h（每隔一段时间），二选一" };
+  }
+  if (daily !== undefined) {
+    if (typeof daily !== "string" || parseDailyTime(daily) === null) {
+      return { ok: false, error: "每天的时间要写成 HH:MM（24 小时制，如 09:00）" };
+    }
+    return { ok: true, frequency: { kind: "daily", atTime: daily, everyMinutes: null } };
+  }
+  const bad = checkEveryMinutes(everyMinutes);
+  if (bad !== null) return { ok: false, error: bad };
+  return { ok: true, frequency: { kind: "interval", atTime: null, everyMinutes: everyMinutes as number } };
+}
+
 /**
  * Precondition: patch supplies at least one mutable field (name, prompt, daily, or everyMinutes) and never both daily and everyMinutes.
  * Postcondition: returns { ok: true, plan } with normalized fields; preserves current.nextRunAt when frequency is unchanged,
@@ -63,11 +102,59 @@ export interface ScheduleEditPlan {
  * when every resulting field matches current. Returns { ok: false, error } on invalid name, prompt, or frequency.
  */
 export function planScheduleEdit(
-  _current: Pick<ScheduleRecord, "name" | "kind" | "atTime" | "everyMinutes" | "prompt" | "nextRunAt" | "enabled">,
-  _patch: ScheduleEditInput,
-  _nowMs: number,
+  current: Pick<ScheduleRecord, "name" | "kind" | "atTime" | "everyMinutes" | "prompt" | "nextRunAt" | "enabled">,
+  patch: ScheduleEditInput,
+  nowMs: number,
 ): { ok: true; plan: ScheduleEditPlan } | { ok: false; error: string } {
-  throw new Error("Not implemented");
+  if (
+    patch.name === undefined &&
+    patch.prompt === undefined &&
+    patch.daily === undefined &&
+    patch.everyMinutes === undefined
+  ) {
+    return { ok: false, error: "至少要改一项：--name、--daily、--every 或 --stdin" };
+  }
+  let name = current.name;
+  if (patch.name !== undefined) {
+    const checked = validateScheduleName(patch.name);
+    if (!checked.ok) return checked;
+    name = checked.name;
+  }
+  let prompt = current.prompt;
+  if (patch.prompt !== undefined) {
+    const checked = validateSchedulePrompt(patch.prompt);
+    if (!checked.ok) return checked;
+    prompt = checked.prompt;
+  }
+  let frequency: ScheduleFrequency = {
+    kind: current.kind,
+    atTime: current.atTime,
+    everyMinutes: current.everyMinutes,
+  };
+  if (patch.daily !== undefined || patch.everyMinutes !== undefined) {
+    const checked = validateScheduleFrequency(patch.daily, patch.everyMinutes);
+    if (!checked.ok) return checked;
+    frequency = checked.frequency;
+  }
+  const frequencyChanged =
+    frequency.kind !== current.kind ||
+    frequency.atTime !== current.atTime ||
+    frequency.everyMinutes !== current.everyMinutes;
+  const nextRunAt = frequencyChanged ? nextRunAfter(frequency, nowMs) : current.nextRunAt;
+  const changed = frequencyChanged || name !== current.name || prompt !== current.prompt;
+  return {
+    ok: true,
+    plan: {
+      changed,
+      frequencyChanged,
+      name,
+      kind: frequency.kind,
+      atTime: frequency.atTime,
+      everyMinutes: frequency.everyMinutes,
+      prompt,
+      nextRunAt,
+    },
+  };
 }
 
 const DAILY_TIME = /^([01][0-9]|2[0-3]):([0-5][0-9])$/;

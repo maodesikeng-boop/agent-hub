@@ -93,26 +93,56 @@ export function parseCoreCommand({ group, action, rest, positionals, values, env
   return undefined;
 }
 
+function parseScheduleFrequencyFlags(
+  values: GroupArgs["values"],
+  body: Record<string, unknown>,
+  what: string,
+  required: boolean,
+): void {
+  const hasDaily = values.daily !== undefined;
+  const hasEvery = values.every !== undefined;
+  if (hasDaily && hasEvery) {
+    throw new UsageError(`${hub} ${what} 的频率要写 --daily HH:MM 或 --every 30m|2h，二选一`);
+  }
+  if (!hasDaily && !hasEvery) {
+    if (required) throw new UsageError(`${hub} ${what} 的频率要写 --daily HH:MM 或 --every 30m|2h，二选一`);
+    return;
+  }
+  if (hasDaily) {
+    if (parseDailyTime(values.daily!) === null) throw new UsageError("--daily 要写成 HH:MM（24 小时制，如 09:00）");
+    body.daily = values.daily;
+    return;
+  }
+  const minutes = parseEvery(values.every!);
+  if (minutes === null) throw new UsageError("--every 要写成 30m（分钟）或 2h（小时）");
+  const bad = checkEveryMinutes(minutes);
+  if (bad !== null) throw new UsageError(`--every：${bad}`);
+  body.everyMinutes = minutes;
+}
+
 export function parseScheduleCommand({ group, action, rest, values }: GroupArgs): Parsed | undefined {
   if (group === "schedule" && action === "add") {
     allowOnly(values, ["name", "daily", "every", "stdin"], "schedule add");
     expectPositionals(rest, 0, "schedule add");
     if (values.name === undefined) throw new UsageError(`${hub} schedule add 要 --name <名>`);
-    if ((values.daily === undefined) === (values.every === undefined)) {
-      throw new UsageError(`${hub} schedule add 的频率要写 --daily HH:MM 或 --every 30m|2h，二选一`);
-    }
     const body: Record<string, unknown> = { name: values.name };
-    if (values.daily !== undefined) {
-      if (parseDailyTime(values.daily) === null) throw new UsageError("--daily 要写成 HH:MM（24 小时制，如 09:00）");
-      body.daily = values.daily;
-    } else {
-      const minutes = parseEvery(values.every!);
-      if (minutes === null) throw new UsageError("--every 要写成 30m（分钟）或 2h（小时）");
-      const bad = checkEveryMinutes(minutes);
-      if (bad !== null) throw new UsageError(`--every：${bad}`);
-      body.everyMinutes = minutes;
-    }
+    parseScheduleFrequencyFlags(values, body, "schedule add", true);
     return { command: "schedule.add", body, textSource: requireStdin(values, "schedule add"), textField: "prompt" };
+  }
+  if (group === "schedule" && action === "edit") {
+    allowOnly(values, ["name", "daily", "every", "stdin"], "schedule edit");
+    expectPositionals(rest, 1, "schedule edit");
+    const scheduleId = idOf(rest[0], "schedule edit", "定时任务");
+    const body: Record<string, unknown> = { scheduleId };
+    if (values.name !== undefined) body.name = values.name;
+    parseScheduleFrequencyFlags(values, body, "schedule edit", false);
+    const hasStdin = values.stdin === true;
+    if (values.name === undefined && values.daily === undefined && values.every === undefined && !hasStdin) {
+      throw new UsageError(`${hub} schedule edit 至少要给一项要改的字段：--name、--daily、--every 或 --stdin`);
+    }
+    return hasStdin
+      ? { command: "schedule.edit", body, textSource: { kind: "stdin" }, textField: "prompt" }
+      : { command: "schedule.edit", body, textSource: null };
   }
   if (group === "schedule" && action === "list") {
     allowOnly(values, [], "schedule list");
