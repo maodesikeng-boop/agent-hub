@@ -726,4 +726,37 @@ describe("PeerTargetPort runtime digest validation and response byte cap", () =>
     expect(r4).toEqual({ online: true, digest: { generatedAt: now, pms: [] } });
     expect(requests).toBe(4);
   });
+
+  it("cancels an open chunked digest stream before the peer finishes responding once ROUTER_PEER_DIGEST_MAX_BYTES is exceeded", async () => {
+    let resolveClosed: (info: { writableEnded: boolean }) => void = () => {};
+    const closed = new Promise<{ writableEnded: boolean }>((resolve) => (resolveClosed = resolve));
+    const peer = await fakePeer((req, res) => {
+      if (!req.url.endsWith("/api/router/digest")) {
+        res.writeHead(404).end("not found");
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "transfer-encoding": "chunked" });
+      res.once("close", () => resolveClosed({ writableEnded: res.writableEnded }));
+      res.write('{"generatedAt":1,"pms":[],"pad":"');
+      for (let i = 0; i < 17; i++) res.write("文".repeat(6_000));
+      // Keep the response open so only client cancellation closes the socket.
+    });
+    const registry = createRouterTargetRegistry({
+      localPort: createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir }),
+      peers: {
+        selfId,
+        list: () => [
+          { id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, online: true, link: "lan", fingerprint: null },
+        ],
+        target: () => ({ name: "Linux 工作站", agent: peer.agent }),
+      },
+      uploadsDir,
+      now: () => now,
+    });
+    const res = await registry.portFor(remoteId)!.getDigest();
+    expect(res).toMatchObject({ online: false, digest: null });
+    expect(res.error).toContain("超过上限");
+    expect(await closed).toEqual({ writableEnded: false });
+  });
 });
