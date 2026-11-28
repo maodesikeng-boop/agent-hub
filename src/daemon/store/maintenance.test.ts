@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DB_INCREMENTAL_VACUUM_PAGES } from "../../shared/limits.ts";
+import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import { openDatabase } from "./db.ts";
 import type { Db } from "./db.ts";
 import { autoVacuumMode, ensureIncrementalVacuum, freePages, reclaimFreePages } from "./maintenance.ts";
@@ -142,6 +142,43 @@ describe("auto_vacuum 模式", () => {
     expect(ok).toEqual({ converted: true });
     expect(autoVacuumMode(db!)).toBe(2);
     expect(db!.get<{ n: number }>("SELECT count(*) AS n FROM blob_rows")?.n).toBe(400);
+  });
+
+  it("bounds same-version backup count when VACUUM repeatedly fails after backup succeeds, while preserving older rollback versions", () => {
+    legacyDb(); // user_version 3, auto_vacuum = NONE
+    // Seed an older rollback version backup that must survive repeated rebuild failures.
+    const olderBak = `${file}.bak-2-20261109T080000Z`;
+    const olderRaw = new DatabaseSync(olderBak);
+    olderRaw.exec("PRAGMA user_version = 2");
+    olderRaw.close();
+
+    let clock = Date.UTC(2026, 10, 10, 8, 0, 0);
+    const tick = () => (clock += 60_000);
+    for (let i = 0; i < MAX_DB_BACKUPS + 2; i++) {
+      db = openDatabase(file);
+      const origExec = db.exec.bind(db);
+      db.exec = (sql: string) => {
+        if (sql === "VACUUM") throw new Error("injected rebuild failure after successful backup");
+        origExec(sql);
+      };
+      const failed = ensureIncrementalVacuum(db, { now: tick });
+      expect(failed.converted).toBe(false);
+      expect(failed.error).toMatch(/injected rebuild failure/);
+      db.close();
+      db = undefined;
+
+      const backups = readdirSync(dir).filter((n) => n.startsWith("hub.sqlite.bak-")).sort();
+      expect(backups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS);
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-2-"))).toHaveLength(1);
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-3-"))).toHaveLength(1);
+    }
+
+    // Once VACUUM succeeds, conversion completes cleanly within MAX_DB_BACKUPS.
+    db = openDatabase(file);
+    const ok = ensureIncrementalVacuum(db, { now: tick });
+    expect(ok.converted).toBe(true);
+    const finalBackups = readdirSync(dir).filter((n) => n.startsWith("hub.sqlite.bak-")).sort();
+    expect(finalBackups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS);
   });
 });
 

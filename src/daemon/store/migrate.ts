@@ -172,7 +172,17 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
   const pending = migrations.filter((m) => m.version > from);
   const dbFile = mainDbFile(db);
   if (pending.length === 0) {
-    if (dbFile !== null) clearMigrationAnchor(dbFile);
+    if (dbFile !== null) {
+      const existingAnchor = readMigrationAnchor(dbFile);
+      clearMigrationAnchor(dbFile);
+      if (
+        existingAnchor !== null &&
+        from > existingAnchor.fromVersion &&
+        (from === existingAnchor.lastVersion || from === existingAnchor.pendingVersion)
+      ) {
+        pruneDatabaseBackups(dbFile, existingAnchor.backupFile, MAX_DB_BACKUPS);
+      }
+    }
     return { from, to: from, applied: [] };
   }
   let backupFile: string | undefined;
@@ -205,6 +215,16 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
   // A code-built trigger may read tables an older migration rebuilds, and SQLite refuses that rename while the trigger exists.
   dropCodeTriggers(db);
   for (const { version, file, sql } of pending) {
+    const lastCommitted = applied.at(-1) ?? from;
+    if (dbFile !== null && backupFile !== undefined && anchorFromVersion !== undefined) {
+      // Persist pendingVersion before COMMIT so a crash between COMMIT and post-commit anchor advance still reuses the pre-upgrade backup.
+      writeMigrationAnchor(dbFile, {
+        fromVersion: anchorFromVersion,
+        lastVersion: lastCommitted,
+        pendingVersion: version,
+        backupFile,
+      });
+    }
     const foreignKeys = db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys === 1;
     if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
     try {
@@ -214,6 +234,12 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
         db.exec(`PRAGMA user_version = ${version}`);
       });
     } catch (error) {
+      if (dbFile !== null && backupFile !== undefined && anchorFromVersion !== undefined) {
+        try {
+          writeMigrationAnchor(dbFile, { fromVersion: anchorFromVersion, lastVersion: lastCommitted, backupFile });
+        } catch {
+        }
+      }
       throw new Error(`migration ${file} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally {
       if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");

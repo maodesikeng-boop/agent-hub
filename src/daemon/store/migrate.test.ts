@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, cpSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase } from "./db.ts";
 import type { Db } from "./db.ts";
@@ -201,5 +203,118 @@ describe("pre-upgrade backup preservation across repeated migration failures", (
     const finalBackups = readdirSync(dir).filter((name) => name.startsWith("hub.sqlite.bak-")).sort();
     expect(finalBackups.some((n) => n.startsWith("hub.sqlite.bak-2-"))).toBe(true);
     expect(finalBackups.some((n) => n.startsWith("hub.sqlite.bak-3-") || n.startsWith("hub.sqlite.bak-4-"))).toBe(false);
+  });
+
+  it("preserves the pre-upgrade rollback backup across subprocess crashes immediately after SQLite COMMIT before anchor advance", () => {
+    const dbFile = join(dir, "hub.sqlite");
+    const migV1 = join(dir, "mig-v1");
+    writeMigration(migV1, "0001_init.sql", "CREATE TABLE seed (name TEXT NOT NULL);");
+    db = openDatabase(dbFile);
+    migrate(db, migV1);
+    db.run("INSERT INTO seed (name) VALUES ('pre-upgrade-data')");
+    db.close();
+    db = undefined;
+
+    const migV4 = join(dir, "mig-v4");
+    writeMigration(migV4, "0001_init.sql", "CREATE TABLE seed (name TEXT NOT NULL);");
+    writeMigration(migV4, "0002_step2.sql", "CREATE TABLE step2 (id INTEGER PRIMARY KEY);");
+    writeMigration(migV4, "0003_step3.sql", "CREATE TABLE step3 (id INTEGER PRIMARY KEY);");
+    writeMigration(migV4, "0004_step4.sql", "CREATE TABLE step4 (id INTEGER PRIMARY KEY);");
+
+    const dbModuleUrl = pathToFileURL(join(import.meta.dirname, "db.ts")).href;
+    const migrateModuleUrl = pathToFileURL(join(import.meta.dirname, "migrate.ts")).href;
+    const crashScript = [
+      `const { openDatabase } = await import(${JSON.stringify(dbModuleUrl)});`,
+      `const { migrate } = await import(${JSON.stringify(migrateModuleUrl)});`,
+      `const [dbPath, migrationsDir, tick] = process.argv.slice(1);`,
+      `const d = openDatabase(dbPath);`,
+      `const origTx = d.transaction.bind(d);`,
+      `d.transaction = (fn) => { const out = origTx(fn); process.exit(77); return out; };`,
+      `migrate(d, migrationsDir, { now: () => Number(tick) });`,
+      `process.exit(78);`,
+    ].join("\n");
+
+    let clock = Date.UTC(2026, 10, 28, 10, 0, 0);
+    const tick = () => (clock += 60_000);
+
+    // Two consecutive crashes right after COMMIT (v1->v2, then v2->v3) before post-commit anchor write.
+    for (const expectedVersion of [2, 3]) {
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", crashScript, dbFile, migV4, String(tick())], {
+        encoding: "utf8",
+      });
+      expect(child.status, child.stderr).toBe(77);
+      const checkDb = openDatabase(dbFile);
+      try {
+        expect(userVersion(checkDb)).toBe(expectedVersion);
+      } finally {
+        checkDb.close();
+      }
+      const backups = readdirSync(dir).filter((name) => name.startsWith("hub.sqlite.bak-"));
+      expect(backups).toHaveLength(1);
+      expect(backups[0]).toMatch(/^hub\.sqlite\.bak-1-/);
+    }
+
+    // Final recovery completes v3->v4 while preserving the v1 rollback backup with original pre-upgrade data.
+    db = openDatabase(dbFile);
+    const result = migrate(db, migV4, { now: tick });
+    expect(result.to).toBe(4);
+    const finalBackups = readdirSync(dir).filter((name) => name.startsWith("hub.sqlite.bak-"));
+    expect(finalBackups).toHaveLength(1);
+    expect(finalBackups[0]).toMatch(/^hub\.sqlite\.bak-1-/);
+
+    const rollback = openDatabase(join(dir, finalBackups[0]!));
+    try {
+      expect(userVersion(rollback)).toBe(1);
+      expect(rollback.all<{ name: string }>("SELECT name FROM seed")).toEqual([{ name: "pre-upgrade-data" }]);
+    } finally {
+      rollback.close();
+    }
+  });
+
+  it("creates a fresh backup capturing post-restore writes after a manual rollback from a failed migration", () => {
+    const dbFile = join(dir, "hub.sqlite");
+    const migV1 = join(dir, "mig-v1-restore");
+    writeMigration(migV1, "0001_init.sql", "CREATE TABLE items (name TEXT NOT NULL);");
+    db = openDatabase(dbFile);
+    migrate(db, migV1);
+    db.run("INSERT INTO items (name) VALUES ('original')");
+
+    const migBroken = join(dir, "mig-broken-restore");
+    writeMigration(migBroken, "0001_init.sql", "CREATE TABLE items (name TEXT NOT NULL);");
+    writeMigration(migBroken, "0002_step2.sql", "CREATE TABLE step2 (id INTEGER PRIMARY KEY);");
+    writeMigration(migBroken, "0003_fail.sql", "CREATE TABLE items (dup INTEGER);");
+
+    let clock = Date.UTC(2026, 10, 28, 11, 0, 0);
+    const tick = () => (clock += 60_000);
+    expect(() => migrate(db!, migBroken, { now: tick })).toThrow(/0003_fail\.sql/);
+    expect(userVersion(db)).toBe(2);
+    const originalBackup = readdirSync(dir).find((name) => name.startsWith("hub.sqlite.bak-1-"))!;
+    db.close();
+    db = undefined;
+
+    // Manually restore v1 backup over hub.sqlite (and clear WAL sidecars), then write new v1 data.
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbFile}${suffix}`, { force: true });
+    copyFileSync(join(dir, originalBackup), dbFile);
+    db = openDatabase(dbFile);
+    expect(userVersion(db)).toBe(1);
+    db.run("INSERT INTO items (name) VALUES ('post-restore-write')");
+
+    // Retry upgrade against fixed migrations: must take a fresh backup that includes post-restore writes.
+    writeMigration(migBroken, "0003_fail.sql", "CREATE TABLE step3 (id INTEGER PRIMARY KEY);");
+    const recovered = migrate(db, migBroken, { now: tick });
+    expect(recovered.to).toBe(3);
+    expect(recovered.backupFile).toBeDefined();
+    expect(recovered.backupFile).not.toBe(join(dir, originalBackup));
+
+    const freshBackup = openDatabase(recovered.backupFile!);
+    try {
+      expect(userVersion(freshBackup)).toBe(1);
+      expect(freshBackup.all<{ name: string }>("SELECT name FROM items ORDER BY rowid")).toEqual([
+        { name: "original" },
+        { name: "post-restore-write" },
+      ]);
+    } finally {
+      freshBackup.close();
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { DB_INCREMENTAL_VACUUM_PAGES, DB_INCREMENTAL_VACUUM_ROUND_MAX_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
-import { pruneDatabaseBackups } from "./backup-rotation.ts";
+import { pruneDatabaseBackups, pruneSameVersionBackups } from "./backup-rotation.ts";
 import type { Db } from "./db.ts";
 import { backupDatabase, mainDbFile, userVersion } from "./migrate.ts";
 
@@ -29,9 +29,11 @@ export function ensureIncrementalVacuum(db: Db, options: EnsureIncrementalOption
   if (before === AUTO_VACUUM_INCREMENTAL) return { converted: false };
   const dbFile = mainDbFile(db);
   if (dbFile === null) return { converted: false };
+  const version = userVersion(db);
   let backupFile: string | undefined;
   try {
-    backupFile = options.backup === false ? undefined : backupDatabase(db, userVersion(db), options.now ?? Date.now);
+    backupFile = options.backup === false ? undefined : backupDatabase(db, version, options.now ?? Date.now);
+    if (backupFile !== undefined) pruneSameVersionBackups(dbFile, version, backupFile);
     db.exec(`PRAGMA auto_vacuum = ${AUTO_VACUUM_INCREMENTAL}`);
     db.exec("VACUUM");
     if (autoVacuumMode(db) !== AUTO_VACUUM_INCREMENTAL) {

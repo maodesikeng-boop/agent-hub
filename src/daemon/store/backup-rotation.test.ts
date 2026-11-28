@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
   migrationAnchorPath,
   planMigrationBackup,
   pruneDatabaseBackups,
+  pruneSameVersionBackups,
   readMigrationAnchor,
   writeMigrationAnchor,
 } from "./backup-rotation.ts";
@@ -93,6 +94,72 @@ describe("migration backup rotation contracts", () => {
       "hub.sqlite.bak-10-20261128T080000Z",
       "hub.sqlite.bak-11-20261128T080200Z",
       "hub.sqlite.bak-notes",
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")("normalizes symlinked parent directories for anchor validation and pruning while rejecting symlinked backup files", () => {
+    const realDir = join(dir, "real-state");
+    const linkDir = join(dir, "link-state");
+    mkdirSync(realDir);
+    symlinkSync(realDir, linkDir);
+
+    const realDb = join(realpathSync.native(realDir), "hub.sqlite");
+    const linkDb = join(linkDir, "hub.sqlite");
+    writeFileSync(realDb, "");
+
+    const realBak10 = join(realpathSync.native(realDir), "hub.sqlite.bak-10-20261128T080000Z");
+    const realBak11 = join(realpathSync.native(realDir), "hub.sqlite.bak-11-20261128T080100Z");
+    const realBak12 = join(realpathSync.native(realDir), "hub.sqlite.bak-12-20261128T080200Z");
+    for (const f of [realBak10, realBak11, realBak12]) writeFileSync(f, "data");
+
+    // Anchor written with realpath is valid when read via the symlinked directory path.
+    writeMigrationAnchor(realDb, { fromVersion: 10, lastVersion: 11, backupFile: realBak10 });
+    const readViaLink = readMigrationAnchor(linkDb);
+    expect(readViaLink).toEqual({
+      fromVersion: 10,
+      lastVersion: 11,
+      backupFile: join(linkDir, "hub.sqlite.bak-10-20261128T080000Z"),
+    });
+
+    // Pruning via symlinked db path protects keep passed as realpath.
+    pruneDatabaseBackups(linkDb, realBak10, 2);
+    expect(readdirSync(realDir).filter((f) => f.includes(".bak-")).sort()).toEqual([
+      "hub.sqlite.bak-10-20261128T080000Z",
+      "hub.sqlite.bak-12-20261128T080200Z",
+    ]);
+
+    // A symlinked backup file inside the db directory pointing outside is rejected.
+    const outside = join(dir, "outside.sqlite");
+    writeFileSync(outside, "outside");
+    const escapedLink = join(realDir, "hub.sqlite.bak-13-20261128T080300Z");
+    symlinkSync(outside, escapedLink);
+    writeMigrationAnchor(realDb, { fromVersion: 13, lastVersion: 14, backupFile: escapedLink });
+    expect(readMigrationAnchor(realDb)).toBeNull();
+  });
+
+  it("reuses the anchor backup when db version matches pendingVersion and prunes only duplicate same-version backups", () => {
+    const bak10 = join(dir, "hub.sqlite.bak-10-20261128T080000Z");
+    const bak11Old = join(dir, "hub.sqlite.bak-11-20261128T080100Z");
+    const bak11New = join(dir, "hub.sqlite.bak-11-20261128T080200Z");
+    for (const f of [bak10, bak11Old, bak11New]) writeFileSync(f, "data");
+
+    writeMigrationAnchor(dbFile, { fromVersion: 10, lastVersion: 10, pendingVersion: 11, backupFile: bak10 });
+    expect(readMigrationAnchor(dbFile)).toEqual({ fromVersion: 10, lastVersion: 10, pendingVersion: 11, backupFile: bak10 });
+    expect(planMigrationBackup(dbFile, 11, readMigrationAnchor(dbFile))).toEqual({ action: "reuse", backupFile: bak10 });
+    expect(planMigrationBackup(dbFile, 12, readMigrationAnchor(dbFile))).toEqual({ action: "create" });
+
+    // Invalid pendingVersion <= lastVersion is rejected as corrupt.
+    writeFileSync(
+      migrationAnchorPath(dbFile),
+      JSON.stringify({ fromVersion: 10, lastVersion: 11, pendingVersion: 11, backupFile: bak10 }),
+    );
+    expect(readMigrationAnchor(dbFile)).toBeNull();
+
+    // pruneSameVersionBackups removes older duplicates of version 11 while leaving version 10 untouched.
+    pruneSameVersionBackups(dbFile, 11, bak11New);
+    expect(readdirSync(dir).filter((f) => f.includes(".bak-")).sort()).toEqual([
+      "hub.sqlite.bak-10-20261128T080000Z",
+      "hub.sqlite.bak-11-20261128T080200Z",
     ]);
   });
 });
