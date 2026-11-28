@@ -24,11 +24,13 @@ import {
   ROUTER_OP_DEDUPE_MAX,
   ROUTER_OP_DEDUPE_TTL_MS,
   ROUTER_OP_NAME_MAX_CHARS,
+  ROUTER_PEER_DIGEST_MAX_BYTES,
   ROUTER_PEER_DIGEST_TIMEOUT_MS,
   ROUTER_PEER_DIGEST_TTL_MS,
   ROUTER_PEER_DISPATCH_TIMEOUT_MS,
   ROUTER_PEER_OFFLINE_BACKOFF_MS,
   agentTextOf,
+  parseDeviceRouterDigest,
   type AgentVendor,
   type Attachment,
   type ConversationId,
@@ -558,6 +560,47 @@ interface PeerCallInit {
   timeoutMs: number;
   /** Separate budget for opening the mesh link; when set, timeoutMs starts once the link is up. */
   dialTimeoutMs?: number;
+  maxResponseBytes?: number;
+}
+
+class ResponseTooLargeError extends Error {
+  constructor(maxBytes: number) {
+    super(`response exceeded ${maxBytes} bytes`);
+    this.name = "ResponseTooLargeError";
+  }
+}
+
+async function readResponseText(res: Response, maxBytes?: number): Promise<string> {
+  if (maxBytes === undefined) return await res.text();
+  const contentLength = res.headers.get("content-length");
+  if (contentLength !== null) {
+    const declared = Number(contentLength);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      throw new ResponseTooLargeError(maxBytes);
+    }
+  }
+  if (res.body === null) return "";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new ResponseTooLargeError(maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    return chunks.join("");
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function callPeer(target: ProxyTarget, path: string, init: PeerCallInit, closing: AbortSignal): Promise<{ status: number; text: string }> {
@@ -577,9 +620,13 @@ async function callPeer(target: ProxyTarget, path: string, init: PeerCallInit, c
       ...(init.body !== undefined ? { body: init.body } : {}),
       ...(init.dialTimeoutMs !== undefined ? { onSocket } : {}),
     });
-    const text = await res.text();
+    const text = await readResponseText(res, init.maxResponseBytes);
     return { status: res.status, text };
   } catch (err) {
+    if (err instanceof ResponseTooLargeError) {
+      throw new RouterTargetError("invalid", `设备「${target.name}」返回的数据超过上限`);
+    }
+    if (err instanceof RouterTargetError) throw err;
     if (controller.signal.aborted || isAbortTimeoutError(err)) {
       throw new RouterTargetError("device_timeout", `连接设备「${target.name}」超时，请检查网络后重试`);
     }
@@ -587,6 +634,84 @@ async function callPeer(target: ProxyTarget, path: string, init: PeerCallInit, c
   } finally {
     settled = true;
     clearTimeout(timer);
+  }
+}
+
+interface FetchPeerDigestParams {
+  readonly info: DeviceInfo;
+  readonly target: ProxyTarget | null;
+  readonly digestCache: LRUCache<DeviceId, CachedPeerDigestEntry>;
+  readonly now: () => number;
+  readonly digestTtlMs: number;
+  readonly digestTimeoutMs: number;
+  readonly offlineBackoffMs: number;
+  readonly dialTimeoutMs: number;
+  readonly closing: AbortSignal;
+}
+
+async function fetchPeerDigest(params: FetchPeerDigestParams): Promise<DigestFetchResult> {
+  const { info, target, digestCache, now, digestTtlMs, digestTimeoutMs, offlineBackoffMs, dialTimeoutMs, closing } = params;
+  const epKey = endpointFingerprint(target);
+  const t = now();
+  const cached = digestCache.get(info.id);
+  if (cached !== undefined && cached.endpointKey === epKey && t < cached.expiresAt) {
+    if (cached.kind === "ok" && cached.digest !== null) {
+      return { online: true, digest: cached.digest };
+    }
+    return { online: false, digest: null, error: cached.error };
+  }
+
+  const cacheOffline = (errText: string, at: number): DigestFetchResult => {
+    digestCache.set(info.id, {
+      endpointKey: epKey,
+      kind: "offline",
+      digest: null,
+      error: errText,
+      expiresAt: at + offlineBackoffMs,
+    });
+    return { online: false, digest: null, error: errText };
+  };
+
+  if (target === null) {
+    return cacheOffline(`设备「${info.name}」当前离线`, t);
+  }
+
+  try {
+    // A cold relay dial alone can exceed the digest timeout, so a device the relay reports present gets the mesh dial budget on top.
+    const { status, text } = await callPeer(
+      target,
+      API_PATHS.routerDigest,
+      {
+        method: "GET",
+        timeoutMs: digestTimeoutMs,
+        maxResponseBytes: ROUTER_PEER_DIGEST_MAX_BYTES,
+        ...(info.online ? { dialTimeoutMs } : {}),
+      },
+      closing,
+    );
+    if (status < 200 || status >= 300) {
+      return cacheOffline(`设备「${info.name}」返回异常（HTTP ${status}）`, now());
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      return cacheOffline(`设备「${info.name}」返回的数据格式不正确`, now());
+    }
+    const parsed = parseDeviceRouterDigest(raw);
+    if (!parsed.ok) {
+      return cacheOffline(`设备「${info.name}」返回的数据格式不正确`, now());
+    }
+    digestCache.set(info.id, {
+      endpointKey: epKey,
+      kind: "ok",
+      digest: parsed.digest,
+      expiresAt: now() + digestTtlMs,
+    });
+    return { online: true, digest: parsed.digest };
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : `设备「${info.name}」当前离线`;
+    return cacheOffline(errText, now());
   }
 }
 
@@ -614,68 +739,18 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
     deviceName: info.name,
     isLocal: false,
 
-    async getDigest(): Promise<DigestFetchResult> {
-      const target = peers?.target(info.id) ?? null;
-      const epKey = endpointFingerprint(target);
-      const t = now();
-      const cached = digestCache.get(info.id);
-      if (cached !== undefined && cached.endpointKey === epKey && t < cached.expiresAt) {
-        if (cached.kind === "ok" && cached.digest !== null) {
-          return { online: true, digest: cached.digest };
-        }
-        return { online: false, digest: null, error: cached.error };
-      }
-
-      if (target === null) {
-        const errText = `设备「${info.name}」当前离线`;
-        digestCache.set(info.id, {
-          endpointKey: epKey,
-          kind: "offline",
-          digest: null,
-          error: errText,
-          expiresAt: t + offlineBackoffMs,
-        });
-        return { online: false, digest: null, error: errText };
-      }
-
-      try {
-        // A cold relay dial alone can exceed the digest timeout, so a device the relay reports present gets the mesh dial budget on top.
-        const { status, text } = await callPeer(
-          target,
-          API_PATHS.routerDigest,
-          { method: "GET", timeoutMs: digestTimeoutMs, ...(info.online ? { dialTimeoutMs } : {}) },
-          closing.signal,
-        );
-        if (status < 200 || status >= 300) {
-          const errText = `设备「${info.name}」返回异常（HTTP ${status}）`;
-          digestCache.set(info.id, {
-            endpointKey: epKey,
-            kind: "offline",
-            digest: null,
-            error: errText,
-            expiresAt: now() + offlineBackoffMs,
-          });
-          return { online: false, digest: null, error: errText };
-        }
-        const digest = JSON.parse(text) as DeviceRouterDigest;
-        digestCache.set(info.id, {
-          endpointKey: epKey,
-          kind: "ok",
-          digest,
-          expiresAt: now() + digestTtlMs,
-        });
-        return { online: true, digest };
-      } catch (err) {
-        const errText = err instanceof Error ? err.message : `设备「${info.name}」当前离线`;
-        digestCache.set(info.id, {
-          endpointKey: epKey,
-          kind: "offline",
-          digest: null,
-          error: errText,
-          expiresAt: now() + offlineBackoffMs,
-        });
-        return { online: false, digest: null, error: errText };
-      }
+    getDigest(): Promise<DigestFetchResult> {
+      return fetchPeerDigest({
+        info,
+        target: peers?.target(info.id) ?? null,
+        digestCache,
+        now,
+        digestTtlMs,
+        digestTimeoutMs,
+        offlineBackoffMs,
+        dialTimeoutMs,
+        closing: closing.signal,
+      });
     },
 
     async executeOp(op: RouterTargetOp): Promise<RouterTargetOpResult> {

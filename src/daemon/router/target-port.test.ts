@@ -10,6 +10,7 @@ import {
   MAX_TASK_BYTES,
   ROUTER_ATTACHMENT_ID_MAX_CHARS,
   ROUTER_OP_CLIENT_ID_MAX_CHARS,
+  ROUTER_PEER_DIGEST_MAX_BYTES,
   ROUTER_PEER_DIGEST_TTL_MS,
   ROUTER_PEER_OFFLINE_BACKOFF_MS,
 } from "../../shared/index.ts";
@@ -645,5 +646,117 @@ describe("project.show（docs/router-project-catalog-design.md）", () => {
       code: "invalid",
       message: expect.stringContaining("版本旧"),
     });
+  });
+});
+
+describe("PeerTargetPort runtime digest validation and response byte cap", () => {
+  const selfId = "00000000-0000-4000-8000-000000000001";
+  const remoteId = "00000000-0000-4000-8000-000000000002";
+
+  it("rejects malformed remote digests without caching kind ok, backs off for offlineBackoffMs, and recovers once valid", async () => {
+    let mode: "bad-pms" | "bad-workers" | "oversized" | "valid" = "bad-pms";
+    let requests = 0;
+    const peer = await fakePeer((req, res) => {
+      if (!req.url.endsWith("/api/router/digest")) {
+        res.writeHead(404).end("not found");
+        return;
+      }
+      requests += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      if (mode === "bad-pms") {
+        res.end(JSON.stringify({ generatedAt: now, pms: "not-an-array" }));
+      } else if (mode === "bad-workers") {
+        res.end(
+          JSON.stringify({
+            generatedAt: now,
+            pms: [{ pmId: 7, name: "远端小林", mode: "manage_only", activity: "idle", pendingDecisionCount: 0, activeWorkers: null }],
+          }),
+        );
+      } else if (mode === "oversized") {
+        res.end(JSON.stringify({ generatedAt: now, pms: [], pad: "x".repeat(ROUTER_PEER_DIGEST_MAX_BYTES + 1024) }));
+      } else {
+        res.end(JSON.stringify({ generatedAt: now, pms: [] }));
+      }
+    });
+
+    const registry = createRouterTargetRegistry({
+      localPort: createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir }),
+      peers: {
+        selfId,
+        list: () => [
+          { id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, online: true, link: "lan", fingerprint: null },
+        ],
+        target: () => ({ name: "Linux 工作站", agent: peer.agent }),
+      },
+      uploadsDir,
+      now: () => now,
+    });
+    const port = registry.portFor(remoteId)!;
+
+    // 1. Malformed pms is rejected, never cached as ok, and backs off for ROUTER_PEER_OFFLINE_BACKOFF_MS.
+    const r1 = await port.getDigest();
+    expect(r1).toMatchObject({ online: false, digest: null });
+    expect(r1.error).toContain("Linux 工作站");
+    expect(requests).toBe(1);
+
+    now += 1_000;
+    const r1Cached = await port.getDigest();
+    expect(r1Cached).toMatchObject({ online: false, digest: null });
+    expect(requests).toBe(1);
+
+    // 2. Malformed activeWorkers is also rejected after backoff expires.
+    now += ROUTER_PEER_OFFLINE_BACKOFF_MS + 100;
+    mode = "bad-workers";
+    const r2 = await port.getDigest();
+    expect(r2).toMatchObject({ online: false, digest: null });
+    expect(requests).toBe(2);
+
+    // 3. Oversized digest stream exceeding ROUTER_PEER_DIGEST_MAX_BYTES is rejected.
+    now += ROUTER_PEER_OFFLINE_BACKOFF_MS + 100;
+    mode = "oversized";
+    const r3 = await port.getDigest();
+    expect(r3).toMatchObject({ online: false, digest: null });
+    expect(requests).toBe(3);
+
+    // 4. Recovers cleanly once peer serves a valid digest after backoff expires.
+    now += ROUTER_PEER_OFFLINE_BACKOFF_MS + 100;
+    mode = "valid";
+    const r4 = await port.getDigest();
+    expect(r4).toEqual({ online: true, digest: { generatedAt: now, pms: [] } });
+    expect(requests).toBe(4);
+  });
+
+  it("cancels an open chunked digest stream before the peer finishes responding once ROUTER_PEER_DIGEST_MAX_BYTES is exceeded", async () => {
+    let resolveClosed: (info: { writableEnded: boolean }) => void = () => {};
+    const closed = new Promise<{ writableEnded: boolean }>((resolve) => (resolveClosed = resolve));
+    const peer = await fakePeer((req, res) => {
+      if (!req.url.endsWith("/api/router/digest")) {
+        res.writeHead(404).end("not found");
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "transfer-encoding": "chunked" });
+      res.once("close", () => resolveClosed({ writableEnded: res.writableEnded }));
+      res.write('{"generatedAt":1,"pms":[],"pad":"');
+      for (let i = 0; i < 17; i++) res.write("文".repeat(6_000));
+      // Keep the response open so only client cancellation closes the socket.
+    });
+    const registry = createRouterTargetRegistry({
+      localPort: createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir }),
+      peers: {
+        selfId,
+        list: () => [
+          { id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, online: true, link: "lan", fingerprint: null },
+        ],
+        target: () => ({ name: "Linux 工作站", agent: peer.agent }),
+      },
+      uploadsDir,
+      now: () => now,
+    });
+    const res = await registry.portFor(remoteId)!.getDigest();
+    expect(res).toMatchObject({ online: false, digest: null });
+    expect(res.error).toContain("超过上限");
+    expect(await closed).toEqual({ writableEnded: false });
   });
 });
