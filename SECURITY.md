@@ -30,6 +30,7 @@ These checks protect local endpoints from other users and browser origins. Proce
 - macOS uses `sandbox-exec`. Linux uses `bubblewrap`. Windows uses `fusa-run.exe` with a Job Object for the process tree, a restricted token, and explicit deny write and deny read NTFS ACLs across protected roots and the data directory.
 - Read only mode allows writes only to a private session temp directory and required vendor runtime paths. Allowed workspaces and the network remain accessible. The data directory, including the SQLite ledger and logs, and known user credential paths are unreadable. File pattern coverage varies by platform and vendor. MCP connectors allow only tools that declare `readOnlyHint: true` without `destructiveHint: true`, subject to explicit allow and deny rules.
 - On Windows 11 24H2 or later, outer read only enforcement uses the `@microsoft/mxc-sdk` ProcessContainer when the capability probe succeeds. When MXC is unavailable, including on older Windows versions, a read only Worker that needs the outer sandbox falls back to the restricted token with data directory NTFS ACLs and tool checks. Bellwood shows a warning because this fallback does not enforce full filesystem read only access or block reads of all external credential paths.
+- On macOS, a Worker that explicitly mounts a Computer Use capability can request `--no-outer-sandbox` so the vendor's built-in sandbox runs without nested `sandbox-exec` conflicts. The Worker stays paused until the human user clicks **Approve this run** in the Web workbench (Feishu shows a read only notice, and `hub` has no approval command). While running without the outer sandbox, the Worker can read files across the disk under the vendor's built-in sandbox, including Bellwood's data directory and credentials. Each desktop app Computer Use attempts to control also requires a separate per-app approval card (**Allow for this run** or **Deny**) in the Web workbench. Both approvals bind to that single Worker run and expire when the Worker ends. Linux and Windows reject `--no-outer-sandbox` and keep their mandatory outer sandboxes.
 
 ## Account mesh and relays
 
@@ -86,6 +87,7 @@ Use Chat only and Collaborator with people you trust. Guest messages can instruc
 - macOS 使用 `sandbox-exec`。Linux 使用 `bubblewrap`。Windows 使用 `fusa-run.exe`，以 Job Object 管理进程树，并通过受限令牌与 NTFS ACL 实施数据目录的禁写与禁读。
 - 只读策略仅允许写会话私有临时目录和厂商运行所需的路径，并限制读取已知凭据路径与整个数据目录。文件通配规则的覆盖因平台和厂商而异。网络仍可访问。MCP 连接器默认放行声明 `readOnlyHint: true` 且未声明 `destructiveHint: true` 的工具，并可以通过显式规则调整。
 - Windows 11 24H2 或更新版本在能力探测通过时可使用 `@microsoft/mxc-sdk` 的 ProcessContainer 实施外层只读沙箱。旧版 Windows 或 MXC 不可用时，需要外层沙箱的只读 Worker 会降级为受限令牌和工具层检查。Bellwood 会显示告警，因为降级路径无法保证全盘只读或禁止读取所有配置的凭据路径。
+- 在 macOS 上，仅明确挂载了 Computer Use 能力的 Worker 可以申请 `--no-outer-sandbox`，以便在厂商内置沙箱下运行并避免嵌套 `sandbox-exec` 冲突。Worker 必须等待人类用户在网页工作台点击确认后才开工（飞书仅发只读提示，`hub` 不提供批准命令）。退出外层沙箱期间，Worker 在厂商内置沙箱下可读取全盘文件，包括 Bellwood 数据目录与凭据。Computer Use 每次尝试控制新的桌面应用时，还会弹出逐应用确认卡，由用户在网页工作台批准或拒绝。两类授权均仅对当前单个 Worker 生效，Worker 结束时自动撤销。Linux 与 Windows 拒绝 `--no-outer-sandbox` 并始终保留外层沙箱。
 
 ### 账号组网与盲转中继
 

@@ -1,6 +1,14 @@
 # Bellwood documentation
 
-Active standards and architecture references for Bellwood. Start with [`../AGENTS.md`](../AGENTS.md) for engineering rules and [`../REVIEW.md`](../REVIEW.md) for path-triggered review checks.
+User guides, active engineering standards, and architecture snapshots for Bellwood. Start with [User guides and references](#user-guides-and-references) if you are setting up or operating Bellwood, or [`../AGENTS.md`](../AGENTS.md) and [`../REVIEW.md`](../REVIEW.md) if you are contributing code.
+
+## User guides and references
+
+- [Running Bellwood on Linux](linux.md): Ubuntu user-mode setup, Node 24.12+ and `bubblewrap` configuration, CLI lookup paths, `systemd --user` service management, and remote access.
+- [Worker write and read scope](write-scope.md): Write boundaries across protected roots and least-privilege data-directory read and socket isolation across macOS, Linux, and Windows.
+- [Security policy](../SECURITY.md): Supported versions, private vulnerability reporting, local loopback and socket boundaries, OS sandboxes, Computer Use approvals, account mesh, and Feishu guest tiers.
+- [Contributing guide](../CONTRIBUTING.md): Bug reports, local setup, mandatory gate commands, and pull request workflow.
+- [Naming lineage](#naming-lineage): How `Bellwood`, `agent-hub` / `hub`, and `fusa-*` map across packages, directories, binaries, and environment variables.
 
 ## Standards
 
@@ -51,6 +59,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Handover byte budget and lightweight skill carryover](handover-budget-and-skills-design.md): Lightweight verified skill-index carryover, declarative per-vendor single-message byte caps, delivery-time priority-tiered preamble budgeting protecting the latest user message, and prompt-cache preservation across all eight vendors.
 - [Shipped prompt de-overfitting](prompt-deoverfitting-design.md): Separating platform mechanics from project workflow policy across shipped PM and Worker prompts, the Task Graph skill, CLI help, JSON hints, and runtime daemon notices, enforced by a workflow-neutrality audit contract.
 - [Session stop lifecycle and settlement fix](stop-lifecycle-design.md): Root-cause traces on real `agy acp`, `stopId`-matched ledger stop settlement, unified `BaseSessionDriver` interrupt coordination with bounded `SIGINT` to `SIGKILL` escalation, post-turn ACP notification gating, and frontend `useStop` reset closure.
+- [README and user documentation rewrite](readme-docs-rewrite-design.md): Full audit of current `main` versus user-facing docs and screenshots, architecture comparison, user sign-off decisions, visual refresh manifest, and automated doc-to-code consistency contract.
 
 ## Testing
 
