@@ -1,6 +1,6 @@
 # Worker write and read scope
 
-> Snapshot: 2026-11-20 (commit `e8ed3389`)
+> Snapshot: 2026-11-28 (commit `88d616f1`)
 
 Ordinary Workers run inside a native OS sandbox that restricts writes inside protected roots and restricts reads across Bellwood's data directory (`~/.agent-hub` by default). On macOS, an explicitly mounted Computer Use capability can [request a user-approved exception to the outer sandbox](worker-no-outer-sandbox-design.md). Project Managers run unsandboxed (`workerWriteScope` returns `null` when `role !== "worker"`).
 
@@ -23,7 +23,7 @@ Normal Workers, read-only Workers, and single-turn Router sessions all enforce l
   - `run/bin/` (`RUN_DIR_READABLE_ENTRIES`, providing the `hub` command wrapper).
   - The session's own launch directory `state/launch/<sessionId>/` (prompt, vendor settings, skills, rules, and review `pre-push` hooks).
   - Session `cwd` or `addDirs` entries that sit strictly inside `dataDir`, such as `state/router-home` for Router.
-- **Socket allowlist**: Only `run/hub.sock` (`RUN_DIR_CONNECTABLE_ENTRIES`, authenticated with the per-session `AGENT_HUB_TOKEN`) accepts connections. Workers cannot connect to `run/admin.sock` or its Windows admin named pipe.
+- **Socket allowlist**: Only `run/hub.sock` (`RUN_DIR_CONNECTABLE_ENTRIES`, authenticated with the per-session `HUB_TOKEN`) accepts connections. Workers cannot connect to `run/admin.sock` or its Windows admin named pipe.
 - **Sent-file boundary**: `isShareable` in `src/daemon/sent-files.ts` enforces the same `DataDirReadScope` so a session cannot leak denied `dataDir` files by attaching them as deliverables or inline links.
 - **Setup failure logs**: Because `state/logs/setup/worker-<id>.log` sits inside `state/`, the daemon includes the failing setup command and log tail directly in the Worker's opening message when setup fails.
 
@@ -69,7 +69,7 @@ Windows enforces Worker isolation without administrator privileges or WSL 2 thro
   - Each Worker worktree directory receives an inheritable `ALLOW FusaWorker-<id>` modify ACE before `git worktree add`, so checked-out files and `node_modules` inherit permissions with zero recursive walk.
   - Before launch, `prepareOsSandboxForLaunch` asynchronously sets `DENY FusaWorker` read on `dataDir`, `state\`, `run\`, and `backups\`, `ALLOW FusaWorker` read on `worktrees\`, `uploads\`, `tools\`, and `run\bin\`, and `ALLOW FusaRead-<sessionId>` read on `state\launch\<sessionId>\`. ACL caches key on directory identity and SID, and re-verify the target directory if it was replaced while an `fusa-run.exe` call was in flight.
   - The admin named pipe applies `acl deny-pipe` (`DENY FusaWorker`) before serving requests; requests arriving before hardening receive HTTP 503, and hardening failure closes the admin pipe rather than serving it unguarded.
-- **Read-only Workers**: `codex` uses its native `readOnly` sandbox; the other five vendors use `@microsoft/mxc-sdk` ProcessContainer on Windows 11 24H2+ when available, and fall back to `fusa-run.exe --readonly-fallback` plus vendor tool-level write blocks with a `driver.warning` notice on older Windows builds.
+- **Read-only Workers**: `codex` uses its native `readOnly` sandbox; the other seven vendors use `@microsoft/mxc-sdk` ProcessContainer on Windows 11 24H2+ when available, and fall back to `fusa-run.exe --readonly-fallback` plus vendor tool-level write blocks with a `driver.warning` notice on older Windows builds.
 
 ## Fail-closed startup and known boundaries
 

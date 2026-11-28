@@ -1,23 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 444" width="1160" height="444" role="img" aria-label="Bellwood 整体结构：桌面端、飞书会话、支持自动接管的账号级机器人和账号组网，经总助、项目经理与沙箱工作树调用本机命令行 Agent">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 444" width="1160" height="444" role="img" aria-label="Bellwood 整体结构：macOS、Windows、Linux、飞书会话、支持自动接管的账号级机器人与账号组网，经总助、项目经理与沙箱工作树连接 8 家本机命令行 Agent">
 <defs><filter id="s" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#000" flood-opacity="0.05"/><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.06"/></filter><filter id="h" x="-30%" y="-25%" width="160%" height="185%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.18"/></filter>
 <marker id="dot" viewBox="0 0 8 8" refX="4" refY="4" markerWidth="8" markerHeight="8"><circle cx="4" cy="4" r="2.6" fill="#ffffff" stroke="#c7c7cc" stroke-width="1.4"/></marker></defs>
 <g font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Text&quot;, &quot;Segoe UI&quot;, &quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, &quot;Microsoft YaHei&quot;, Helvetica, Arial, sans-serif">
 <text x="28" y="42" font-size="13" font-weight="600" letter-spacing="0.4" fill="#8e8e93">你的入口</text>
-<text x="856" y="42" font-size="13" font-weight="600" letter-spacing="0.4" fill="#8e8e93">你的命令行 Agent</text>
+<text x="856" y="42" font-size="13" font-weight="600" letter-spacing="0.4" fill="#8e8e93">你的命令行 Agent（8 家）</text>
 <g fill="none" stroke="#c7c7cc" stroke-width="1.4" stroke-linecap="round">
 <path d="M276 102.0 C314 102.0 306 228.0 344 228.0" marker-start="url(#dot)"/>
 <path d="M276 186.0 C314 186.0 306 228.0 344 228.0" marker-start="url(#dot)"/>
 <path d="M276 270.0 C314 270.0 306 228.0 344 228.0" marker-start="url(#dot)"/>
 <path d="M276 354.0 C314 354.0 306 228.0 344 228.0" marker-start="url(#dot)"/>
-<path d="M784 228.0 C822 228.0 814 116.0 852 116.0" marker-end="url(#dot)"/>
-<path d="M784 228.0 C822 228.0 814 228.0 852 228.0" marker-end="url(#dot)"/>
-<path d="M784 228.0 C822 228.0 814 340.0 852 340.0" marker-end="url(#dot)"/>
+<path d="M784 228.0 C822 228.0 814 102.0 852 102.0" marker-end="url(#dot)"/>
+<path d="M784 228.0 C822 228.0 814 186.0 852 186.0" marker-end="url(#dot)"/>
+<path d="M784 228.0 C822 228.0 814 270.0 852 270.0" marker-end="url(#dot)"/>
+<path d="M784 228.0 C822 228.0 814 354.0 852 354.0" marker-end="url(#dot)"/>
 </g>
 <rect x="24" y="68" width="252" height="68" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
 <rect x="40" y="86" width="32" height="32" rx="8" fill="rgba(17,17,18,0.04)"/>
 <g transform="translate(46 92)" fill="none" stroke="#3a3a3c" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="16" height="14" rx="3"/><line x1="2" y1="7.5" x2="18" y2="7.5"/><circle cx="5.2" cy="5.25" r="0.6" fill="#3a3a3c" stroke="none"/><circle cx="7.8" cy="5.25" r="0.6" fill="#3a3a3c" stroke="none"/></g>
-<text x="84" y="98" font-size="14.5" font-weight="600" fill="#111112">Mac &amp; Windows 桌面端</text>
-<text x="84" y="117" font-size="12" fill="#6e6e73">Bellwood.app · 原生免 WSL</text>
+<text x="84" y="98" font-size="14.5" font-weight="600" fill="#111112">三端本地运行</text>
+<text x="84" y="117" font-size="12" fill="#6e6e73">macOS · Windows · Linux</text>
 <rect x="24" y="152" width="252" height="68" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
 <rect x="40" y="170" width="32" height="32" rx="8" fill="rgba(17,17,18,0.04)"/>
 <g transform="translate(46 176)" fill="none" stroke="#3a3a3c" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h9A2.5 2.5 0 0 1 17 5.5v6A2.5 2.5 0 0 1 14.5 14H8l-3.8 3v-3H5.5A2.5 2.5 0 0 1 3 11.5z"/><line x1="7" y1="7.5" x2="13" y2="7.5"/><line x1="7" y1="10.5" x2="11" y2="10.5"/></g>
@@ -33,18 +34,18 @@
 <g transform="translate(46 344)" fill="none" stroke="#3a3a3c" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="6.5" height="5" rx="1.3"/><rect x="11.5" y="11" width="6.5" height="5" rx="1.3"/><path d="M8.5 6.5h2a2 2 0 0 1 2 2V11"/><path d="M11.5 13.5h-2a2 2 0 0 1-2-2V9"/></g>
 <text x="84" y="350" font-size="14.5" font-weight="600" fill="#111112">账号制多设备组网</text>
 <text x="84" y="369" font-size="12" fill="#6e6e73">同网直连 · 加密中继</text>
-<rect x="852" y="68" width="284" height="96" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
-<text x="872" y="100" font-size="14.5" font-weight="600" fill="#111112">Claude Code · Codex</text>
-<text x="872" y="122" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">claude · codex app-server</text>
-<text x="872" y="142" font-size="12" fill="#6e6e73">复用本机已登录订阅或 API Key</text>
-<rect x="852" y="180" width="284" height="96" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
-<text x="872" y="212" font-size="14.5" font-weight="600" fill="#111112">Antigravity · Cursor</text>
-<text x="872" y="234" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">agy · cursor-agent (ACP)</text>
-<text x="872" y="254" font-size="12" fill="#6e6e73">PM 与每个 Worker 独立选模型</text>
-<rect x="852" y="292" width="284" height="96" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
-<text x="872" y="324" font-size="14.5" font-weight="600" fill="#111112">Pi · DeepSeek Harness</text>
-<text x="872" y="346" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">pi (RPC) · dsh (ACP)</text>
-<text x="872" y="366" font-size="12" fill="#6e6e73">一键同步 MCP 服务器与技能</text>
+<rect x="852" y="68" width="284" height="68" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
+<text x="872" y="96" font-size="14.5" font-weight="600" fill="#111112">Claude Code · Codex</text>
+<text x="872" y="117" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">claude · codex app-server</text>
+<rect x="852" y="152" width="284" height="68" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
+<text x="872" y="180" font-size="14.5" font-weight="600" fill="#111112">Antigravity · Cursor</text>
+<text x="872" y="201" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">agy · cursor-agent (ACP)</text>
+<rect x="852" y="236" width="284" height="68" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
+<text x="872" y="264" font-size="14.5" font-weight="600" fill="#111112">Pi · DeepSeek Harness</text>
+<text x="872" y="285" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">pi (RPC) · dsh (ACP)</text>
+<rect x="852" y="320" width="284" height="68" rx="14" fill="#ffffff" stroke="rgba(17,17,18,0.10)" filter="url(#s)"/>
+<text x="872" y="348" font-size="14.5" font-weight="600" fill="#111112">OpenCode · Kimi Code</text>
+<text x="872" y="369" font-family="ui-monospace, &quot;SF Mono&quot;, Menlo, Consolas, monospace" font-size="12" fill="#6e6e73">opencode · kimi (ACP)</text>
 <rect x="344" y="68" width="440" height="320" rx="22" fill="#141517" filter="url(#h)"/>
 <rect x="368" y="90" width="28" height="28" rx="7" fill="#fff3da" stroke="rgba(122,74,0,0.18)"/>
 <g transform="translate(373 95) scale(3)" shape-rendering="crispEdges"><path d="M2 0H4V1H5V3H6V5H0V3H1V4H5V3H4V1H2V3H1V1H2Z" fill="#8a5300"/><path d="M2 1H4V3H5V4H1V3H2Z" fill="#ffcb3d"/><path d="M2 5H4V6H2Z" fill="#ff7a1a"/></g>
@@ -54,7 +55,7 @@
 <line x1="378" y1="162" x2="378" y2="332" stroke="rgba(245,245,247,0.12)" stroke-width="1.5"/>
 <circle cx="378" cy="162" r="4.2" fill="#141517" stroke="#f5f5f7" stroke-width="1.6"/>
 <text x="400" y="167" font-size="15" font-weight="600" fill="#f5f5f7">总助 Router 与两层项目档案</text>
-<text x="400" y="189" font-size="12.5" fill="rgba(245,245,247,0.60)">无状态单轮分派 · 跨设备名片与拍板卡汇总</text>
+<text x="400" y="189" font-size="12.5" fill="rgba(245,245,247,0.60)">顶栏快输 · 无状态单轮分派 · 跨设备拍板卡汇总</text>
 <line x1="400" y1="208" x2="760" y2="208" stroke="rgba(245,245,247,0.12)"/>
 <circle cx="378" cy="233" r="4.2" fill="#e07a22" stroke="#f5f5f7" stroke-width="1.4"/>
 <text x="400" y="238" font-size="15" font-weight="600" fill="#f5f5f7">一个项目一个会话</text>
@@ -64,6 +65,6 @@
 <line x1="400" y1="294" x2="760" y2="294" stroke="rgba(245,245,247,0.12)"/>
 <circle cx="378" cy="322" r="4.2" fill="#141517" stroke="#f5f5f7" stroke-width="1.6"/>
 <text x="400" y="327" font-size="15" font-weight="600" fill="#f5f5f7">任务流图与独立工作树</text>
-<text x="400" y="349" font-size="12.5" fill="rgba(245,245,247,0.60)">hub 命令统管 · 自动交棒递进 · 系统级读写沙箱</text>
+<text x="400" y="349" font-size="12.5" fill="rgba(245,245,247,0.60)">hub 命令 · 实时进度清单 · 系统级读写沙箱</text>
 </g>
 </svg>
