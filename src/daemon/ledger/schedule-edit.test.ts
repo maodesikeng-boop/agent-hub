@@ -21,7 +21,6 @@ import {
   SCHEDULE_SHOW_RUNS_MAX,
 } from "../../shared/limits.ts";
 import { planScheduleEdit } from "../../shared/schedule.ts";
-import { listActions } from "../actions/index.ts";
 import { migrate, openDatabase, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createLedger, type SqliteLedger } from "./index.ts";
@@ -336,11 +335,18 @@ describe("S3: enabled/paused nextRunAt recalculation, in-flight runs, archive/un
     expect(runsIn()).toHaveLength(1);
     expect(hub(lin.sessionId, "schedule.show", { scheduleId: created.id }).data.schedule.lastStatus).toBe("skipped");
 
-    const firstAction = listActions(db).find((a) => a.type === "session.send")!;
-    ledger.onActionFailed(firstAction, "boom");
+    ledger.applyDriverEvent(lin.sessionId, {
+      type: "turn.ended",
+      ok: false,
+      interrupted: false,
+      messageIds: [firstRun.id],
+      durationMs: 1,
+      at: now,
+      error: { subtype: "error_during_execution", message: "boom" },
+    });
     expect(hub(lin.sessionId, "schedule.show", { scheduleId: created.id }).data.schedule).toMatchObject({
       lastStatus: "failed",
-      lastError: "boom",
+      lastError: expect.stringContaining("boom"),
     });
 
     now = local(4, 9, 35);
@@ -371,7 +377,8 @@ describe("S3: enabled/paused nextRunAt recalculation, in-flight runs, archive/un
       hub(lin.sessionId, "schedule.edit", { scheduleId: created.id, daily: "09:00" });
 
       process.env.TZ = "America/Los_Angeles";
-      for (let t = now; t <= now + 2 * DAY; t += 30_000) {
+      const end = now + 2 * DAY;
+      for (let t = now; t <= end; t += 30_000) {
         now = t;
         ledger.runDueSchedules(t);
         for (const run of runsIn()) {

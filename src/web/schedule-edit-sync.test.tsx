@@ -59,7 +59,7 @@ describe("S9: web Schedules view stays synchronized on in-place edits and reopen
     expect(within(group).getByText("Last run failed")).toHaveAttribute("title", "上次超时");
     expect(within(group).getAllByRole("switch")).toHaveLength(1);
 
-    await user.click(within(page).getByRole("button", { name: "Back" }));
+    await user.click(within(page).getByRole("button", { name: "Back to Info" }));
     const secondPlan = planScheduleEdit(editedOnce, { everyMinutes: 30 }, baseNow + 120_000);
     expect(secondPlan.ok).toBe(true);
     if (!secondPlan.ok) return;
