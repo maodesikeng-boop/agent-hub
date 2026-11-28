@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, statSync
 import { delimiter, dirname, join, resolve } from "node:path";
 import { API_PATHS, ENV_HOME, ENV_MESH_PORT, ENV_PORT, VENDOR_LIST, type AgentVendor } from "../../src/shared/index.ts";
 import { DESKTOP_PRODUCT } from "../../src/daemon/ui-server/types.ts";
+import { writeExecutableFileAtomicSync } from "../../src/daemon/platform/index.ts";
 import { VENDOR_FALLBACK_PATHS, resolveHubPaths } from "../../src/shared/paths.ts";
 import { VENDOR_PATHS } from "../../src/vendors/paths-registry.ts";
 import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../../src/vendors/agy/paths.ts";
@@ -79,7 +80,11 @@ export function ensureNodeBin(layout: BenchLayout, platform: NodeJS.Platform): s
   const npmBin = join(dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin");
   for (const [tool, script] of [["npm", "npm-cli.js"], ["npx", "npx-cli.js"]] as const) {
     if (!existsSync(join(npmBin, script))) continue;
-    writeFileSync(join(layout.nodeBinDir, tool), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(npmBin, script))} "$@"\n`, { mode: 0o755 });
+    writeExecutableFileAtomicSync(
+      join(layout.nodeBinDir, tool),
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(npmBin, script))} "$@"\n`,
+      { mode: 0o755 },
+    );
   }
   return layout.nodeBinDir;
 }

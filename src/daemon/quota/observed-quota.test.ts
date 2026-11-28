@@ -109,7 +109,7 @@ describe("hub models quota inventory", () => {
     });
     const { body, statusCode } = await api("graph.create", { specJson: JSON.stringify({
       title: "Continue scheduling",
-      nodes: [{ key: "run", title: "Run", vendor: "claude", brief: "Do the job", workspace: "main" }],
+      nodes: [{ key: "run", title: "Run", vendor: "claude", brief: "Do the job" }],
     }) });
     expect(statusCode, body).toBe(200);
     expect(JSON.parse(body).data.graph.nodes[0]).toMatchObject({ status: "running" });

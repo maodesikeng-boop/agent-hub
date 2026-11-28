@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const HUB_LIMIT_SOURCES = [
+  "src/hub/registry.ts",
   "src/hub/usage.ts",
   "src/hub/parse-core.ts",
   "src/hub/parse-worker.ts",

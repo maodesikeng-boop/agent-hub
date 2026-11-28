@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { delimiter, join, posix, win32 } from "node:path";
 import { PROVIDER_AUTH_URL_MAX_CHARS } from "../../../shared/index.ts";
+import { writeExecutableFileAtomicSync } from "../../../daemon/platform/index.ts";
 
 const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))/gu;
 const CAPTURE_POLL_MS = 80;
@@ -114,12 +115,9 @@ function writeCaptureFiles(rootDir: string, platform: string): CaptureFiles {
   } else {
     browserLauncherPath = join(rootDir, "fusa-browser");
     const posixShim = '#!/bin/sh\nexec "$FUSA_CAPTURE_NODE" "$FUSA_CAPTURE_SCRIPT" "$@"\n';
-    writeFileSync(browserLauncherPath, posixShim, { mode: 0o700 });
-    chmodSync(browserLauncherPath, 0o700);
+    writeExecutableFileAtomicSync(browserLauncherPath, posixShim, { mode: 0o700 });
     for (const openerName of ["open", "xdg-open", "sensible-browser"]) {
-      const p = join(openersDir, openerName);
-      writeFileSync(p, posixShim, { mode: 0o700 });
-      chmodSync(p, 0o700);
+      writeExecutableFileAtomicSync(join(openersDir, openerName), posixShim, { mode: 0o700 });
     }
   }
   return { openersDir, capturedFile, captureScriptFile, ttyShimFile, browserLauncherPath };

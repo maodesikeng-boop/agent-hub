@@ -8,9 +8,7 @@ import {
   AGENT_API_CLOSE_MS,
   LEDGER_SETTLE_ON_SHUTDOWN_MS,
   API_PATHS,
-  DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
-  DEFAULT_AGENT_VENDOR,
   ENV_DB_SHARED_ACCESS,
   ENV_DEFAULT_MODEL,
   ENV_GITHUB_CLIENT_ID,
@@ -25,9 +23,10 @@ import {
   MESH_GITHUB_CLIENT_ID,
   PM_AGENDA_REMINDER_TICK_MS,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
+  PROBE_SHUTDOWN_DRAIN_MS,
+  PROCESS_LEDGER_SHUTDOWN_WAIT_MS,
   SCHEDULER_TICK_MS,
   AUTO_RENEW_TICK_MS,
-  checkModel,
   type ActionExecutor,
   type Driver,
   type Unsubscribe,
@@ -40,7 +39,8 @@ import {
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startWorkerRetention } from "./db-retention.ts";
-import { createBusySessions, createSelfReload, createStagedWebBuild, type SelfReloadController } from "./self-reload.ts";
+import { createBusySessions, createSelfReload, createStagedWebBuild, handleSelfReloadCall, type SelfReloadController } from "./self-reload.ts";
+import { describeBusySessionsForReload } from "./self-reload-busy.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createDaemonSessionScope } from "./session-tmp.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
@@ -53,7 +53,7 @@ import {
   workerWorktreePath,
 } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
-import { createProcessLedger, installProcessLedger } from "./process-ledger.ts";
+import { createProcessLedger, installProcessLedger, type ProcessLedger } from "./process-ledger.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
 import {
@@ -101,8 +101,8 @@ import { createProjectCatalogRunner, type ProjectCatalogRunner } from "./project
 import { resolveRouterModel } from "./router/model-resolver.ts";
 import { createRouterTurnPurposes, createRouterTurnRunner } from "./router/single-turn.ts";
 import { createLedger, type SqliteLedger } from "./ledger/index.ts";
+import { ensureFirstRunPm } from "./first-run-pm.ts";
 import { startAgendaReminderLoop, type AgendaReminderLoop } from "./ledger/pm-agenda-reminders.ts";
-import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
 import { createWatchCommandRunner } from "./watches/launch.ts";
@@ -230,6 +230,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     ledger?: SqliteLedger;
     db?: Db;
     lock?: DirLock;
+    processLedger?: ProcessLedger;
     uninstallProcessLedger?: () => void;
     stopFileCleanup?: () => void;
     stopWorkerRetention?: () => void;
@@ -247,8 +248,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
-    parts.selfReload?.close();
-    parts.quota?.close();
+    const closingReload = parts.selfReload ? step("热重启", () => within(parts.selfReload!.close(), PROBE_SHUTDOWN_DRAIN_MS)) : null;
+    const closingQuota = parts.quota ? step("额度探测", () => within(parts.quota!.close(), PROBE_SHUTDOWN_DRAIN_MS)) : null;
     if (scheduler) clearInterval(scheduler);
     parts.agendaReminders?.stop();
     if (autoRenew) clearInterval(autoRenew);
@@ -312,6 +313,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     for (const off of parts.unsubscribe.splice(0)) off();
+    if (closingReload) await closingReload;
+    if (closingQuota) await closingQuota;
+    if (parts.processLedger) await step("子进程记录", () => parts.processLedger!.shutdown({ timeoutMs: PROCESS_LEDGER_SHUTDOWN_WAIT_MS }));
     if (db) await step("数据库", () => db.close());
     parts.uninstallProcessLedger?.();
     if (lock) await step("目录锁", () => lock.release());
@@ -321,6 +325,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.lock = acquireLock(paths.lockFile);
     // Reclaim children left by a crash, killing only recorded pids whose start time still matches.
     const processLedger = createProcessLedger({ file: paths.childProcessesFile, log });
+    parts.processLedger = processLedger;
     try {
       await processLedger.reapStale();
     } catch (error) {
@@ -453,11 +458,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sandboxGuard,
       ...(options.onSelfReload
         ? {
-            selfReload: ({ sessionId, build }: { sessionId: number; build: boolean }) => {
-              if (!parts.selfReload) throw new LedgerRequestError("conflict", "守护进程还没启动完，稍后再试");
-              const result = parts.selfReload.request({ build, by: `项目经理会话 ${sessionId}` });
-              return { text: result.text, data: result.status };
-            },
+            selfReload: (input: { sessionId: number; build: boolean; cancel?: boolean; status?: boolean }) =>
+              handleSelfReloadCall(parts.selfReload, input),
             selfReloadStatus: () => parts.selfReload?.status(),
           }
         : {}),
@@ -551,16 +553,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
     const synced = ledger.syncPersonaFiles();
     if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
-    if (db.get("SELECT 1 AS x FROM pms LIMIT 1") === undefined) {
-      let defaultModel = env[ENV_DEFAULT_MODEL]?.trim() || undefined;
-      const badModel = defaultModel === undefined ? null : checkModel(DEFAULT_AGENT_VENDOR, defaultModel);
-      if (badModel !== null) {
-        log(`${LOG_PREFIX} ${ENV_DEFAULT_MODEL}=${JSON.stringify(defaultModel)} 不能用（${badModel}），项目经理按默认模型建`);
-        defaultModel = undefined;
-      }
-      const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: "", ...(defaultModel ? { defaultModel } : {}) });
-      log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
-    }
+    await ensureFirstRunPm({
+      ledger,
+      models,
+      hasAnyPm: () => db.get("SELECT 1 AS x FROM pms LIMIT 1") !== undefined,
+      defaultModel: env[ENV_DEFAULT_MODEL],
+      log,
+    });
 
     const executor = createActionExecutor(db, ledger);
     const setup = createSetupRunner({ log });
@@ -964,8 +963,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       parts.selfReload = createSelfReload({
         busyReasons: () => {
           const reasons: string[] = [];
-          const sessionsBusy = busySessions.count();
-          if (sessionsBusy > 0) reasons.push(`${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令`);
+          const snapshots = ledger.busySessionSnapshots();
+          if (snapshots.length > 0) {
+            reasons.push(...describeBusySessionsForReload(snapshots, Date.now()));
+          } else {
+            const sessionsBusy = busySessions.count();
+            if (sessionsBusy > 0) reasons.push(`${sessionsBusy} 个会话仍在忙碌`);
+          }
           if (routerDispatcher.busy()) reasons.push("总助分派引擎有规划中或在途分派");
           if (handoverRunner.busy()) reasons.push("后台在写交接");
           if (catalogRunner.busy()) reasons.push("后台在写项目档案");
@@ -982,7 +986,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         },
         subscribe: (listener) => ledger.onChange(listener),
         initialFailure: initialReloadFailure,
-        ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
+        ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply(), cancelBuild: () => webBuild.cleanup() } : {}),
         restart: onSelfReload,
         ...(options.selfReloadDrainMaxMs !== undefined ? { drainMaxMs: options.selfReloadDrainMaxMs } : {}),
         log,

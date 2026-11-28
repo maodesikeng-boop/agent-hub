@@ -2,6 +2,7 @@ import { VENDOR_LIST } from "../vendors/registry.ts";
 import {
   bundledModelCatalog,
   effortsFor,
+  firstUsableVendor,
   isAgentVendor,
   splitModelEffort,
   vendorSpec,
@@ -229,13 +230,12 @@ export function resolveRouterModel(
         }
       : undefined;
 
-  for (const spec of VENDOR_LIST) {
-    const catalog = catalogMap.get(spec.id);
-    if (catalog?.availability !== "available") continue;
-    const resolved = resolveVendorRouterPreset(spec.id, catalog);
+  const autoVendor = firstUsableVendor((vendor) => catalogMap.get(vendor)?.availability ?? "unknown", { probedOnly: true });
+  if (autoVendor !== null) {
+    const resolved = resolveVendorRouterPreset(autoVendor, catalogMap.get(autoVendor));
     return {
       ok: true,
-      vendor: spec.id,
+      vendor: autoVendor,
       model: resolved.model,
       effort: resolved.effort,
       source: resolved.source,

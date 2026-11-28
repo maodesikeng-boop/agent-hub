@@ -49,7 +49,7 @@ import { personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./pe
 import {
   forceKill,
   forceKillTree,
-  killFreshGroup,
+  killChildAndWait,
   signalChild,
   signalPid,
   signalTarget,
@@ -911,7 +911,7 @@ export abstract class BaseSessionDriver<
       throw new DriverError("spawn_failed", `${binaryPath}: ${errorMessage(error)}`);
     }
     if (this.shuttingDown) {
-      killFreshGroup(child);
+      await killChildAndWait(child);
       onCleanup?.();
       this.assertRunning();
     }

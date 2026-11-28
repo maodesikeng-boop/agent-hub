@@ -24,6 +24,7 @@ import {
 } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import { MAX_GATE_SUMMARY_CHARS } from "../../shared/limits.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { addWorktree, remoteBranchHead, resolveBranchTip, resolveCommit } from "../git/index.ts";
@@ -316,7 +317,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     const stepAsk = stepAskResult.data;
     // 回执：卡片在对话里、用户直接点选，右栏和总助只在没拍板时列着，不引导用户去右栏找
     expect(stepAskResult.text).toBe(
-      `已在任务图 #${graph.id} 的步骤「impl」上挂出拍板卡 #${stepAsk.messageId}：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。用户拍板后定案会直接发给该步的 Worker #${wImpl} 接着推进，不会叫醒你。`,
+      `已在任务图 #${graph.id} 的步骤「impl」上挂出拍板卡 #${stepAsk.messageId}（查看或关闭用 ${HUB_COMMAND} ask show/close --message ${stepAsk.messageId}）：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。用户拍板后定案会直接发给该步的 Worker #${wImpl} 接着推进，不会叫醒你。`,
     );
     const casualAskId = ledger.hubCall(lin.sessionId, "ask", {
       options: ["UTF-8", "UTF-8 with BOM"],

@@ -223,11 +223,11 @@ export async function killWin32ProcessTree(pid: number): Promise<void> {
   if (!Number.isInteger(pid) || pid <= 1) return;
   const owned = liveFusaRunByPid.get(pid);
   if (owned) {
+    if (owned.exitCode !== null || owned.signalCode !== null) return;
     try {
-      owned.kill("SIGKILL");
+      if (owned.kill("SIGKILL")) return;
     } catch {
     }
-    return;
   }
   try {
     process.kill(pid, "SIGKILL");

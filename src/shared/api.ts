@@ -697,6 +697,8 @@ export interface SelfReloadStatus {
 
 export interface SelfReloadRequestBody {
   build?: boolean;
+  cancel?: boolean;
+  status?: boolean;
 }
 
 export interface SelfReloadResponse {

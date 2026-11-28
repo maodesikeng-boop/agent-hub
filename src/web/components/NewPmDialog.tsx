@@ -1,12 +1,10 @@
-import { Loader2, Pencil } from "../ui/icons.ts";
-import { useState, type ReactNode } from "react";
+import { Loader2, Pencil, TriangleAlert } from "../ui/icons.ts";
+import { useMemo, useState, type ReactNode } from "react";
 import {
-  DEFAULT_AGENT_SETTING,
   MAX_PERSONA_BYTES,
   DEFAULT_PM_MODE,
   isSelectable,
   normalizeName,
-  pickableVendorCatalogs,
   utf8Bytes,
   type ConversationId,
   type AgentVendor,
@@ -26,11 +24,12 @@ import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
-import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
+import { AgentRows, draftOf, settingOf, type AgentDraft } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { ModeSelect } from "./ModeRows.tsx";
 import { SlimePicker } from "./SlimePicker.tsx";
 import { CollapsibleGroup, InfoAction, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { newPmDefaultVendor, newPmProviderNotice } from "./new-pm-provider.ts";
 
 const FIELD_WIDTH = "w-64";
 
@@ -63,7 +62,10 @@ function NewPmForm({
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [mode, setMode] = useState<PmMode>(DEFAULT_PM_MODE);
-  const [agent, setAgent] = useState(() => draftOf(DEFAULT_AGENT_SETTING));
+  const [pickedAgent, setAgent] = useState<AgentDraft | null>(null);
+  const defaultVendor = newPmDefaultVendor(allCatalogs);
+  const defaultAgent = useMemo(() => draftOf({ vendor: defaultVendor, model: null, effort: null }), [defaultVendor]);
+  const agent = pickedAgent ?? defaultAgent;
   const [persona, setPersona] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
@@ -78,7 +80,7 @@ function NewPmForm({
   const agentResult = settingOf(agent, agentCatalog);
   const vendorUsable = isSelectable(agentCatalog.availability);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && vendorUsable && !busy;
-  const zeroProvidersReady = allCatalogs.length > 0 && pickableVendorCatalogs(allCatalogs).length === 0;
+  const providerNotice = newPmProviderNotice(agentCatalog, allCatalogs);
 
   const pickFolder = async () => {
     setPicking(true);
@@ -172,7 +174,7 @@ function NewPmForm({
               )}
             </SettingsRow>
             <SettingsRow label="Mode">{(id) => <ModeSelect id={id} value={mode} onChange={setMode} disabled={busy} />}</SettingsRow>
-            <CollapsibleGroup title="More settings" defaultOpen={zeroProvidersReady}>
+            <CollapsibleGroup title="More settings" defaultOpen={providerNotice !== null}>
               <section aria-label="Model">
                 <AgentRows
                   value={agent}
@@ -196,6 +198,17 @@ function NewPmForm({
           </SettingsGroup>
         </div>
       </DialogBody>
+      {providerNotice !== null && (
+        <p role="status" className={cn("flex items-center gap-2 text-minor text-foreground", mobile && "px-4 pb-2")}>
+          <TriangleAlert className="size-4 shrink-0 text-warn-foreground" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{providerNotice}</span>
+          {onManageProviders !== undefined && (
+            <InfoAction className="shrink-0" onClick={onManageProviders}>
+              Manage providers…
+            </InfoAction>
+          )}
+        </p>
+      )}
       {error && (
         <p role="alert" title={errorTitle(error)} className={cn("text-minor text-danger [overflow-wrap:anywhere]", mobile && "px-4 pb-2")}>
           {errorLine(error)}

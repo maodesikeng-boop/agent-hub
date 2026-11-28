@@ -8,7 +8,7 @@ import { buildForkSettings } from "./settings.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { assistantContext } from "../../daemon/driver/usage.ts";
 import { buildChildEnv, parseUsage } from "../../daemon/driver/protocol.ts";
-import { killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
@@ -110,8 +110,9 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
           fn();
         };
         const onAbort = (): void => {
-          killFreshGroup(child);
-          finish(() => reject(new Error("aborted")));
+          finish(() => {
+            void killChildAndWait(child).finally(() => reject(new Error("aborted")));
+          });
         };
         signal.addEventListener("abort", onAbort, { once: true });
         child.stdout.setEncoding("utf8").on("data", (c: string) => (stdout += c));

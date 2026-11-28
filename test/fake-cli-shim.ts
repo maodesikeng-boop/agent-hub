@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { writeExecutableFileAtomicSync } from "../src/daemon/platform/index.ts";
 
 /**
  * Generates the exact modern npm `cmd-shim` batch file content (`%_prog%` format)
@@ -44,8 +45,7 @@ export function writeExecutableNodeScript(
   mkdirSync(dirname(basePath), { recursive: true });
   const body = jsSource.replace(/^#![^\r\n]*\r?\n/, "");
   if (platform !== "win32") {
-    writeFileSync(basePath, `#!${process.execPath}\n${body}`, { encoding: "utf8", mode: 0o755 });
-    chmodSync(basePath, 0o755);
+    writeExecutableFileAtomicSync(basePath, `#!${process.execPath}\n${body}`, { mode: 0o755 });
     return basePath;
   }
   const useCjs = options?.cjs ?? /\brequire\s*\(/.test(body);

@@ -2,6 +2,7 @@ import { dirname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
+  CAPABILITY_KINDS,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   HUB_COMMANDS,
@@ -57,6 +58,7 @@ export interface AgentApiOptions {
     | "workerStartFolder"
     | "workerPrTarget"
     | "graphPrTargets"
+    | "graphNeedsCapabilityInventory"
     | "graphAutoDispatchVendors"
     | "workerTranscriptTarget"
     | "shareHubFiles"
@@ -76,7 +78,7 @@ export interface AgentApiOptions {
     commandId: RouterCommandId,
     payload: RouterAgentDispatchInput,
   ) => Promise<{ text: string; data: unknown }>;
-  selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
+  selfReload?: (input: { sessionId: SessionId; build: boolean; cancel?: boolean; status?: boolean }) => { text: string; data: unknown };
   selfReloadStatus?: () => SelfReloadStatus | undefined;
   tokens: SessionTokens;
   logger?: boolean;
@@ -199,6 +201,14 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     properties: { vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS }, refresh: { type: "boolean" } },
+  },
+  caps: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      kind: { type: "string", enum: [...CAPABILITY_KINDS] },
+      vendor: { type: "string", enum: [...AGENT_VENDORS] },
+    },
   },
   ask: {
     type: "object",
@@ -580,6 +590,12 @@ function createPreparation(opts: AgentApiOptions) {
       ]);
       return { modelCatalogs, vendorQuotas };
     }
+    if (command === "caps") {
+      if (opts.capabilityInventory === undefined || signal.aborted) return {};
+      const folder = ledger.workerStartFolder(sessionId);
+      const capabilityInventory = await opts.capabilityInventory.get({ projectDir: folder });
+      return signal.aborted ? {} : { capabilityInventory };
+    }
     if (command === "worker.show") {
       const target = ledger.workerPrTarget(sessionId, body.workerId as number);
       const pr = target === null ? null : await probePr(target.cwd, target.branch);
@@ -615,6 +631,10 @@ function createPreparation(opts: AgentApiOptions) {
       const folder = ledger.workerStartFolder(sessionId);
       if (folder !== null) context.workspace = await probeWorkspace(folder);
       if (signal.aborted) return context;
+      if (opts.capabilityInventory !== undefined && (ledger.graphNeedsCapabilityInventory?.(sessionId, command, body) ?? true)) {
+        context.capabilityInventory = await opts.capabilityInventory.get({ projectDir: folder });
+        if (signal.aborted) return context;
+      }
       if (opts.refreshVendor) {
         const refresh = opts.refreshVendor;
         await Promise.all((ledger.graphAutoDispatchVendors?.(sessionId, command, body) ?? []).map((v) => refresh(v)));
@@ -762,14 +782,30 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     }));
   }
 
-  const selfReloadSchema = { type: "object", additionalProperties: false, properties: { build: { type: "boolean" } } };
+  const selfReloadSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      build: { type: "boolean" },
+      cancel: { type: "boolean" },
+      status: { type: "boolean" },
+    },
+  };
   app.post(SELF_RELOAD_AGENT_PATH, { schema: { body: selfReloadSchema } }, tracked(async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached self.reload without a session");
     // Only PMs may restart the daemon.
     if (ledger.sessionRole(auth.sessionId) !== "pm") throw new LedgerRequestError("forbidden", "只有项目经理可以调用 hub self-reload");
     if (!opts.selfReload) throw new LedgerRequestError("conflict", SELF_RELOAD_UNSUPPORTED_MESSAGE);
-    const result = opts.selfReload({ sessionId: auth.sessionId, build: (req.body as { build?: boolean }).build === true });
+    const body = req.body as { build?: boolean; cancel?: boolean; status?: boolean };
+    const modeCount = Number(body.build === true) + Number(body.cancel === true) + Number(body.status === true);
+    if (modeCount > 1) throw new LedgerRequestError("invalid", "--build、--cancel 和 --status 不能同时用");
+    const result = opts.selfReload({
+      sessionId: auth.sessionId,
+      build: body.build === true,
+      ...(body.cancel === true ? { cancel: true } : {}),
+      ...(body.status === true ? { status: true } : {}),
+    });
     reportHealth(null);
     return reply.code(200).send({ ok: true, text: result.text, data: result.data });
   }));

@@ -1,4 +1,12 @@
-import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, FETCHED_QUOTA_TIMEOUT_MS, type AgentVendor, type FetchedQuotaSpec, type QuotaResponse } from "../../shared/index.ts";
+import {
+  FETCHED_QUOTA_FRESH_MS,
+  FETCHED_QUOTA_RETRY_MS,
+  FETCHED_QUOTA_TIMEOUT_MS,
+  PROBE_SHUTDOWN_DRAIN_MS,
+  type AgentVendor,
+  type FetchedQuotaSpec,
+  type QuotaResponse,
+} from "../../shared/index.ts";
 import { runShortSubcommand } from "../../vendors/_common/setup/file-helpers.ts";
 
 const EMPTY: QuotaResponse = { groups: [] };
@@ -42,9 +50,13 @@ export interface FetchedQuota {
   get(): Promise<QuotaResponse>;
 }
 
-interface CachedQuota extends FetchedQuota {
+export interface CachedQuota extends FetchedQuota {
   invalidate(): void;
   isCurrent(value: QuotaResponse): boolean;
+  /**
+   * Postcondition: marks this source closed, aborts every active and previously invalidated in-flight probe, and resolves only after all of them have settled within timeoutMs.
+   */
+  close(options?: { readonly timeoutMs?: number }): Promise<void>;
 }
 
 function currentWindows(value: QuotaResponse, at: number): { value: QuotaResponse; until: number } {
@@ -72,6 +84,8 @@ export function createFetchedQuota(options: {
   let scope: string | undefined;
   let cached: ReturnType<typeof currentWindows> | undefined;
   let inflight: { abort: AbortController; result: Promise<QuotaResponse> } | undefined;
+  let closed = false;
+  const draining = new Set<{ abort: AbortController; done: Promise<void> }>();
   const invalidate = () => {
     inflight?.abort.abort();
     inflight = undefined;
@@ -80,9 +94,9 @@ export function createFetchedQuota(options: {
 
   return {
     invalidate,
-    isCurrent: (value) => cached?.value === value && now() < cached.until && scope === fingerprint(),
+    isCurrent: (value) => !closed && cached?.value === value && now() < cached.until && scope === fingerprint(),
     get() {
-      if (options.query === undefined) return Promise.resolve(EMPTY);
+      if (closed || options.query === undefined) return Promise.resolve(EMPTY);
       const key = fingerprint();
       if (key !== scope) {
         invalidate();
@@ -91,18 +105,40 @@ export function createFetchedQuota(options: {
       if (cached !== undefined && now() < cached.until) return Promise.resolve(cached.value);
       if (inflight !== undefined) return inflight.result;
       const abort = new AbortController();
+      const run = { abort, done: Promise.resolve() };
       const result = options
         .query(abort.signal)
         .catch(() => EMPTY)
         .then((value) => {
-          if (inflight?.abort !== abort) return EMPTY;
+          if (closed || inflight?.abort !== abort) return EMPTY;
           inflight = undefined;
           if (key !== fingerprint()) return EMPTY;
           cached = value === null ? { value: EMPTY, until: Infinity } : currentWindows(value, now());
           return cached.value;
         });
+      run.done = result.then(() => undefined, () => undefined).finally(() => {
+        draining.delete(run);
+      });
+      draining.add(run);
       inflight = { abort, result };
       return result;
+    },
+    async close(closeOptions?: { readonly timeoutMs?: number }): Promise<void> {
+      closed = true;
+      invalidate();
+      for (const run of draining) run.abort.abort();
+      const pending = [...draining].map((run) => run.done);
+      if (pending.length === 0) return;
+      const timeoutMs = closeOptions?.timeoutMs ?? PROBE_SHUTDOWN_DRAIN_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(pending),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+          timer.unref();
+        }),
+      ]);
+      clearTimeout(timer);
     },
   };
 }
