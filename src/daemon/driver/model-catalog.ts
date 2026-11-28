@@ -91,6 +91,7 @@ interface VendorCatalogSlot {
   readonly source: VendorCatalogSource | undefined;
   cached: ModelCatalog | null;
   cachedAt: number;
+  degraded: boolean;
   availability: VendorAvailability | null;
   availabilityAt: number;
   failedAt: number | null;
@@ -107,6 +108,7 @@ function fingerprintChanged(previous: CatalogFingerprint | null, current: Catalo
 function resetCatalog(slot: VendorCatalogSlot, fingerprint: CatalogFingerprint | null): void {
   slot.cached = null;
   slot.cachedAt = 0;
+  slot.degraded = false;
   slot.availability = null;
   slot.availabilityAt = 0;
   slot.failedAt = null;
@@ -116,10 +118,12 @@ function resetCatalog(slot: VendorCatalogSlot, fingerprint: CatalogFingerprint |
 async function probeCatalog(source: VendorCatalogSource, vendor: AgentVendor, signal: AbortSignal) {
   let availability: VendorAvailability;
   let catalog: ModelCatalog | null = null;
+  let degraded = false;
   let reason: string | null = null;
   try {
     const raw = await source.query(signal);
     availability = source.availabilityOf?.(raw) ?? "available";
+    degraded = source.isDegraded?.(raw) === true;
     catalog = source.parse(raw);
     if (catalog === null) reason = "回的名单是空的或者认不出";
   } catch (error) {
@@ -129,7 +133,7 @@ async function probeCatalog(source: VendorCatalogSource, vendor: AgentVendor, si
   if (availability === "unknown" && source.confirm && !signal.aborted) {
     availability = await source.confirm(signal).catch((): VendorAvailability => "unknown");
   }
-  return { catalog, availability, reason };
+  return { catalog, availability, degraded, reason };
 }
 
 export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalogs {
@@ -146,6 +150,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       source: options.sources[vendor],
       cached: null,
       cachedAt: 0,
+      degraded: false,
       availability: null,
       availabilityAt: 0,
       failedAt: null,
@@ -167,12 +172,16 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     }
     return slot.fingerprintSeen;
   };
+  const resetIfChanged = (slot: VendorCatalogSlot, next: CatalogFingerprint | null): boolean => {
+    if (!fingerprintChanged(slot.fingerprint, next)) return false;
+    const inputsChanged = slot.fingerprint !== null && slot.fingerprint.inputs !== next?.inputs;
+    resetCatalog(slot, next);
+    if (inputsChanged) options.onInputsChanged?.(slot.vendor);
+    return true;
+  };
   const invalidateOnChange = (slot: VendorCatalogSlot): boolean => {
     if (slot.fingerprint === null) return false;
-    const fingerprint = fingerprintOf(slot, false);
-    if (!fingerprintChanged(slot.fingerprint, fingerprint)) return false;
-    resetCatalog(slot, fingerprint);
-    return true;
+    return resetIfChanged(slot, fingerprintOf(slot, false));
   };
 
   const ask = (slot: VendorCatalogSlot): Promise<void> => {
@@ -182,21 +191,23 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       for (let attempt = 0; attempt < MODEL_CATALOG_MAX_PROBE_ATTEMPTS; attempt++) {
         if (closed || !installed(slot)) return;
         const before = fingerprintOf(slot, true);
-        if (fingerprintChanged(slot.fingerprint, before)) resetCatalog(slot, before);
-        const { catalog, availability, reason } = await probeCatalog(source, slot.vendor, controller.signal);
+        resetIfChanged(slot, before);
+        const { catalog, availability, degraded, reason } = await probeCatalog(source, slot.vendor, controller.signal);
         if (closed) return;
         const after = fingerprintOf(slot, true);
         // Some CLIs rewrite catalog or account state during discovery itself.
         if (before?.inputs !== after?.inputs) {
           resetCatalog(slot, after);
+          options.onInputsChanged?.(slot.vendor);
           continue;
         }
         const at = now();
-        if (catalog !== null) {
+        if (catalog !== null && (!degraded || slot.cached === null || slot.degraded)) {
           slot.cached = catalog;
           slot.cachedAt = at;
+          slot.degraded = degraded;
         }
-        slot.failedAt = catalog === null ? at : null;
+        slot.failedAt = catalog === null || degraded ? at : null;
         slot.fingerprint = after;
         slot.availability = availability;
         slot.availabilityAt = at;
