@@ -52,8 +52,12 @@ export function readStoredArtifact(raw: string | null): {
   checkpointRejectionClientId?: string;
 } {
   const parsed = parseJsonOr<StoredTaskArtifact | null>(raw, null);
-  if (parsed === null) return { artifact: null, checkpointPending: false };
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { artifact: null, checkpointPending: false };
+  }
   const { checkpointPending, checkpointRejectionClientId, reviewStamp: _legacyReviewStamp, ...rest } = parsed;
+  if (typeof rest.branch !== "string") delete rest.branch;
+  if (typeof rest.commit !== "string") delete rest.commit;
   return {
     artifact: Object.keys(rest).length > 0 ? rest : null,
     checkpointPending: checkpointPending === true,

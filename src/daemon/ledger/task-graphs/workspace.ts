@@ -244,14 +244,12 @@ function latestWorktreeWorker(db: Db, projectId: number, step: TaskNodeDbRow): U
 
 const REPORTED_COMMIT = /\b[0-9a-f]{7,40}\b/i;
 
-function deliveredCommitFrom(step: TaskNodeDbRow | undefined): string | null {
-  if (step === undefined) return null;
-  const reported = readStoredArtifact(step.artifact_json).artifact?.commit ?? "";
-  return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
-}
-
-function deliveredArtifactBranch(step: TaskNodeDbRow): string | null {
-  return readStoredArtifact(step.artifact_json).artifact?.branch?.trim() || null;
+function readWorkspaceDelivery(step: TaskNodeDbRow): { branch: string | null; commit: string | null } {
+  const { artifact } = readStoredArtifact(step.artifact_json);
+  return {
+    branch: artifact?.branch?.trim() || null,
+    commit: REPORTED_COMMIT.exec(artifact?.commit ?? "")?.[0]?.toLowerCase() ?? null,
+  };
 }
 
 function deliveredCommitForTarget(
@@ -261,17 +259,17 @@ function deliveredCommitForTarget(
   db?: Db,
 ): string | null {
   if (step === undefined) return null;
-  const artifactBranch = deliveredArtifactBranch(step);
+  const { branch, commit } = readWorkspaceDelivery(step);
   if (targetBranch !== null) {
-    const deliveredBranch = artifactBranch ?? (db === undefined ? null : latestWorktreeWorker(db, projectId, step)?.branch ?? null);
-    return deliveredBranch === targetBranch ? deliveredCommitFrom(step) : null;
+    const deliveredBranch = branch ?? (db === undefined ? null : latestWorktreeWorker(db, projectId, step)?.branch ?? null);
+    return deliveredBranch === targetBranch ? commit : null;
   }
   if (db === undefined) {
-    return artifactBranch === null ? deliveredCommitFrom(step) : null;
+    return branch === null ? commit : null;
   }
   const worker = latestWorktreeWorker(db, projectId, step);
   if (worker === null) return null;
-  return (artifactBranch ?? worker.branch) === worker.branch ? deliveredCommitFrom(step) : null;
+  return (branch ?? worker.branch) === worker.branch ? commit : null;
 }
 
 export function upstreamDeliveredCommit(input: PlanInput, db?: Db): string | null {
@@ -289,9 +287,11 @@ export function upstreamDeliveredCommit(input: PlanInput, db?: Db): string | nul
   if (lineage.kind === "step_and_base") {
     if (db === undefined) return null;
     const u = input.byKey.get(lineage.stepKey);
-    const worker = u === undefined ? null : latestWorktreeWorker(db, graphRow.project_id, u);
+    if (u === undefined) return null;
+    const worker = latestWorktreeWorker(db, graphRow.project_id, u);
     if (worker === null || worker.branch !== lineage.branch) return null;
-    return (deliveredArtifactBranch(u!) ?? worker.branch) === lineage.branch ? deliveredCommitFrom(u) : null;
+    const { branch, commit } = readWorkspaceDelivery(u);
+    return (branch ?? worker.branch) === lineage.branch ? commit : null;
   }
   if (lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one") {
     return deliveredCommitForTarget(input.byKey.get(lineage.sourceStep.stepKey), lineage.branch, graphRow.project_id, db);

@@ -266,6 +266,44 @@ describe("Task Graph multi-review fan-in workspace inheritance (end-to-end)", ()
       expect(taskText(wFix1)).toContain(`Worker #${wImpl}`);
     });
 
+    it("S10: syncs the inherited worktree after parallel reviews when the stored delivery branch is not a string", async () => {
+      const graph = createGraph([
+        { key: "impl", title: "Implement", brief: "Implement", deps: [] },
+        { key: "rev1", title: "Review 1", brief: "Review", review: true, deps: ["impl"] },
+        { key: "rev2", title: "Review 2", brief: "Review", review: true, deps: ["impl"] },
+        { key: "fix", title: "Fix", brief: "Fix", deps: ["rev1", "rev2"] },
+      ]);
+      const wImpl = graph.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl);
+      const impl = workerRow(wImpl);
+      git(impl.worktree_path, "push", "--quiet", "origin", impl.branch!);
+      const implSha = git(impl.worktree_path, "rev-parse", "HEAD");
+      await reportTurn(wImpl, report({ summary: "Implemented", commit: implSha }));
+
+      for (const nodeKey of ["rev1", "rev2"]) {
+        const workerId = graphNow(graph.id).nodes.find((n) => n.key === nodeKey)!.activeWorkerId!;
+        await prepareWorkspace(workerId);
+        await reportTurn(workerId, report({ status: "有问题", summary: "Needs a fix", verdict: "FAIL", sha: implSha }));
+        ledger.hubCall(lin.sessionId, "worker.end", { workerId });
+        ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey });
+      }
+
+      const wFix = graphNow(graph.id).nodes.find((n) => n.key === "fix")!.activeWorkerId!;
+      const remoteHead = pushFromElsewhere(impl.branch!, "export const a = 42;\n");
+      db.run(
+        "UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'impl'",
+        '{"branch":123,"commit":"abcd1234"}', graph.id,
+      );
+
+      expect(ledger.getWorktreeSyncTask(wFix)).toMatchObject({
+        kind: "sync", worktreePath: impl.worktree_path, branch: impl.branch, expected: "abcd1234",
+      });
+      expect(await runSync(wFix)).toEqual({ kind: "done" });
+      expect(workerRow(wFix)).toMatchObject({ branch: impl.branch, worktree_path: impl.worktree_path, base_commit: implSha });
+      expect(git(impl.worktree_path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(graphNow(graph.id).nodes.find((n) => n.key === "impl")?.artifact).toEqual({ commit: "abcd1234" });
+    });
+
     it("S2: multi-round parallel review diamonds (impl -> [r1a, r1b] -> fix1 -> [r2a, r2b] -> fix2) preserve one worktree and PR branch across consecutive rounds and turns", async () => {
       const graph = createGraph([
         { key: "impl", title: "Implement", brief: "Impl", deps: [] },

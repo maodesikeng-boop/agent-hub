@@ -242,6 +242,27 @@ describe("upstreamDeliveredCommit artifact.branch matching", () => {
     expect(upstreamDeliveredCommit(planFor(overridden, "revOther"), db)).toBe("cccc3333");
   });
 
+  it("S10: uses only a known worktree branch when the stored delivery branch has the wrong type", () => {
+    seedWorker(db, { id: 4, branch: "feature/a", worktreePath: makeDir("wt-a"), baseCommit: "44444444" });
+    for (const workerIds of [[4], []]) {
+      const maps = makeStepMaps([
+        { key: "impl", status: "done", workerIds, artifactJson: '{"branch":123,"commit":"abcd1234"}' },
+        { key: "revA", review: true, base: "feature/a", deps: ["impl"] },
+        { key: "revB", review: true, base: "feature/b", deps: ["impl"] },
+      ]);
+      expect(upstreamDeliveredCommit(planFor(maps, "revA"), db)).toBe(workerIds.length === 0 ? null : "abcd1234");
+      expect(upstreamDeliveredCommit(planFor(maps, "revB"), db)).toBeNull();
+    }
+  });
+
+  it.each([{ commit: 12345678 }, { commit: ["abcd1234"] }, { commit: { toString: null } }])("S10: ignores a non-string stored commit (%j)", ({ commit }) => {
+    const maps = makeStepMaps([
+      { key: "impl", status: "done", artifactJson: JSON.stringify({ branch: "feature/a", commit }) },
+      { key: "revA", review: true, base: "feature/a", deps: ["impl"] },
+    ]);
+    expect(upstreamDeliveredCommit(planFor(maps, "revA"), db)).toBeNull();
+  });
+
   it("keeps delivered commit when artifact.branch matches the worker branch or is whitespace-only, and isolates step_and_base fresh degradation", () => {
     const wtA = makeDir("wt-a-match");
     seedWorker(db, { id: 4, branch: "feature/a", worktreePath: wtA, baseCommit: "44444444" });
