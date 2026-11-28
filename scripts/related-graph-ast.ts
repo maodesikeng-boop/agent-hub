@@ -5,6 +5,7 @@ import {
   DYNAMIC_OR_PATH_HINT,
   isAstNode,
   isTypeOnlyNode,
+  moduleRuntimeIdentity,
   resolveRelativeModule,
   staticStringValue,
   toRepoPosixPath,
@@ -597,10 +598,11 @@ function analyzeModuleDetailed(
       const spec = staticStringValue(stmt.source);
       if (spec === null) continue;
       const target = resolveRelativeModule(file, spec, knownFiles);
+      const moduleId = moduleRuntimeIdentity(spec, target);
       const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
       if (specifiers.length === 0) {
-        sideEffectImportTargets.add(target ?? spec);
-        addStaticModuleDep(target ?? spec);
+        sideEffectImportTargets.add(moduleId);
+        addStaticModuleDep(moduleId);
         if (target !== null) addImport({ target, imported: "*", local: null });
         continue;
       }
@@ -617,10 +619,10 @@ function analyzeModuleDetailed(
           if (name === null) continue;
           imported = name;
         }
-        importBindingFingerprints.set(local, `${target ?? spec}#${imported}`);
+        importBindingFingerprints.set(local, `${moduleId}\0${imported}`);
         if (target !== null) addImport({ target, imported, local });
       }
-      if (hasRuntimeSpecifier) addStaticModuleDep(target ?? spec);
+      if (hasRuntimeSpecifier) addStaticModuleDep(moduleId);
       continue;
     }
 
@@ -629,13 +631,14 @@ function analyzeModuleDetailed(
       const spec = staticStringValue(stmt.source);
       if (spec === null) continue;
       const target = resolveRelativeModule(file, spec, knownFiles);
-      addStaticModuleDep(target ?? spec);
+      const moduleId = moduleRuntimeIdentity(spec, target);
+      addStaticModuleDep(moduleId);
       const exported = exportOrImportName(stmt.exported);
       if (exported === null) {
-        wildcardReexportTargets.add(target ?? spec);
+        wildcardReexportTargets.add(moduleId);
         if (target !== null) reexports.push({ target, exported: "*", imported: "*" });
       } else {
-        namedReexportFingerprints.set(exported, { source: target ?? spec, imported: "*" });
+        namedReexportFingerprints.set(exported, { source: moduleId, imported: "*" });
         if (target !== null) reexports.push({ target, exported, imported: "*" });
       }
       continue;
@@ -647,6 +650,7 @@ function analyzeModuleDetailed(
         const spec = staticStringValue(stmt.source);
         if (spec === null) continue;
         const target = resolveRelativeModule(file, spec, knownFiles);
+        const moduleId = moduleRuntimeIdentity(spec, target);
         const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
         let hasRuntimeSpecifier = specifiers.length === 0;
         for (const s of specifiers) {
@@ -655,10 +659,10 @@ function analyzeModuleDetailed(
           const exported = exportOrImportName(s.exported);
           if (imported === null || exported === null) continue;
           hasRuntimeSpecifier = true;
-          namedReexportFingerprints.set(exported, { source: target ?? spec, imported });
+          namedReexportFingerprints.set(exported, { source: moduleId, imported });
           if (target !== null) reexports.push({ target, exported, imported });
         }
-        if (hasRuntimeSpecifier) addStaticModuleDep(target ?? spec);
+        if (hasRuntimeSpecifier) addStaticModuleDep(moduleId);
         continue;
       }
       if (isAstNode(stmt.declaration)) {

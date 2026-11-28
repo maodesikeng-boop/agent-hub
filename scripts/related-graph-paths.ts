@@ -108,6 +108,13 @@ export function resolveRelativeModule(fromFile: string, specifier: string, known
   return null;
 }
 
+// Preserves ?query/#hash suffixes on resolved paths so `?raw`/`?url` variants keep distinct runtime identities.
+export function moduleRuntimeIdentity(specifier: string, resolvedTarget: string | null): string {
+  if (resolvedTarget === null) return specifier;
+  const suffixIdx = specifier.search(/[?#]/);
+  return suffixIdx === -1 ? resolvedTarget : `${resolvedTarget}${specifier.slice(suffixIdx)}`;
+}
+
 function resolveRepoPath(candidate: string, knownFiles: ReadonlySet<string>): string | null {
   const clean = toRepoPosixPath(posix.normalize(candidate.split(/[?#]/, 1)[0]!));
   return knownFiles.has(clean) ? clean : null;
