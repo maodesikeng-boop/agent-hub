@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   feishuGuestTierOrder,
   feishuGuestTierPolicy,
   feishuGuestTurnBlockReason,
+  feishuOriginOf,
   resolveFeishuGuestTier,
   type FeishuChatId,
   type FeishuGuestTier,
@@ -17,7 +18,11 @@ import {
   type FeishuOpenId,
 } from "../../shared/feishu.ts";
 import { AGENT_VENDORS, bundledModelCatalog } from "../../shared/vendors.ts";
+import { deliveryParts } from "../../shared/worker.ts";
 import { runFeishuCli, type FeishuCliIo } from "../../feishu/cli.ts";
+import { checkReadonlyWorkerSandbox } from "../driver/kernel-readonly.ts";
+import { createResolveFolder } from "../ledger/files.ts";
+import { createLedger } from "../ledger/ledger.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase, type Db } from "../store/index.ts";
 import { writeMigrationManifest } from "../store/test-helpers.ts";
 import { decodeFeishuActionValue, renderChatPolicyCard, type FeishuCardJson } from "./cards.ts";
@@ -300,6 +305,269 @@ describe("Feishu guest security boundary (new and changed behavior)", () => {
     });
     expect(store.chats().every((c) => c.guestTier === "observer")).toBe(true);
     expect(feishuGuestTurnBlockReason("watch.add", makeOrigin({ guestTier: "chat_only" }))).toMatch(/访客/u);
+  });
+
+  it("S4 & S10 regression: upgrading from schema 60 tightens malformed guest_tier rows to observer without failing CHECK", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fusa-feishu-mig-dirty-"));
+    tempDirs.push(dir);
+    const v60Migrations = join(dir, "m60");
+    cpSync(DEFAULT_MIGRATIONS_DIR, v60Migrations, { recursive: true });
+    for (const name of readdirSync(v60Migrations)) {
+      const version = /^(\d+)_.*\.sql$/.exec(name)?.[1];
+      if (version !== undefined && Number(version) > 60) unlinkSync(join(v60Migrations, name));
+    }
+    writeMigrationManifest(v60Migrations);
+
+    const db = openDatabase(join(dir, "hub.sqlite"));
+    openDbs.push(db);
+    expect(migrate(db, v60Migrations).to).toBe(60);
+
+    const pmCollab = insertPm(db, "Collab");
+    const pmLegacy = insertPm(db, "Legacy");
+    const pmDirty = insertPm(db, "Dirty");
+    const pmBlank = insertPm(db, "Blank");
+    db.exec("PRAGMA ignore_check_constraints = ON");
+    try {
+      db.run(
+        "INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, guest_tier, created_at, updated_at) VALUES (?, 'pm', ?, 'Collab', 'Collab', 'collaborator', 1, 1)",
+        "oc_dirty_collab",
+        pmCollab,
+      );
+      db.run(
+        "INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, guest_tier, created_at, updated_at) VALUES (?, 'pm', ?, 'Legacy', 'Legacy', 'chat_only', 1, 1)",
+        "oc_dirty_legacy",
+        pmLegacy,
+      );
+      db.run(
+        "INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, guest_tier, created_at, updated_at) VALUES (?, 'pm', ?, 'Dirty', 'Dirty', 'legacy_admin', 1, 1)",
+        "oc_dirty_bad",
+        pmDirty,
+      );
+      db.run(
+        "INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, guest_tier, created_at, updated_at) VALUES (?, 'pm', ?, 'Blank', 'Blank', '', 1, 1)",
+        "oc_dirty_blank",
+        pmBlank,
+      );
+    } finally {
+      db.exec("PRAGMA ignore_check_constraints = OFF");
+    }
+
+    const upgrade = migrate(db, DEFAULT_MIGRATIONS_DIR);
+    expect(upgrade.to).toBeGreaterThan(60);
+
+    const store = createFeishuStore(db);
+    expect(store.chatById("oc_dirty_collab" as FeishuChatId)?.guestTier).toBe("collaborator");
+    expect(store.chatById("oc_dirty_legacy" as FeishuChatId)?.guestTier).toBe("observer");
+    expect(store.chatById("oc_dirty_bad" as FeishuChatId)?.guestTier).toBe("observer");
+    expect(store.chatById("oc_dirty_blank" as FeishuChatId)?.guestTier).toBe("observer");
+  });
+
+  it("S10 regression: historical shared messages missing or carrying invalid guestTier preserve main delivery format while failing closed on guest auth", () => {
+    const legacyMissingTier = {
+      workerId: null,
+      sender: "user" as const,
+      text: "list open tasks",
+      meta: {
+        origin: {
+          kind: "feishu",
+          openId: GUEST,
+          name: "Guest",
+          role: "guest",
+          mode: "shared",
+          context: [{ name: "Owner", role: "owner", text: "earlier note", at: 1 }],
+        },
+      },
+    };
+    const legacyCorruptTier = {
+      ...legacyMissingTier,
+      meta: {
+        origin: {
+          ...legacyMissingTier.meta.origin,
+          guestTier: "legacy_unknown",
+        },
+      },
+    };
+    const validShared = {
+      ...legacyMissingTier,
+      meta: {
+        origin: {
+          ...legacyMissingTier.meta.origin,
+          guestTier: "observer",
+        },
+      },
+    };
+
+    expect(deliveryParts(legacyMissingTier)).toEqual({ prefixes: [], text: "list open tasks" });
+    expect(deliveryParts(legacyCorruptTier)).toEqual({ prefixes: [], text: "list open tasks" });
+    expect(deliveryParts(validShared)).toEqual({
+      prefixes: ["【飞书 · Guest（访客）】", "群里之前的讨论（没 @机器人 的话，按时间先后）：\nOwner（主人）：earlier note"],
+      text: "list open tasks",
+    });
+
+    for (const msg of [legacyMissingTier, legacyCorruptTier]) {
+      const authOrigin = feishuOriginOf(msg);
+      expect(authOrigin?.guestTier).toBe("observer");
+      expect(feishuGuestTurnBlockReason("watch.add", authOrigin)).toMatch(/访客/u);
+      expect(feishuGuestTurnBlockReason("schedule.pause", authOrigin)).toMatch(/访客/u);
+    }
+  });
+
+  it("S9: migrating 100 chats, 300 finished workers, and 30,000 messages from v60 preserves defaults, messages_in_flight index, and guest blocks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fusa-feishu-s9-"));
+    tempDirs.push(dir);
+    const v60Migrations = join(dir, "m60");
+    cpSync(DEFAULT_MIGRATIONS_DIR, v60Migrations, { recursive: true });
+    for (const name of readdirSync(v60Migrations)) {
+      const version = /^(\d+)_.*\.sql$/.exec(name)?.[1];
+      if (version !== undefined && Number(version) > 60) unlinkSync(join(v60Migrations, name));
+    }
+    writeMigrationManifest(v60Migrations);
+
+    const projectDir = join(dir, "repo");
+    const dataHome = join(dir, "hub-data");
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(dataHome, { recursive: true });
+
+    const db = openDatabase(join(dir, "hub.sqlite"));
+    openDbs.push(db);
+    expect(migrate(db, v60Migrations).to).toBe(60);
+
+    let firstPmId = 0;
+    let firstConvId = 0;
+    let firstSessionId = 0;
+    let firstProjectId = 0;
+    db.transaction(() => {
+      for (let i = 1; i <= 100; i++) {
+        const pmId = insertPm(db, `VolPM-${i}`);
+        const tier = i % 3 === 0 ? "collaborator" : i % 3 === 1 ? "chat_only" : "observer";
+        db.run(
+          "INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, guest_tier, created_at, updated_at) VALUES (?, 'pm', ?, ?, ?, ?, ?, ?)",
+          `oc_vol_${i}`,
+          pmId,
+          `VolPM-${i}`,
+          `VolPM-${i}`,
+          tier,
+          i,
+          i,
+        );
+        if (i === 1) {
+          firstPmId = pmId;
+          firstConvId = db.get<{ id: number }>(
+            "INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', ?, 'VolPM-1', 1) RETURNING id",
+            pmId,
+          )!.id;
+          firstProjectId = db.get<{ id: number }>(
+            "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('Repo', ?, ?, 1, 1) RETURNING id",
+            pmId,
+            firstConvId,
+          )!.id;
+          firstSessionId = db.get<{ id: number }>(
+            "INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, created_at, updated_at) VALUES ('pm', ?, ?, 'claude', 'vs_vol_1', ?, 1, 1) RETURNING id",
+            firstConvId,
+            pmId,
+            projectDir,
+          )!.id;
+        }
+      }
+
+      for (let w = 1; w <= 300; w++) {
+        const workerConvId = db.get<{ id: number }>(
+          "INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', ?, ?, ?, ?) RETURNING id",
+          firstPmId,
+          firstProjectId,
+          `Worker-${w}`,
+          w,
+        )!.id;
+        db.run(
+          `INSERT INTO workers (
+             project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task,
+             readonly, workspace, status, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, 'done task', 0, 'main', 'ended', ?, ?)`,
+          firstProjectId,
+          firstPmId,
+          firstConvId,
+          workerConvId,
+          `Worker-${w}`,
+          w,
+          w,
+        );
+      }
+
+      const settledMeta = JSON.stringify({
+        origin: { kind: "feishu", openId: OWNER, name: "Owner", role: "owner", mode: "shared", guestTier: "observer", context: [] },
+      });
+      for (let m = 1; m <= 29_999; m++) {
+        db.run(
+          `INSERT INTO messages (
+             conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at
+           ) VALUES (?, ?, 'user', 'text', 'settled', ?, ?, 'replied', ?, ?)`,
+          firstConvId,
+          firstSessionId,
+          settledMeta,
+          `vol:settled:${m}`,
+          m,
+          m,
+        );
+      }
+      const inFlightGuestMeta = JSON.stringify({
+        origin: { kind: "feishu", openId: GUEST, name: "Guest", role: "guest", mode: "shared", guestTier: "chat_only", context: [] },
+      });
+      db.run(
+        `INSERT INTO messages (
+           conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at
+         ) VALUES (?, ?, 'user', 'text', 'create watch', ?, 'vol:inflight:guest', 'processing', 30000, 30000)`,
+        firstConvId,
+        firstSessionId,
+        inFlightGuestMeta,
+      );
+    });
+
+    const upgrade = migrate(db, DEFAULT_MIGRATIONS_DIR);
+    expect(upgrade.to).toBeGreaterThan(60);
+
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM workers WHERE status = 'ended'")?.n).toBe(300);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM messages")?.n).toBe(30_000);
+
+    const store = createFeishuStore(db);
+    const chats = store.chats();
+    expect(chats).toHaveLength(100);
+    let collabCount = 0;
+    let observerCount = 0;
+    for (const chat of chats) {
+      if (chat.guestTier === "collaborator") collabCount++;
+      else if (chat.guestTier === "observer") observerCount++;
+    }
+    expect(collabCount).toBe(33);
+    expect(observerCount).toBe(67);
+
+    const plan = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT meta FROM messages INDEXED BY messages_in_flight WHERE session_id = ? AND status IN ('delivered', 'processing') AND sender = 'user' AND meta IS NOT NULL",
+        firstSessionId,
+      )
+      .map((r) => r.detail)
+      .join(" ");
+    expect(plan).toContain("messages_in_flight");
+
+    const ledger = createLedger(db, {
+      pmHomeRoot: join(dataHome, "pm-home"),
+      dataHome,
+      worktreesDir: join(dataHome, "worktrees"),
+      userHome: dir,
+      resolveFolder: createResolveFolder({ dataHome, userHome: dir }),
+    });
+    expect(() =>
+      ledger.hubCall(firstSessionId, "watch.add", {
+        everyMs: 60_000,
+        body: "check status",
+      }),
+    ).toThrow(/访客/u);
+
+    expect(resolveFeishuGuestTier("chat_only")).toBe("chat_only");
+    expect(resolveFeishuGuestTier("bad")).toBe("observer");
+    expect(
+      checkReadonlyWorkerSandbox({ vendor: "pi", platform: "win32", osSandboxed: true, readonlyKernelSandboxed: false }).ok,
+    ).toBe(false);
   });
 });
 

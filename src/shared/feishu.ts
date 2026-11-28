@@ -159,7 +159,10 @@ function isContextLine(value: unknown): value is FeishuContextLine {
   return typeof v.name === "string" && isOne(FEISHU_SPEAKER_ROLES, v.role) && typeof v.text === "string" && typeof v.at === "number";
 }
 
-export function feishuOriginOf(message: { meta: Record<string, unknown> | null }): FeishuMessageOrigin | null {
+function parseFeishuOrigin(
+  message: { meta: Record<string, unknown> | null },
+  requireValidGuestTier: boolean,
+): FeishuMessageOrigin | null {
   const raw = message.meta?.origin;
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw as Record<string, unknown>;
@@ -169,6 +172,7 @@ export function feishuOriginOf(message: { meta: Record<string, unknown> | null }
     typeof o.name !== "string" ||
     !isOne(FEISHU_SPEAKER_ROLES, o.role) ||
     !isOne(FEISHU_CHAT_MODES, o.mode) ||
+    (requireValidGuestTier && !isOne(FEISHU_GUEST_TIERS, o.guestTier)) ||
     !Array.isArray(o.context)
   ) {
     return null;
@@ -182,6 +186,15 @@ export function feishuOriginOf(message: { meta: Record<string, unknown> | null }
     guestTier: resolveFeishuGuestTier(o.guestTier),
     context: o.context.filter(isContextLine),
   };
+}
+
+export function feishuOriginOf(message: { meta: Record<string, unknown> | null }): FeishuMessageOrigin | null {
+  return parseFeishuOrigin(message, false);
+}
+
+// Keep PM delivery formatting identical to historical records when legacy meta.origin lacks a valid guestTier.
+export function feishuDeliveryOriginOf(message: { meta: Record<string, unknown> | null }): FeishuMessageOrigin | null {
+  return parseFeishuOrigin(message, true);
 }
 
 export function feishuDeliveryPrefixes(origin: FeishuMessageOrigin): string[] {

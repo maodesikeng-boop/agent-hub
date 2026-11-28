@@ -1,4 +1,4 @@
--- 0061_feishu_guest_tier_default: change feishu_chats.guest_tier default to 'observer' and downgrade legacy auto-defaulted 'chat_only' rows to 'observer' while preserving explicit 'collaborator' rows.
+-- 0061_feishu_guest_tier_default: change feishu_chats.guest_tier default to 'observer' and tighten every non-'collaborator' row (including legacy 'chat_only' and malformed tiers) to 'observer'.
 DROP TRIGGER IF EXISTS feishu_router_item_insert;
 DROP TRIGGER IF EXISTS feishu_router_command_insert;
 DROP TRIGGER IF EXISTS feishu_router_command_complete;
@@ -28,7 +28,7 @@ INSERT INTO feishu_chats_new (
 )
   SELECT
     chat_id, target, pm_id, name, label, avatar_fruit, trigger_mode,
-    CASE WHEN guest_tier = 'chat_only' THEN 'observer' ELSE guest_tier END,
+    CASE WHEN guest_tier = 'collaborator' THEN 'collaborator' ELSE 'observer' END,
     archived_at, last_message_id, last_router_event_id, created_at, updated_at
   FROM feishu_chats;
 

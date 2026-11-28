@@ -1,4 +1,4 @@
-// The MXC SDK is loaded lazily so non-Windows hosts never touch it; unsupported hosts fall back to restricted tokens instead of refusing.
+// The MXC SDK is loaded lazily so non-Windows hosts never touch it; unsupported hosts fail closed instead of falling back.
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -298,7 +298,7 @@ export function probeWin32MxcSupport(options?: {
       available: false,
       reason: "dacl_tier_excluded",
       tier: probeOut.tier,
-      detail: `ProcessContainer selected ${probeOut.tier} (requires host DACL mutation); falling back to restricted-token sandbox`,
+      detail: `ProcessContainer selected ${probeOut.tier} (requires host DACL mutation); read-only container unavailable`,
       warnings,
       nodeVersion,
       checkedAt: now,

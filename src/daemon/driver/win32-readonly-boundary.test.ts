@@ -239,6 +239,76 @@ describe("Windows strict read-only sandbox boundary (new and changed behavior)",
       }),
     ).toThrow(/MXC/u);
   });
+
+  it("S5: queued readonly step created while MXC is available fails closed if MXC disappears before auto-dispatch, and starts once MXC returns", () => {
+    let mxcReady = true;
+    const { ledger, pmSessionId } = createWin32LedgerFixture({
+      osSandboxed: () => true,
+      readonlyKernelSandboxed: () => mxcReady,
+    });
+
+    const created = ledger.hubCall(pmSessionId, "graph.create", {
+      title: "Dynamic MXC switch graph",
+      specJson: JSON.stringify({
+        goal: "Queue a readonly non-Codex step behind an active step and toggle MXC before dispatch",
+        steps: [
+          {
+            key: "prep",
+            title: "Prep inputs",
+            brief: "Prepare context with Codex readonly worker",
+            vendor: "codex",
+            readonly: true,
+          },
+          {
+            key: "audit",
+            title: "Audit repo",
+            brief: "Inspect repository with Pi readonly worker",
+            vendor: "pi",
+            readonly: true,
+          },
+        ],
+      }),
+    });
+    expect("data" in created && created.data).toBeTruthy();
+    const graph = (created as { data: { graph: { id: number; nodes: Array<{ key: string; status: string; activeWorkerId: number | null; workerIds: number[]; waitingFor: string | null }> } } }).data.graph;
+    const prepNode = graph.nodes.find((n) => n.key === "prep")!;
+    const auditBefore = graph.nodes.find((n) => n.key === "audit")!;
+    expect(prepNode.status).toBe("running");
+    expect(prepNode.activeWorkerId).not.toBeNull();
+    expect(auditBefore.status).toBe("pending");
+    expect(auditBefore.workerIds).toEqual([]);
+
+    // MXC becomes unavailable while the upstream step is running and the readonly step is queued.
+    mxcReady = false;
+    ledger.hubCall(pmSessionId, "worker.end", { workerId: prepNode.activeWorkerId! });
+    const doneRes = ledger.hubCall(pmSessionId, "graph.done", {
+      nodeKey: "prep",
+      graphId: graph.id,
+      summary: "prep finished",
+    });
+    expect("text" in doneRes && doneRes.text).toMatch(/MXC/u);
+    const afterDone = (doneRes as { data: { graph: { nodes: Array<{ key: string; status: string; activeWorkerId: number | null; workerIds: number[]; waitingFor: string | null }> } } }).data.graph;
+    const auditAfter = afterDone.nodes.find((n) => n.key === "audit")!;
+    expect(auditAfter.status).toBe("waiting");
+    expect(auditAfter.waitingFor).toBe("pm");
+    expect(auditAfter.activeWorkerId).toBeNull();
+    expect(auditAfter.workerIds).toEqual([]);
+
+    expect(() =>
+      ledger.hubCall(pmSessionId, "worker.start", {
+        node: "audit",
+        graphId: graph.id,
+      }),
+    ).toThrow(/MXC/u);
+
+    // Once MXC becomes available again, starting the waiting readonly step succeeds.
+    mxcReady = true;
+    const started = ledger.hubCall(pmSessionId, "worker.start", {
+      node: "audit",
+      graphId: graph.id,
+    });
+    expect("data" in started && started.data).toBeTruthy();
+  });
 });
 
 describe("Windows strict read-only sandbox boundary (unchanged-rule regressions)", () => {

@@ -79,7 +79,7 @@ afterEach(async () => {
   }
 });
 
-describe.runIf(process.platform === "win32")("Windows 真机集成：受限令牌 + ACL 沙箱（禁写、数据目录禁读）与无 MXC 只读 Worker 回退", () => {
+describe.runIf(process.platform === "win32")("Windows 真机集成：受限令牌 + ACL 沙箱（禁写、数据目录禁读）与无 MXC 只读 Worker 严格失败关闭", () => {
   it("fusa-run probe 通过；普通 Worker 拒写 state\\ 与别的 worktree，icacls/takeown/Set-Acl 全败，写本 worktree / %TEMP% / 外部目录与连 hub 管道全通；PM 无沙箱可写 state\\", { timeout: 45_000 }, async () => {
     expect(osSandboxAvailable("win32")).toBe(true);
 

@@ -1,6 +1,6 @@
 import { agentTextOf } from "./attachments.ts";
 import { truncateChars } from "./domain.ts";
-import { feishuDeliveryPrefixes, feishuOriginOf } from "./feishu.ts";
+import { feishuDeliveryOriginOf, feishuDeliveryPrefixes } from "./feishu.ts";
 import type { Message, WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
@@ -245,7 +245,7 @@ export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "te
     if (message.workerId !== null) prefixes.push(USER_TO_WORKER_TAG);
     const pick = workerPickOf(message);
     if (pick !== null) prefixes.push(workerPickNote(pick));
-    const origin = feishuOriginOf(message);
+    const origin = feishuDeliveryOriginOf(message);
     if (origin !== null) prefixes.push(...feishuDeliveryPrefixes(origin));
   }
   if (message.sender === "system" && typeof message.meta?.directChatSummary === "string") prefixes.push(message.meta.directChatSummary);

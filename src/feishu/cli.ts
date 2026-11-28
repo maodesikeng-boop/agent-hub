@@ -103,7 +103,7 @@ async function dispatch(io: FeishuCliIo): Promise<number> {
       const guest = values.guest as string | undefined;
       if (trigger === undefined && guest === undefined) throw new UsageError("--trigger 和 --guest 至少给一个");
       if (trigger !== undefined && !(FEISHU_TRIGGER_MODES as readonly string[]).includes(trigger)) throw new UsageError(`--trigger 只能是 ${FEISHU_TRIGGER_MODES.join("、")}`);
-      if (guest !== undefined && !(FEISHU_GUEST_TIERS as readonly string[]).includes(guest)) throw new UsageError(`--guest 只能是 ${FEISHU_GUEST_TIERS.join("、")}`);
+      if (guest !== undefined && !(FEISHU_GUEST_TIERS as readonly string[]).includes(guest)) throw new UsageError(`--guest 只能是 ${feishuGuestTierOrder().join("、")}`);
       const chat = (await io.admin("PUT", "/feishu/policy", { pmId, ...(trigger ? { triggerMode: trigger } : {}), ...(guest ? { guestTier: guest } : {}) })) as FeishuChatView;
       io.stdout.write(`${chatLine(chat).trim()}\n`);
       const warning = guest !== undefined ? feishuGuestTierPolicy(chat.guestTier).hostPrivilegeWarning : null;
