@@ -115,6 +115,14 @@ export function moduleRuntimeIdentity(specifier: string, resolvedTarget: string 
   return suffixIdx === -1 ? resolvedTarget : `${resolvedTarget}${specifier.slice(suffixIdx)}`;
 }
 
+// Query-suffixed imports (`?raw`, `?url`, `?inline`, `?worker`, etc.) can depend on any byte of the target file.
+export function hasModuleQuerySuffix(specifier: string): boolean {
+  const queryIdx = specifier.indexOf("?");
+  if (queryIdx === -1) return false;
+  const hashIdx = specifier.indexOf("#");
+  return hashIdx === -1 || queryIdx < hashIdx;
+}
+
 function resolveRepoPath(candidate: string, knownFiles: ReadonlySet<string>): string | null {
   const clean = toRepoPosixPath(posix.normalize(candidate.split(/[?#]/, 1)[0]!));
   return knownFiles.has(clean) ? clean : null;
@@ -565,7 +573,10 @@ function walkDynamicMockAndFileRefs(
     const spec = staticStringValue(node.source);
     if (spec !== null) {
       const target = resolveRelativeModule(ctx.file, spec, ctx.knownFiles);
-      if (target !== null) ctx.addImport({ target, imported: "*", local: null });
+      if (target !== null) {
+        ctx.addImport({ target, imported: "*", local: null });
+        if (hasModuleQuerySuffix(spec)) ctx.addFileDep(target);
+      }
     } else if (isAstNode(node.source) && node.source.type === "Identifier") {
       const bound = ctx.urlBindings.get(node.source.name as string);
       if (bound !== undefined) ctx.addImport({ target: bound, imported: "*", local: null });
@@ -664,7 +675,10 @@ function walkDynamicMockAndFileRefs(
       const spec = staticStringValue(node.arguments[0]);
       if (spec !== null) {
         const target = resolveRelativeModule(ctx.file, spec, ctx.knownFiles);
-        if (target !== null) ctx.addImport({ target, imported: "*", local: null });
+        if (target !== null) {
+          ctx.addImport({ target, imported: "*", local: null });
+          if (hasModuleQuerySuffix(spec)) ctx.addFileDep(target);
+        }
       }
     } else if (isCalleeNamed(callee, READ_FILE_CALLEE) && Array.isArray(node.arguments) && node.arguments.length > 0) {
       const literal = staticStringValue(node.arguments[0]);

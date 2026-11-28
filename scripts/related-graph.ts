@@ -479,7 +479,7 @@ export function resolveAffectedTests(input: ResolveAffectedInput): AffectedTests
     : [];
 
   const knownFiles = new Set<string>(sources.keys());
-  for (const file of changedFiles) if (MODULE_FILE.test(file)) knownFiles.add(file);
+  for (const file of changedFiles) knownFiles.add(file);
 
   const { reverse, directFileConsumers } = buildReverseEdges(sources, knownFiles);
   const compiledScopedGuards = (input.scopedGuards ?? SCOPED_SOURCE_GUARDS)

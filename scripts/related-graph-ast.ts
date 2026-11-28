@@ -3,6 +3,7 @@ import { parseSync } from "oxc-parser";
 import {
   collectDynamicMockAndFileRefs,
   DYNAMIC_OR_PATH_HINT,
+  hasModuleQuerySuffix,
   isAstNode,
   isTypeOnlyNode,
   moduleRuntimeIdentity,
@@ -483,71 +484,12 @@ interface DetailedModuleAnalysis {
   readonly topLevelSideEffectFingerprints: readonly string[];
 }
 
-function analyzeModuleDetailed(
-  rawFile: string,
-  source: string,
-  knownFiles: ReadonlySet<string>,
-  computeFingerprints: boolean,
-): DetailedModuleAnalysis {
-  const file = toRepoPosixPath(rawFile);
-  const parsed = parseSync(file, source);
-  if (parsed.errors.length > 0) {
-    return {
-      summary: {
-        file,
-        imports: [],
-        reexports: [],
-        fileDeps: [],
-        localDecls: new Map(),
-        exportedLocals: new Map(),
-        topLevelSideEffectRefs: new Set(),
-        parseFailed: true,
-      },
-      localFingerprints: new Map(),
-      importBindingFingerprints: new Map(),
-      sideEffectImportTargets: new Set(),
-      staticModuleDeps: [],
-      namedReexportFingerprints: new Map(),
-      wildcardReexportTargets: new Set(),
-      topLevelSideEffectFingerprints: [],
-    };
-  }
-
-  const imports: ModuleImportEdge[] = [];
-  const seenImports = new Set<string>();
-  const addImport = (edge: ModuleImportEdge): void => {
-    const key = `${edge.target}\0${edge.imported}\0${edge.local ?? ""}`;
-    if (seenImports.has(key)) return;
-    seenImports.add(key);
-    imports.push(edge);
-  };
-  const fileDeps: string[] = [];
-  const seenFileDeps = new Set<string>();
-  const addFileDep = (target: string): void => {
-    if (seenFileDeps.has(target)) return;
-    seenFileDeps.add(target);
-    fileDeps.push(target);
-  };
-  const staticModuleDeps: string[] = [];
-  const seenStaticModuleDeps = new Set<string>();
-  const addStaticModuleDep = (dep: string): void => {
-    if (seenStaticModuleDeps.has(dep)) return;
-    seenStaticModuleDeps.add(dep);
-    staticModuleDeps.push(dep);
-  };
-
-  const reexports: ModuleReexportEdge[] = [];
-  const localDecls = new Map<string, Set<string>>();
-  const exportedLocals = new Map<string, string>();
-  const topLevelSideEffectRefs = new Set<string>();
-  const localFingerprints = new Map<string, string>();
-  const importBindingFingerprints = new Map<string, string>();
-  const sideEffectImportTargets = new Set<string>();
-  const namedReexportFingerprints = new Map<string, ReexportBinding>();
-  const wildcardReexportTargets = new Set<string>();
-  const topLevelSideEffectFingerprints: string[] = [];
-
-  const body = (parsed.program as unknown as { body: AstNode[] }).body;
+function collectTopLevelBindings(body: readonly AstNode[]): {
+  pureLocals: Map<string, PureValueKind>;
+  pureConstructors: Set<string>;
+  shadowedBuiltins: Set<string>;
+  lexicalDecls: Set<string>;
+} {
   const pureLocals = new Map<string, PureValueKind>();
   const pureConstructors = new Set<string>();
   const shadowedBuiltins = new Set<string>();
@@ -586,6 +528,77 @@ function analyzeModuleDetailed(
       if (TRACKED_BUILTINS.has(name)) shadowedBuiltins.add(name);
     }
   }
+  return { pureLocals, pureConstructors, shadowedBuiltins, lexicalDecls };
+}
+
+function createParseFailedAnalysis(file: string): DetailedModuleAnalysis {
+  return {
+    summary: {
+      file,
+      imports: [],
+      reexports: [],
+      fileDeps: [],
+      localDecls: new Map(),
+      exportedLocals: new Map(),
+      topLevelSideEffectRefs: new Set(),
+      parseFailed: true,
+    },
+    localFingerprints: new Map(),
+    importBindingFingerprints: new Map(),
+    sideEffectImportTargets: new Set(),
+    staticModuleDeps: [],
+    namedReexportFingerprints: new Map(),
+    wildcardReexportTargets: new Set(),
+    topLevelSideEffectFingerprints: [],
+  };
+}
+
+function analyzeModuleDetailed(
+  rawFile: string,
+  source: string,
+  knownFiles: ReadonlySet<string>,
+  computeFingerprints: boolean,
+): DetailedModuleAnalysis {
+  const file = toRepoPosixPath(rawFile);
+  const parsed = parseSync(file, source);
+  if (parsed.errors.length > 0) return createParseFailedAnalysis(file);
+
+  const imports: ModuleImportEdge[] = [];
+  const seenImports = new Set<string>();
+  const addImport = (edge: ModuleImportEdge): void => {
+    const key = `${edge.target}\0${edge.imported}\0${edge.local ?? ""}`;
+    if (seenImports.has(key)) return;
+    seenImports.add(key);
+    imports.push(edge);
+  };
+  const fileDeps: string[] = [];
+  const seenFileDeps = new Set<string>();
+  const addFileDep = (target: string): void => {
+    if (seenFileDeps.has(target)) return;
+    seenFileDeps.add(target);
+    fileDeps.push(target);
+  };
+  const staticModuleDeps: string[] = [];
+  const seenStaticModuleDeps = new Set<string>();
+  const addStaticModuleDep = (dep: string): void => {
+    if (seenStaticModuleDeps.has(dep)) return;
+    seenStaticModuleDeps.add(dep);
+    staticModuleDeps.push(dep);
+  };
+
+  const reexports: ModuleReexportEdge[] = [];
+  const localDecls = new Map<string, Set<string>>();
+  const exportedLocals = new Map<string, string>();
+  const topLevelSideEffectRefs = new Set<string>();
+  const localFingerprints = new Map<string, string>();
+  const importBindingFingerprints = new Map<string, string>();
+  const sideEffectImportTargets = new Set<string>();
+  const namedReexportFingerprints = new Map<string, ReexportBinding>();
+  const wildcardReexportTargets = new Set<string>();
+  const topLevelSideEffectFingerprints: string[] = [];
+
+  const body = (parsed.program as unknown as { body: AstNode[] }).body;
+  const { pureLocals, pureConstructors, shadowedBuiltins, lexicalDecls } = collectTopLevelBindings(body);
 
   const fpOut = computeFingerprints ? localFingerprints : undefined;
   const sideEffectFpOut = computeFingerprints ? topLevelSideEffectFingerprints : undefined;
@@ -599,11 +612,15 @@ function analyzeModuleDetailed(
       if (spec === null) continue;
       const target = resolveRelativeModule(file, spec, knownFiles);
       const moduleId = moduleRuntimeIdentity(spec, target);
+      const wholeFileQuery = hasModuleQuerySuffix(spec);
       const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
       if (specifiers.length === 0) {
         sideEffectImportTargets.add(moduleId);
         addStaticModuleDep(moduleId);
-        if (target !== null) addImport({ target, imported: "*", local: null });
+        if (target !== null) {
+          addImport({ target, imported: "*", local: null });
+          if (wholeFileQuery) addFileDep(target);
+        }
         continue;
       }
       let hasRuntimeSpecifier = false;
@@ -620,9 +637,12 @@ function analyzeModuleDetailed(
           imported = name;
         }
         importBindingFingerprints.set(local, `${moduleId}\0${imported}`);
-        if (target !== null) addImport({ target, imported, local });
+        if (target !== null) addImport(wholeFileQuery ? { target, imported: "*", local: null } : { target, imported, local });
       }
-      if (hasRuntimeSpecifier) addStaticModuleDep(moduleId);
+      if (hasRuntimeSpecifier) {
+        addStaticModuleDep(moduleId);
+        if (target !== null && wholeFileQuery) addFileDep(target);
+      }
       continue;
     }
 
@@ -633,6 +653,7 @@ function analyzeModuleDetailed(
       const target = resolveRelativeModule(file, spec, knownFiles);
       const moduleId = moduleRuntimeIdentity(spec, target);
       addStaticModuleDep(moduleId);
+      if (target !== null && hasModuleQuerySuffix(spec)) addFileDep(target);
       const exported = exportOrImportName(stmt.exported);
       if (exported === null) {
         wildcardReexportTargets.add(moduleId);
@@ -651,6 +672,7 @@ function analyzeModuleDetailed(
         if (spec === null) continue;
         const target = resolveRelativeModule(file, spec, knownFiles);
         const moduleId = moduleRuntimeIdentity(spec, target);
+        const wholeFileQuery = hasModuleQuerySuffix(spec);
         const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
         let hasRuntimeSpecifier = specifiers.length === 0;
         for (const s of specifiers) {
@@ -660,9 +682,12 @@ function analyzeModuleDetailed(
           if (imported === null || exported === null) continue;
           hasRuntimeSpecifier = true;
           namedReexportFingerprints.set(exported, { source: moduleId, imported });
-          if (target !== null) reexports.push({ target, exported, imported });
+          if (target !== null) reexports.push({ target, exported, imported: wholeFileQuery ? "*" : imported });
         }
-        if (hasRuntimeSpecifier) addStaticModuleDep(moduleId);
+        if (hasRuntimeSpecifier) {
+          addStaticModuleDep(moduleId);
+          if (target !== null && wholeFileQuery) addFileDep(target);
+        }
         continue;
       }
       if (isAstNode(stmt.declaration)) {
@@ -790,32 +815,45 @@ export function extractModuleEdges(
   const mod = parsed.module;
 
   for (const imp of mod.staticImports) {
-    const target = resolveRelativeModule(file, imp.moduleRequest.value, knownFiles);
+    const spec = imp.moduleRequest.value;
+    const target = resolveRelativeModule(file, spec, knownFiles);
     if (target === null) continue;
+    const wholeFileQuery = hasModuleQuerySuffix(spec);
     if (imp.entries.length === 0) {
       addImport({ target, imported: "*", local: null });
+      if (wholeFileQuery) addFileDep(target);
       continue;
     }
+    let hasRuntimeEntry = false;
     for (const entry of imp.entries) {
       if (entry.isType) continue;
+      hasRuntimeEntry = true;
+      if (wholeFileQuery) {
+        addImport({ target, imported: "*", local: null });
+        continue;
+      }
       const local = entry.localName.value;
       const kind = entry.importName.kind;
       if (kind === "Default") addImport({ target, imported: "default", local });
       else if (kind === "NamespaceObject") addImport({ target, imported: "*", local });
       else if (kind === "Name" && entry.importName.name !== null) addImport({ target, imported: entry.importName.name, local });
     }
+    if (hasRuntimeEntry && wholeFileQuery) addFileDep(target);
   }
 
   for (const exp of mod.staticExports) {
     for (const entry of exp.entries) {
       if (entry.isType || !entry.moduleRequest) continue;
-      const target = resolveRelativeModule(file, entry.moduleRequest.value, knownFiles);
+      const spec = entry.moduleRequest.value;
+      const target = resolveRelativeModule(file, spec, knownFiles);
       if (target === null) continue;
+      const wholeFileQuery = hasModuleQuerySuffix(spec);
+      if (wholeFileQuery) addFileDep(target);
       const inKind = entry.importName.kind;
       if (inKind === "AllButDefault") reexports.push({ target, exported: "*", imported: "*" });
       else if (inKind === "All" && entry.exportName.name !== null) reexports.push({ target, exported: entry.exportName.name, imported: "*" });
       else if (inKind === "Name" && entry.importName.name !== null && entry.exportName.name !== null) {
-        reexports.push({ target, exported: entry.exportName.name, imported: entry.importName.name });
+        reexports.push({ target, exported: entry.exportName.name, imported: wholeFileQuery ? "*" : entry.importName.name });
       }
     }
   }
