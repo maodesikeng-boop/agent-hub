@@ -5,7 +5,9 @@
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, expect } from "vitest";
-import { TEST_CHILD_EXIT_WAIT_MS } from "../src/shared/limits.ts";
+
+// Kept local so editing src/shared/limits.ts does not invalidate the node project setupFiles; test/spawn-guard.test.ts enforces equality with TEST_CHILD_EXIT_WAIT_MS.
+export const SPAWN_GUARD_EXIT_WAIT_MS = 5_000;
 
 interface Tracked {
   child: ChildProcess;
@@ -127,7 +129,7 @@ install();
 
 afterAll(async () => {
   try {
-    const leaked = await waitForNoLeaks(TEST_CHILD_EXIT_WAIT_MS);
+    const leaked = await waitForNoLeaks(SPAWN_GUARD_EXIT_WAIT_MS);
     if (leaked.length === 0) return;
     killLeaked(leaked);
     throw new Error(`测试结束时还有 ${leaked.length} 个子进程没退出（已强制结束）：${leaked.map((t) => `${t.child.pid} ${t.command}（起于：${t.test ?? "用例之外"}）`).join("；")}`);
