@@ -1,10 +1,11 @@
-// 一次试跑（设计 3.4）：建现场（数据目录、主文件夹克隆、本地裸仓库、替身）→ 起被测版本的守护进程 → 建项目经理、发需求原文 →
+// Single trial runner: stages isolated workspace, runs daemon and PM, collects facts, and grades deterministic checks.
 // 事件循环（答卡、注入习惯改动、等安静）→ 关守护进程 → 从账本取事实 → 确定性检查 → 写结果；通过的删现场，没通过的留着。
 // 真模型和剧本项目经理走同一条路，只差分流脚本的 mode（fakes/claude-router.ts）。
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
 import { readCompleteLogLines, readJsonLog } from "../append-log.ts";
@@ -49,6 +50,8 @@ export interface TrialPlan {
   timings: TrialTimings;
   /** 通过了也留现场（调试用）。 */
   keepWork?: boolean;
+  /** External holdout directory denied inside the real-model OS sandbox. */
+  holdoutDir?: string;
 }
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=eval", "-c", "user.email=eval@example.invalid", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -191,7 +194,7 @@ interface LoopOutcome {
   envError: string | null;
 }
 
-/** 事件循环（设计 3.3）：答卡、到时机注入习惯改动、等安静；超时、超轮数记环境错误。 */
+/** Trial event loop: answers cards, injects mid-flight habit edits, and waits for quiet or caps. */
 async function eventLoop(
   plan: TrialPlan,
   client: Client,
@@ -269,7 +272,7 @@ async function stopDaemon(daemon: RunningDaemon): Promise<void> {
 
 }
 
-/** 环境出的错（不算项目经理的分，设计 4.4）：真 gh 被调到、那一轮直接失败。 */
+/** Environment errors (bypassed gh shim, failed user message) quarantined from product scores. */
 function isolationErrors(facts: Facts): string | null {
   const ghCommands = facts.tools.filter((t) => t.name === "Bash" && /(^|[\s;&|(])gh\s/.test(String(t.input.command ?? "")));
   if (ghCommands.length > 0 && facts.gh.length === 0) return `项目经理敲了 ${ghCommands.length} 次 gh，替身一次都没收到：gh 没走替身（PATH 被改了？），这次不算`;
@@ -333,10 +336,19 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     let sandbox = plan.pm.mode === "real" ? plan.pm.sandbox : null;
     if (plan.pm.mode === "real") {
       if (!sandbox) throw new Error("真模型必须使用通过 preflight 的沙箱");
-      const input = { ...(sandbox.input ?? pmSandboxInput(new URL("../../", import.meta.url).pathname, process.env)) };
+      const sourceRoot = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
+      const input = { ...(sandbox.input ?? pmSandboxInput(sourceRoot, process.env)) };
       input.writableDirs = [workDir];
       input.projectDirs = [workDir, repo];
-      input.readDenied = [...(input.readDenied ?? []), dirname(dirname(plan.resultDir)), plan.workRoot, join(plan.version.daemonMain, "../../../test/eval/replay")];
+      input.readDenied = [
+        ...new Set([
+          ...(input.readDenied ?? []),
+          dirname(dirname(plan.resultDir)),
+          plan.workRoot,
+          join(plan.version.daemonMain, "../../../test/eval/replay"),
+          ...(plan.holdoutDir ? [resolve(plan.holdoutDir)] : []),
+        ]),
+      ];
       const profile = join(workDir, "pm-sandbox.sb");
       writeFileSync(profile, pmSandboxProfile(input));
       const check = preflight(profile, input, { probeDir: workDir, evalPid: process.pid, realClaude: plan.pm.realClaude });

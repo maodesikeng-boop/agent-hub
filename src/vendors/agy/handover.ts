@@ -17,7 +17,7 @@ import {
   parseAgyUsage,
 } from "./protocol.ts";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
-import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import { existingAgyPromptRules } from "./rules.ts";
@@ -220,34 +220,38 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
       child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS)));
       child.stdin.on("error", () => {});
-      const onAbort = () => {
-        killFreshGroup(child);
-        void forceKill(child);
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-          child.once("error", reject);
-          child.once("close", (code, sig) => {
-            resolve({ code, signal: sig });
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+        let settled = false;
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", onAbort);
+          fn();
+        };
+        const onAbort = () => {
+          finish(() => {
+            void killChildAndWait(child).finally(() => reject(signal.reason ?? new Error("aborted")));
           });
-          child.stdin.end(buildAgyUserLine(prompt) + "\n");
-        });
-        signal.throwIfAborted();
-        const { result, lastStepUsage } = readOutput(stdout);
-        if (exit.code !== 0) {
-          const detail = (stderr.trim() || (typeof result?.error === "string" ? result.error : "")).trim();
-          if (detectAgyArgsConflict(detail) === "no_conversation") throw new ForkUnsupportedError(`agy 找不到复制出来的对话 ${fork.forkId}：${detail}`);
-          throw new Error(`agy 退出 ${exit.code ?? exit.signal}${detail === "" ? "" : `：${detail}`}`);
-        }
-        if (result === null) throw new Error("agy 没给出 result 事件");
-        const status = typeof result.status === "string" ? result.status : "SUCCESS";
-        const response = typeof result.response === "string" ? result.response : "";
-        if (status !== "SUCCESS") throw new Error(`agy 这一轮没成功（${status}）：${typeof result.error === "string" && result.error !== "" ? result.error : response}`);
-        return { text: response, usage: usageOf(result.usage ?? lastStepUsage) };
-      } finally {
-        signal.removeEventListener("abort", onAbort);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        child.once("error", (err) => finish(() => {
+          void killChildAndWait(child).finally(() => reject(err));
+        }));
+        child.once("close", (code, sig) => finish(() => resolve({ code, signal: sig })));
+        child.stdin.end(buildAgyUserLine(prompt) + "\n");
+      });
+      signal.throwIfAborted();
+      const { result, lastStepUsage } = readOutput(stdout);
+      if (exit.code !== 0) {
+        const detail = (stderr.trim() || (typeof result?.error === "string" ? result.error : "")).trim();
+        if (detectAgyArgsConflict(detail) === "no_conversation") throw new ForkUnsupportedError(`agy 找不到复制出来的对话 ${fork.forkId}：${detail}`);
+        throw new Error(`agy 退出 ${exit.code ?? exit.signal}${detail === "" ? "" : `：${detail}`}`);
       }
+      if (result === null) throw new Error("agy 没给出 result 事件");
+      const status = typeof result.status === "string" ? result.status : "SUCCESS";
+      const response = typeof result.response === "string" ? result.response : "";
+      if (status !== "SUCCESS") throw new Error(`agy 这一轮没成功（${status}）：${typeof result.error === "string" && result.error !== "" ? result.error : response}`);
+      return { text: response, usage: usageOf(result.usage ?? lastStepUsage) };
     },
 
     async remove(fork: ForkHandle): Promise<void> {

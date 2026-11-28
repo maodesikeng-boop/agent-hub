@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { dirname, join } from "node:path";
+import { writeExecutableFileAtomicSync } from "../platform/index.ts";
 
 export interface SandboxDataDir {
   dataDir: string;
@@ -71,8 +72,8 @@ export async function makeSandboxDataDir(root: string): Promise<SandboxDataDir> 
   mkdirSync(own, { recursive: true });
   for (const [rel] of [...DENIED_PROBES, ...ALLOWED_PROBES]) write(join(dataDir, rel), `${rel}\n`);
   const hub = join(dataDir, "run", "bin", "hub");
-  write(hub, "#!/bin/sh\necho HUB_RAN\n");
-  chmodSync(hub, 0o755);
+  mkdirSync(dirname(hub), { recursive: true });
+  writeExecutableFileAtomicSync(hub, "#!/bin/sh\necho HUB_RAN\n", { mode: 0o755 });
   const hubSock = join(dataDir, "run", "hub.sock");
   const adminSock = join(dataDir, "run", "admin.sock");
   const servers = [await listen(hubSock), await listen(adminSock)];
@@ -116,8 +117,7 @@ export function readProbeScript(): string {
 
 export function writeProbeCli(dir: string): string {
   const cli = join(dir, "probe-cli");
-  writeFileSync(cli, `#!/bin/sh\n${readProbeScript()}\n`);
-  chmodSync(cli, 0o755);
+  writeExecutableFileAtomicSync(cli, `#!/bin/sh\n${readProbeScript()}\n`, { mode: 0o755 });
   return cli;
 }
 

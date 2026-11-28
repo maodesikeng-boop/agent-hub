@@ -1,6 +1,6 @@
 import { TASK_GRAPH_STATUSES, validateAskOptions } from "../shared/domain.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
-import { UsageError, type Parsed, type GroupArgs, allowOnly, expectPositionals, idOf, requireStdin } from "./args.ts";
+import { UsageError, type Parsed, type GroupArgs, allowOnly, expectOptionalPositional, expectPositionals, idOf, requireStdin } from "./args.ts";
 
 const hub = HUB_COMMAND;
 
@@ -14,7 +14,7 @@ export function parseGraphAuthorCommand({ group, action, rest, values }: GroupAr
   }
   if (group === "graph" && action === "show") {
     allowOnly(values, [], "graph show");
-    if (rest.length > 1) throw new UsageError(`${hub} graph show 的参数个数不对`);
+    expectOptionalPositional(rest, "graph show");
     const body: Record<string, unknown> = {};
     if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph show", "任务图");
     return { command: "graph.show", body, textSource: null };
@@ -87,7 +87,7 @@ export function parseGraphAuthorCommand({ group, action, rest, values }: GroupAr
 export function parseGraphStepCommand({ group, action, rest, values }: GroupArgs): Parsed | undefined {
   if (group === "graph" && action === "patch") {
     allowOnly(values, ["stdin"], "graph patch");
-    if (rest.length > 1) throw new UsageError(`${hub} graph patch 的参数个数不对`);
+    expectOptionalPositional(rest, "graph patch");
     const body: Record<string, unknown> = {};
     if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph patch", "任务图");
     return { command: "graph.patch", body, textSource: requireStdin(values, "graph patch"), textField: "specJson" };
@@ -138,7 +138,7 @@ export function parseGraphStepCommand({ group, action, rest, values }: GroupArgs
   }
   if (group === "graph" && action === "cancel") {
     allowOnly(values, ["reason"], "graph cancel");
-    if (rest.length > 1) throw new UsageError(`${hub} graph cancel 的参数个数不对`);
+    expectOptionalPositional(rest, "graph cancel");
     const body: Record<string, unknown> = {};
     if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph cancel", "任务图");
     if (values.reason !== undefined) body.reason = values.reason;
@@ -146,7 +146,7 @@ export function parseGraphStepCommand({ group, action, rest, values }: GroupArgs
   }
   if (group === "graph" && action === "finish") {
     allowOnly(values, ["unmerged-ok", "stdin"], "graph finish");
-    if (rest.length > 1) throw new UsageError(`${hub} graph finish 的参数个数不对`);
+    expectOptionalPositional(rest, "graph finish");
     const body: Record<string, unknown> = {};
     if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph finish", "任务图");
     if (values["unmerged-ok"] === true) body.unmergedOk = true;

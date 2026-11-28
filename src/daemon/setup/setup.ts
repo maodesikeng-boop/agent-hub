@@ -6,8 +6,8 @@ import {
   ENV_SESSION_OWNER_TAG,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
-  KILL_WAIT_MS,
   LOG_PREFIX,
+  PROBE_SHUTDOWN_DRAIN_MS,
   SETUP_LOG_MAX_BYTES,
   SETUP_OUTPUT_TAIL_BYTES,
   SETUP_OUTPUT_TAIL_LINES,
@@ -433,7 +433,7 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         Promise.allSettled(entries.map((e) => e.done)),
-        new Promise((resolve) => (timer = setTimeout(resolve, KILL_WAIT_MS))),
+        new Promise((resolve) => (timer = setTimeout(resolve, PROBE_SHUTDOWN_DRAIN_MS))),
       ]);
       clearTimeout(timer);
     },

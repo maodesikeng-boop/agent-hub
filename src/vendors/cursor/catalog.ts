@@ -14,11 +14,10 @@ import {
 import {
   STDERR_TAIL_CHARS,
   defaultAvailabilityOfError,
-  killThenSettle,
   parseJsonOutput,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { streamClosed, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { killChildAndWait, streamClosed, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
@@ -204,8 +203,7 @@ function runCursorSubcommand(
       return;
     }
 
-    const tracked = child as Parameters<typeof killThenSettle>[0];
-    trackChild(tracked, "probe:cursor", { detached });
+    trackChild(child, "probe:cursor", { detached });
 
     let stdout = "";
     let stdoutBytes = 0;
@@ -231,13 +229,19 @@ function runCursorSubcommand(
     });
 
     const onAbort = () => {
-      killThenSettle(tracked, () => finishReject(new Error("cursor catalog query aborted")));
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void killChildAndWait(child).finally(() => reject(new Error("cursor catalog query aborted")));
     };
     signal.addEventListener("abort", onAbort, { once: true });
 
     const timer = setTimeout(() => {
-      killThenSettle(tracked, () =>
-        finishReject(new Error(`cursor ${args[0] ?? "probe"} timed out after ${timeoutMs}ms`)),
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void killChildAndWait(child).finally(() =>
+        reject(new Error(`cursor ${args[0] ?? "probe"} timed out after ${timeoutMs}ms`)),
       );
     }, timeoutMs);
     timer.unref();

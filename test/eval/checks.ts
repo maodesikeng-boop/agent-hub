@@ -1,7 +1,5 @@
-// 确定性检查（docs/orchestration-eval-design.md 4.2）：只看 Facts（账本、gh 替身记录、替身记录），结果是过 / 不过 / 不适用，附证据。
-// 只判结果、不规定路径（设计 4.1）：旧提示词直接派 Worker、新提示词建一步的图，两种都能过。
-// “要求有”的检查（requiresAction）在什么都不做的项目经理身上必须不过（设计 4.5）；其余检查的前提（派了活、收到了汇报）
-// 不成立时是“不适用”，不算过。
+// Deterministic checks over extracted trial Facts (ledger rows, gh shim log, recorded calls).
+// Outcome-focused: direct Worker dispatch and single-step graphs both pass when requirements hold.
 import { askOf, extractAskCard, type Message } from "../../src/shared/domain.ts";
 import { EVAL_EVIDENCE_MAX_CHARS, EVAL_EVIDENCE_MAX_ITEMS } from "./limits.ts";
 import type { CheckDef, CheckResult, FactHubCall, FactMessage, FactTool, FactWorker, Facts, GhCall } from "./types.ts";
@@ -413,7 +411,7 @@ export function personaReachedPm(): CheckDef {
   };
 }
 
-// ---- 防过度建图（docs/orchestration-skill-design.md 第 8.3 节：T1、T2、L1、L2）----
+// Proportionate task-graph checks (T1, T2, L1, L2).
 
 /** 项目经理这次动没动手（敲过 hub、调过工具）。什么都没做时“不建图”“Worker 没超”谈不上，是不适用。 */
 const acted = (facts: Facts) => facts.hubCalls.length > 0 || facts.tools.length > 0;

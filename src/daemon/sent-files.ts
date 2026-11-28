@@ -45,6 +45,8 @@ export interface ShareScope {
   roots: string[];
   dataHome: string;
   dataExceptions: string[];
+  /** Session-private directories inside dataHome (such as a PM's own memory dir) that bypass DATA_DIR_READABLE_ENTRIES; never populated for Workers. */
+  privateDataExceptions?: string[];
   io?: { slots: SentFileIoSlots; owner: SessionId };
 }
 
@@ -106,7 +108,7 @@ export function sensitivePathsOf(userHome: string): string[] {
 
 export function isShareable(
   real: string,
-  scope: Pick<ShareScope, "roots" | "dataHome" | "dataExceptions" | "userHome">,
+  scope: Pick<ShareScope, "roots" | "dataHome" | "dataExceptions" | "privateDataExceptions" | "userHome">,
   sensitive: readonly string[] = sensitivePathsOf(scope.userHome),
 ): boolean {
   if (real.split(sep).includes(".git")) return false;
@@ -114,6 +116,9 @@ export function isShareable(
   const reals = (paths: string[]) => paths.map(realOrNull).filter((p): p is string => p !== null);
   const dataHome = realOrNull(scope.dataHome);
   if (dataHome !== null && within(real, dataHome)) {
+    if (scope.privateDataExceptions !== undefined && reals(scope.privateDataExceptions).some((dir) => within(real, dir))) {
+      return true;
+    }
     // Shares from the data dir may not exceed the Worker read boundary.
     const readable = reals(DATA_DIR_READABLE_ENTRIES.map((entry) => join(dataHome, entry)));
     return readable.some((dir) => within(real, dir)) && reals(scope.dataExceptions).some((dir) => within(real, dir));

@@ -1,17 +1,20 @@
-// 结果目录的上限和保留期（设计第 7 节）、对照表的样子。
+// Retention pruning and unified multi-dimension capability report checks.
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { shortTmp } from "../e2e/harness.ts";
 import { EVAL_KEEP_FAILED_WORK, EVAL_KEEP_RUNS } from "./limits.ts";
-import { pruneFailedWork, pruneRuns, renderSummary, runIdOf } from "./report.ts";
-import type { TrialResult } from "./types.ts";
+import { listProductEvalScenarios, selectEvalScenarios } from "./product/catalog.ts";
+import { renderCapabilityReport } from "./product/ledger.ts";
+import { computeGraderFingerprint, evaluateComparison } from "./product/scoring.ts";
+import { CAPABILITY_DIMENSIONS, type TrialOutcome } from "./product/types.ts";
+import { pruneFailedWork, pruneRuns, runIdOf } from "./report.ts";
 
 const root = mkdtempSync(join(shortTmp(), "ah-evalrep-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-describe("保留期", () => {
-  it(`运行结果留最近 ${EVAL_KEEP_RUNS} 次，超过 30 天的也删`, () => {
+describe("retention pruning", () => {
+  it(`keeps the newest ${EVAL_KEEP_RUNS} runs and prunes runs older than 30 days`, () => {
     const runs = join(root, "runs");
     const now = new Date("2026-11-12T10:00:00").getTime();
     for (let i = 0; i < EVAL_KEEP_RUNS + 3; i++) mkdirSync(join(runs, runIdOf(new Date(now - i * 3_600_000))), { recursive: true });
@@ -23,7 +26,7 @@ describe("保留期", () => {
     expect(readdirSync(runs)).toHaveLength(EVAL_KEEP_RUNS - 1);
   });
 
-  it(`没通过的现场最多留 ${EVAL_KEEP_FAILED_WORK} 个，删最旧的`, () => {
+  it(`keeps at most ${EVAL_KEEP_FAILED_WORK} failed work directories and prunes the oldest`, () => {
     const work = join(root, "w");
     for (let i = 0; i < EVAL_KEEP_FAILED_WORK + 2; i++) {
       const d = join(work, `ah-eval-${i}`);
@@ -34,40 +37,77 @@ describe("保留期", () => {
   });
 });
 
-describe("对照表", () => {
-  const trial = (version: string, status: "pass" | "fail", envError: string | null = null): TrialResult => ({
-    scenario: "s3a-tray",
-    version,
-    commit: "c",
+describe("unified capability report", () => {
+  const [s3a] = selectEvalScenarios({ ids: ["s3a-tray"] }, listProductEvalScenarios());
+  const graderSha = computeGraderFingerprint([s3a!]);
+
+  const outcome = (
+    versionLabel: "base" | "head",
+    trialIndex: number,
+    status: "pass" | "fail",
+    envError: string | null = null,
+  ): TrialOutcome => ({
+    scenarioId: s3a!.id,
+    dimension: s3a!.dimension,
+    suite: s3a!.suite,
+    split: s3a!.split,
+    versionLabel,
+    commit: versionLabel === "base" ? "aaaaaaaaaa" : "bbbbbbbbbb",
+    vendor: "claude",
+    model: "sonnet",
+    effort: "xhigh",
+    trialIndex,
     envError,
-    checks: [{ id: "A1", title: "验收不读 diff", status, reason: status === "pass" ? "没读" : "读了 1 次", evidence: status === "pass" ? [] : ["messages#9 读 diff：git diff main"] }],
-    metrics: { pmTurns: 3, toolCalls: 5, hubCalls: 1, asks: 0, unscriptedAnswers: 0, durationMs: 60_000, tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 } },
+    checks: [{ id: "A1", title: "验收不读 diff", status, reason: status === "pass" ? "ok" : "read diff", evidence: [] }],
+    efficiency: {
+      turns: 3,
+      toolCalls: 5,
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadTokens: 800,
+      cacheWriteTokens: 200,
+      cacheReadRatio: 0.8,
+      prefixStable: true,
+    },
     promptSha256: null,
-    resultDir: "/r",
-    workDir: null,
+    graderSha256: graderSha,
   });
-  it("每条检查两个版本各是过还是不过、变化、原因和证据都在", () => {
-    const md = renderSummary(
-      {
-        runId: "x",
-        startedAt: "",
-        finishedAt: "",
-        versions: [
-          { label: "base", ref: "9b87864^1", commit: "aaaaaaaaaa", subject: "旧" },
-          { label: "head", ref: "main", commit: "bbbbbbbbbb", subject: "新" },
-        ],
-        scenarios: [{ id: "s3a-tray", title: "S3a 托盘", source: "#453" }],
-        trials: [trial("base", "fail"), trial("head", "pass")],
-      },
-      { terminal: true },
-    );
-    expect(md).toContain("| A1 验收不读 diff | 不过 | 过 | 变好 |");
-    expect(md).toContain("messages#9 读 diff：git diff main");
-    expect(md).toContain("`9b87864^1` = `aaaaaaaaa`");
+
+  it("renders all five dimensions separately with verdict and release gate status", () => {
+    const scorecard = evaluateComparison({
+      runId: "20261128-030000",
+      baseRef: "main",
+      baseCommit: "aaaaaaaaaa",
+      headRef: "feature",
+      headCommit: "bbbbbbbbbb",
+      scenarios: [s3a!],
+      baseTrials: [0, 1, 2].map((i) => outcome("base", i, "fail")),
+      headTrials: [0, 1, 2].map((i) => outcome("head", i, "pass")),
+    });
+    const md = renderCapabilityReport(scorecard, { format: "markdown" });
+    for (const dim of CAPABILITY_DIMENSIONS) {
+      expect(md).toContain(`| ${dim} |`);
+    }
+    expect(md).toContain("Verdict: `PASS`");
+    expect(md).toContain("Release Gate: `PASS`");
+    expect(md).toContain("improved");
+    expect(md).not.toMatch(/total score/i);
   });
-  it("环境出错的单列，不算不过", () => {
-    const md = renderSummary({ runId: "x", startedAt: "", finishedAt: "", versions: [{ label: "base", ref: "a", commit: "a", subject: "" }, { label: "head", ref: "b", commit: "b", subject: "" }], scenarios: [{ id: "s3a-tray", title: "S3a", source: "" }], trials: [trial("base", "pass", "超时"), trial("head", "pass")] });
-    expect(md).toContain("| A1 验收不读 diff | 环境出错 | 过 | 变了 |");
-    expect(md).toContain("环境出错，这次不计分");
+
+  it("flags high environment error rates as invalid_run instead of failing product score", () => {
+    const scorecard = evaluateComparison({
+      runId: "20261128-030100",
+      baseRef: "a",
+      baseCommit: "aaaaaaaa",
+      headRef: "b",
+      headCommit: "bbbbbbbb",
+      scenarios: [s3a!],
+      baseTrials: [outcome("base", 0, "pass", "timeout"), outcome("base", 1, "pass"), outcome("base", 2, "pass")],
+      headTrials: [0, 1, 2].map((i) => outcome("head", i, "pass")),
+    });
+    const md = renderCapabilityReport(scorecard, { format: "terminal" });
+    expect(scorecard.verdict).toBe("invalid_run");
+    expect(scorecard.releaseGatePass).toBe(false);
+    expect(md).toContain("Verdict: `INVALID_RUN`");
   });
 });

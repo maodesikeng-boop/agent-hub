@@ -1,8 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readSync } from "node:fs";
 import { dirname } from "node:path";
-import { killThenSettle } from "../../../daemon/driver/model-catalog.ts";
-import { termGroupAfterExit } from "../../../daemon/driver/process.ts";
+import { killChildAndWait, termGroupAfterExit } from "../../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../../daemon/driver/protocol.ts";
 import { spawnOwnedProcess, writeFileAtomicSyncWithRetry } from "../../../daemon/platform/index.ts";
 import { trackChild } from "../../../daemon/process-ledger.ts";
@@ -106,7 +105,6 @@ export function runShortSubcommand(
     const { child, detached } = spawned;
     trackChild(child, purpose, { detached });
     child.once("exit", () => termGroupAfterExit(child));
-    const childClosed = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
     let stdout = "";
     let stderr = "";
@@ -119,9 +117,7 @@ export function runShortSubcommand(
       signal?.removeEventListener("abort", onAbort);
       if (err) {
         if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-          killThenSettle(child, () => {
-            void childClosed.then(() => reject(err));
-          });
+          void killChildAndWait(child).finally(() => reject(err));
         } else {
           reject(err);
         }

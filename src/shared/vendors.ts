@@ -38,8 +38,6 @@ export interface AgentSetting {
   effort: string | null;
 }
 
-export const DEFAULT_AGENT_SETTING: AgentSetting = { vendor: DEFAULT_AGENT_VENDOR, model: null, effort: null };
-
 const MODEL_NAME = /^[A-Za-z0-9._:/@[\]][A-Za-z0-9._:/@[\]-]*$/;
 export const MODEL_NAME_RULE = "模型名只能用字母、数字和 . _ - : / @ [ ]，不能以 - 开头";
 
@@ -311,6 +309,38 @@ export function isListed(availability: VendorAvailability): boolean {
 
 export function isSelectable(availability: VendorAvailability): boolean {
   return availability === "available" || availability === "unknown";
+}
+
+export type AvailabilityOf = (vendor: AgentVendor) => VendorAvailability;
+
+/**
+ * The one rule for which vendor the system picks when nobody named one, walking VENDOR_LIST in order.
+ * Postcondition: returns the first "available" vendor; when none is available and `probedOnly` is not true,
+ * the first "unknown" (installed but not yet probed) vendor; otherwise null.
+ * Never returns a "not_installed" or "signed_out" vendor.
+ */
+export function firstUsableVendor(availabilityOf: AvailabilityOf, options?: { probedOnly?: boolean }): AgentVendor | null {
+  let unprobed: AgentVendor | null = null;
+  for (const vendor of AGENT_VENDORS) {
+    const availability = availabilityOf(vendor);
+    if (availability === "available") return vendor;
+    if (availability === "unknown" && unprobed === null) unprobed = vendor;
+  }
+  return options?.probedOnly === true ? null : unprobed;
+}
+
+/**
+ * Vendor for a new project manager whose creator named none (web dialog, HTTP API, Router, first start).
+ * Postcondition: firstUsableVendor(availabilityOf), or DEFAULT_AGENT_VENDOR when no vendor is usable,
+ * which keeps today's zero-provider behavior.
+ */
+export function defaultPmVendor(availabilityOf: AvailabilityOf): AgentVendor {
+  return firstUsableVendor(availabilityOf) ?? DEFAULT_AGENT_VENDOR;
+}
+
+/** Availability lookup over a catalog list; a vendor missing from the list reads as "unknown". */
+export function availabilityOfCatalogs(catalogs: readonly ModelCatalog[]): AvailabilityOf {
+  return (vendor) => catalogs.find((c) => c.vendor === vendor)?.availability ?? "unknown";
 }
 
 const pickableCatalogsCache = new WeakMap<readonly ModelCatalog[], Map<string, readonly ModelCatalog[]>>();

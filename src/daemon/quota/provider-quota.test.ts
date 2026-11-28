@@ -75,7 +75,7 @@ console.log("Gemini Models\\tWeekly Limit Remaining\\t75%\\t${iso}");
     const updated = (await service.get()).groups.find((group) => group.vendor === "codex");
     expect(updated?.windows).toEqual({ five_hour: { utilization: 0, resetsAt: reset, status: "allowed" } });
   } finally {
-    service.close();
+    await service.close();
     await removeTreeWithRetry(home);
   }
 });

@@ -224,7 +224,7 @@ describe("热重启等全库空闲有上限", () => {
     const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
     const pmPid = env.procsOf(pmSessionId).at(-1)!.pid;
     const reload = await env.runHub(pmPid, ["self-reload"]);
-    expect(reload.stdout).toMatch(/最晚 \d\d:\d\d:\d\d 起不再等 Worker 轮次和系统消息（重启后自动重发）；项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：1 个会话还在跑/);
+    expect(reload.stdout).toMatch(/最晚 \d\d:\d\d:\d\d 起不再等 Worker 轮次和系统消息（重启后自动重发）；项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：项目经理「小林」/);
     const status = await env.runHub(pmPid, ["status"]);
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 

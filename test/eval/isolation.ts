@@ -1,4 +1,4 @@
-// 编排验证的隔离（docs/orchestration-eval-design.md 3.7）：评测里的项目经理是真模型、能在本机跑任意命令，挡住这几样——
+// Real-model PM sandbox isolation and command shims for replay trials.
 // 1. 真账本、真守护进程：每次试跑独立的数据目录（AGENT_HUB_HOME）、端口 0；继承来的 HUB_TOKEN、HUB_SOCK、AGENT_HUB_* 先清掉；
 //    真模型项目经理的 macOS 沙箱里，真数据目录（~/.agent-hub）整个禁读禁写，连不上真守护进程的 hub.sock 和默认端口。
 // 2. 真仓库、真 PR：主文件夹是基准提交的一份克隆，远端是本地裸仓库（gitconfig 的 insteadOf 把 GitHub 地址改写到它）；
@@ -9,17 +9,19 @@
 //    ~/.agent-hub（性格设定、记忆目录、pm-notes）、claude 给真仓库和真 worktree 存的会话记录与自动记忆。
 // 每次运行开头 preflight 在真沙箱里逐条试一遍，有一条没挡住就不跑。
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, delimiter, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { claudeProjectDirName } from "../../src/vendors/claude/transcript.ts";
 import { DEFAULT_UI_PORT, ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT } from "../../src/shared/index.ts";
+import { writeExecutableFileAtomicSync } from "../../src/daemon/platform/index.ts";
 import { killGroup, onExit, boundedText } from "./lifecycle.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
 
-const FAKES_DIR = new URL("./fakes/", import.meta.url).pathname;
+const FAKES_DIR = fileURLToPath(new URL("./fakes/", import.meta.url));
 export const ROUTER = join(FAKES_DIR, "claude-router.ts");
-export const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
+export const FAKE_CLAUDE = fileURLToPath(new URL("../fake-claude/fake-claude.ts", import.meta.url));
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
 /** 换成“只记录、不执行”的替身的命令。 */
@@ -129,9 +131,7 @@ export function writeShims(paths: ShimPaths, opts: { node: string; realGit: stri
   copyFileSync(join(FAKES_DIR, "gh.ts"), join(lib, "gh.mts"));
   copyFileSync(join(FAKES_DIR, "record.ts"), join(lib, "record.mts"));
   const write = (name: string, body: string) => {
-    const file = join(paths.binDir, name);
-    writeFileSync(file, `#!/bin/sh\n${body}\n`);
-    chmodSync(file, 0o755);
+    writeExecutableFileAtomicSync(join(paths.binDir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   };
   write("gh", `if [ "$1" = --version ]; then echo eval-gh-shim; exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} gh-probe; fi\nexec ${sq(opts.node)} ${sq(join(lib, "gh.mts"))} "$@"`);
   for (const tool of RECORD_ONLY_TOOLS) write(tool, `exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} ${tool} "$@"`);
@@ -367,6 +367,17 @@ export function pmSandboxInput(realRepo: string, originalEnv: NodeJS.ProcessEnv,
     denyExec: [...denyExec],
     daemonPorts: [...ports],
   };
+}
+
+export function buildCompareSandboxInput(
+  realRepo: string,
+  originalEnv: NodeJS.ProcessEnv,
+  opts: { runsDir: string; holdoutDir?: string },
+): PmSandboxInput {
+  const input = pmSandboxInput(realRepo, originalEnv);
+  const extraDenied = [opts.runsDir, ...(opts.holdoutDir ? [resolve(opts.holdoutDir)] : [])];
+  input.readDenied = [...new Set([...(input.readDenied ?? []), ...extraDenied])];
+  return input;
 }
 
 export interface PreflightResult {

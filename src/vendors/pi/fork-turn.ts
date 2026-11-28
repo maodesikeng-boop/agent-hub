@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { TokenUsage } from "../../shared/domain.ts";
 import { KILL_WAIT_MS } from "../../shared/limits.ts";
-import { forceKill, killFreshGroup } from "../../daemon/driver/process.ts";
+import { closeAndWaitChild, killChildAndWait } from "../../daemon/driver/process.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult } from "../../daemon/handover/forker.ts";
 import { MAX_PI_PROBE_STDOUT_CHARS, PI_SESSION_STATS_TIMEOUT_MS } from "./limits.ts";
@@ -88,42 +88,21 @@ class PiForkTurn {
     child.stdin?.write(`${buildPromptLine("2", prompt)}\n`);
   }
 
-  #exited(): boolean {
-    return this.#child.exitCode !== null || this.#child.signalCode !== null;
-  }
-
-  #stopChild(): void {
-    if (this.#exited()) return;
-    if (this.#child.pid === undefined) {
-      this.#child.kill("SIGKILL");
-      return;
-    }
-    const killable = this.#child as Parameters<typeof forceKill>[0];
-    killFreshGroup(killable);
-    void forceKill(killable);
-  }
-
   #finish(err: Error | null, result?: ForkWriteResult): void {
     if (this.#settled) return;
     this.#settled = true;
     clearTimeout(this.#statsTimer);
     this.#signal.removeEventListener("abort", this.#onAbort);
-    this.#child.stdin?.end();
     if (err) {
-      this.#stopChild();
-      this.#reject(err);
+      void killChildAndWait(this.#child, { killWaitMs: this.#killWaitMs }).finally(() => this.#reject(err));
       return;
     }
     // Wait for exit so the next session does not start while pi still writes the copy.
-    if (this.#exited()) {
-      this.#resolve(result!);
-      return;
-    }
-    const killTimer = setTimeout(() => this.#stopChild(), this.#killWaitMs);
-    this.#child.once("exit", () => {
-      clearTimeout(killTimer);
-      this.#resolve(result!);
-    });
+    void closeAndWaitChild(this.#child, {
+      graceMs: this.#killWaitMs,
+      killWaitMs: this.#killWaitMs,
+      signal: this.#signal,
+    }).finally(() => this.#resolve(result!));
   }
 
   #finalizeWithStats(contextOverride: number | null): void {

@@ -59,27 +59,63 @@ export function purgeExpiredBatch(g: TaskGraphCtx, nowMs: number, maxRows: numbe
   });
 }
 
-function specVendors(specJson: unknown, out: Set<AgentVendor>): void {
-  if (typeof specJson !== "string") return;
+function specStepItems(specJson: unknown): Record<string, unknown>[] {
+  if (typeof specJson !== "string") return [];
+  const items: Record<string, unknown>[] = [];
   try {
     const obj = JSON.parse(specJson) as Record<string, unknown>;
     for (const key of ["steps", "nodes", "addSteps", "addNodes", "updateSteps", "updateNodes"]) {
       const arr = obj[key];
       if (!Array.isArray(arr)) continue;
       for (const item of arr) {
-        if (typeof item === "object" && item !== null && isAgentVendor((item as { vendor?: unknown }).vendor)) {
-          out.add((item as { vendor: AgentVendor }).vendor);
-        }
+        if (typeof item === "object" && item !== null) items.push(item as Record<string, unknown>);
       }
     }
   } catch {
   }
+  return items;
+}
+
+export function graphNeedsCapabilityInventory(
+  g: TaskGraphCtx,
+  caller: AgentSessionRow | null,
+  command: HubCommand,
+  body: Record<string, unknown>,
+): boolean {
+  if (caller === null || caller.role !== "pm" || caller.pmId === null) return false;
+  if ((command === "graph.create" || command === "graph.patch") && specStepItems(body.specJson).some((item) => item.noOuterSandbox === true)) {
+    return true;
+  }
+  if (command === "graph.create") return false;
+  const graphId = typeof body.graphId === "number" ? body.graphId : undefined;
+  const row =
+    graphId !== undefined
+      ? g.db.get<{ x: number }>(
+          `SELECT 1 AS x FROM task_graph_steps n
+             JOIN task_graph_step_sandbox s ON s.step_id = n.id
+            WHERE n.graph_id = ? AND n.status != 'done' AND s.no_outer_sandbox = 1
+            LIMIT 1`,
+          graphId,
+        )
+      : g.db.get<{ x: number }>(
+          `SELECT 1 AS x FROM task_graph_steps n
+             JOIN task_graphs g ON g.id = n.graph_id
+             JOIN task_graph_step_sandbox s ON s.step_id = n.id
+            WHERE g.pm_id = ? AND g.status = 'active' AND n.status != 'done' AND s.no_outer_sandbox = 1
+            LIMIT 1`,
+          caller.pmId,
+        );
+  return row !== undefined;
 }
 
 export function graphAutoDispatchVendors(g: TaskGraphCtx, caller: AgentSessionRow | null, command: HubCommand, body: Record<string, unknown>): AgentVendor[] {
   if (caller === null || caller.role !== "pm" || caller.pmId === null) return [];
   const out = new Set<AgentVendor>();
-  if (command === "graph.create" || command === "graph.patch") specVendors(body.specJson, out);
+  if (command === "graph.create" || command === "graph.patch") {
+    for (const item of specStepItems(body.specJson)) {
+      if (isAgentVendor(item.vendor)) out.add(item.vendor);
+    }
+  }
   if (command !== "graph.create") {
     const graphId = typeof body.graphId === "number" ? body.graphId : undefined;
     const rows =

@@ -1,6 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { killThenSettle } from "../../../daemon/driver/model-catalog.ts";
-import { termGroupAfterExit } from "../../../daemon/driver/process.ts";
+import { killChildAndWait, termGroupAfterExit } from "../../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../../daemon/driver/protocol.ts";
 import { spawnOwnedProcess } from "../../../daemon/platform/index.ts";
 import { trackChild } from "../../../daemon/process-ledger.ts";
@@ -114,7 +113,7 @@ function driveCliAuthProcess(
       signal.removeEventListener("abort", onAbort);
       if (err) {
         if (child.exitCode === null && child.signalCode === null) {
-          killThenSettle(child, () => reject(err));
+          void killChildAndWait(child).finally(() => reject(err));
         } else {
           reject(err);
         }

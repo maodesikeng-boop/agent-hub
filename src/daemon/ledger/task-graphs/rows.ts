@@ -8,6 +8,7 @@ import {
   type WorkerId,
 } from "../../../shared/domain.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
+import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import type { StepSlotView } from "./slots.ts";
 import type { TaskNodeDbRow } from "./types.ts";
 
@@ -91,6 +92,8 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?:
   sandboxApproval?: TaskNode["sandboxApproval"];
   gateAskPending?: boolean;
   slot?: StepSlotView;
+  capabilities?: WorkerCapabilities;
+  noOuterSandbox?: boolean;
 }): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const status = row.status as TaskNodeStatus;
@@ -131,6 +134,8 @@ export function toTaskNode(row: TaskNodeDbRow, includeDetails = false, waiting?:
     model: row.model,
     effort: row.effort,
     readonly: row.readonly === 1,
+    ...(waiting?.capabilities !== undefined ? { capabilities: waiting.capabilities } : {}),
+    ...(waiting?.noOuterSandbox === true ? { noOuterSandbox: true } : {}),
     maxTimeMs: row.max_time_ms,
     confirm: row.confirm === 1,
     review: row.review === 1,

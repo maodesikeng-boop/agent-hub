@@ -11,7 +11,7 @@
 import "../clean-env.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import claudeSpec from "../../src/vendors/claude/spec.ts";
@@ -21,6 +21,7 @@ import { createSessionTokens, installHubShim, startAgentApi } from "../../src/da
 import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import { vendorSessionFiles } from "../../src/daemon/driver/transcript.ts";
 import { createLedger, type SqliteLedger } from "../../src/daemon/ledger/index.ts";
+import { writeExecutableFileAtomicSync } from "../../src/daemon/platform/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { openTestDb } from "../../src/daemon/store/test-helpers.ts";
 import { Client, agentTexts, makeEnv, messagesOf, shortTmp, sleep, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "../e2e/harness.ts";
@@ -58,7 +59,7 @@ export function writeClaudeWrapper(dir: string, options: { claude: string; persi
   mkdirSync(streams, { recursive: true });
   const script = join(dir, "claude-smoke.sh");
   const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-  writeFileSync(
+  writeExecutableFileAtomicSync(
     script,
     `#!/bin/bash
 real=${quote(options.claude)}
@@ -74,8 +75,8 @@ if [ -z "$id" ]; then exec "$real" "\${flag[@]}" "$@"; fi
 key=$(printf %s "$id" | shasum | cut -c1-16)
 exec "$real" "\${flag[@]}" "$@" > >(tee -a "$streams/$key.jsonl")
 `,
+    { mode: 0o755 },
   );
-  chmodSync(script, 0o755);
   return script;
 }
 
