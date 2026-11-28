@@ -251,6 +251,19 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
   "schedule.list": noArgs,
   "schedule.show": scheduleIdOnly,
+  "schedule.edit": {
+    type: "object",
+    additionalProperties: false,
+    required: ["scheduleId"],
+    anyOf: [{ required: ["name"] }, { required: ["prompt"] }, { required: ["daily"] }, { required: ["everyMinutes"] }],
+    properties: {
+      scheduleId: workerIdField,
+      name: nameField,
+      prompt: taskField,
+      daily: { type: "string", maxLength: 5 },
+      everyMinutes: { type: "integer" },
+    },
+  },
   "schedule.pause": scheduleIdOnly,
   "schedule.resume": scheduleIdOnly,
   "schedule.remove": scheduleIdOnly,
@@ -383,6 +396,7 @@ const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> 
   "project.detach": { folder: "path" },
   "worker.start": { title: "name" },
   "schedule.add": { name: "name" },
+  "schedule.edit": { name: "name" },
 };
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/u;
 
@@ -396,6 +410,7 @@ const STRING_LIMITS: Partial<Record<HubCommand, Readonly<Record<string, HubLimit
   "worker.send": { text: "worker.task" },
   ask: { node: "step.key" },
   "schedule.add": { name: "schedule.name", prompt: "schedule.prompt" },
+  "schedule.edit": { name: "schedule.name", prompt: "schedule.prompt" },
   "watch.add": { until: "watch.command", body: "watch.body" },
   "router.report": { summary: "router.reportSummary" },
   "graph.create": { title: "graph.title", specJson: "graph.spec" },
