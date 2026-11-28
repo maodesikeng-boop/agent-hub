@@ -20,6 +20,8 @@ Bellwood has landed 76 commits since `README.md`, `README.zh-CN.md`, and `docs/s
 
 ### Decisions needed
 
+Draft PR: [#515](https://github.com/maodesikeng-boop/agent-hub/pull/515) (awaiting user sign-off on D1 through D4 before implementation starts).
+
 #### D1. README information architecture and documentation verification model
 
 Today `README.md` and `README.zh-CN.md` are 314-line narrative essays structured around "7 mechanisms", "5 Router points", and "5 Feishu points" with no automated checks tying their claims to code registries.
@@ -276,12 +278,14 @@ Mapping of quoted user goals (`Q1`, `Q2`) and decisions (`D1`–`D4`) to concret
 
 #### Commands and visual checks
 
-Planning step (pre-implementation baseline):
+Planning step (pre-implementation baseline recorded on Draft PR [#515](https://github.com/maodesikeng-boop/agent-hub/pull/515), commit `edf2f101`):
 
-- `pnpm typecheck` (must exit 0)
-- `pnpm lint` (must exit 0)
-- `pnpm exec vitest run src/docs-guard.test.ts src/code-hygiene.test.ts` (must pass)
-- `pnpm exec vitest run src/user-docs-consistency.test.ts` (must run with zero syntax/type errors; all 10 new-behavior tests `A1`–`A10` must fail and all 6 regression tests `R1`–`R6` must pass)
+- `pnpm typecheck` exited `0` (all five `tsconfig` targets clean).
+- `pnpm lint` exited `0` (`1552 files, 136 rules, 208 baselined diagnostics, knip clean`).
+- `pnpm exec vitest run src/docs-guard.test.ts src/code-hygiene.test.ts` passed (`2 test files, 16/16 tests passed`).
+- `pnpm exec vitest run src/user-docs-consistency.test.ts --reporter=verbose` ran with zero syntax or type errors and produced `10 failed | 6 passed (16)`:
+  - Failed as expected before implementation (`10/10`): `A1` (`Pieces` UI terminology), `A2` (workflow-overfit README claims), `A3` (`hub persona edit` mislabel and missing newly shipped features), `A4` (4 `architecture*.svg` missing `opencode`, `kimi`, and Linux), `A5` (third-party product name in public docs), `A6` (`SECURITY.md` missing Computer Use exceptions, `docs/write-scope.md` `AGENT_HUB_TOKEN` and `other five vendors`), `A7` (`docs/README.md` ordering, env vars, rail badge claim, internal design links), `A8` (em dashes and filler phrases), `A9` (all 9 PNG screenshots still match retired `9dd20f40` yellow-shell SHA-256 hashes), and `A10` (`ALWAYS_RUN_TESTS` registration).
+  - Passed as expected for unchanged contracts (`6/6`): `R1` (local links and anchors), `R2` (8-vendor CLI and install commands), `R3` (release installer and checksum names), `R4` (`SECURITY.md` `0.4.x` version series, port `4317`, `HUB_TOKEN`, 3 Feishu guest tiers), `R5` (Feishu SVG buffer limits `30` / `4,000`), and `R6` (malformed Markdown validator unit tests).
 
 Implementation step (final gate before handoff):
 
