@@ -1,15 +1,23 @@
 import type { AnyActionRow } from "../../shared/actions.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import { normalizeName, systemMessageDedupeKey } from "../../shared/domain.ts";
+import { systemMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, PmId, SystemMessageMeta } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import { HUB_HELP_ONLY_COMMANDS, type HubArgs, type HubResult } from "../../shared/hub.ts";
 import { SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
-import { checkEveryMinutes, nextRunAfter, parseDailyTime, reanchorDailyRun, scheduleLabel, scheduledTimeText, scheduleRunTitle } from "../../shared/schedule.ts";
+import {
+  nextRunAfter,
+  reanchorDailyRun,
+  scheduleLabel,
+  scheduledTimeText,
+  scheduleRunTitle,
+  validateScheduleFrequency,
+  validateScheduleName,
+  validateSchedulePrompt,
+} from "../../shared/schedule.ts";
 import type { ScheduleId, ScheduleRecord } from "../../shared/schedule.ts";
-import { HUB_LIMITS } from "../../shared/hub-limits.ts";
-import { assertHubLimit, assertHubLimitAmount, fail } from "./context.ts";
+import { assertHubLimitAmount, fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
@@ -68,25 +76,15 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
 
   const addIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.add">): HubResult<"schedule.add"> => {
     assertPmNotArchived(caller.pmId);
-    const rawName = typeof args.name === "string" ? args.name.trim() : "";
-    assertHubLimit("schedule.name", rawName);
-    const name = normalizeName(rawName, HUB_LIMITS["schedule.name"].max);
-    if (name === null) throw fail("invalid", "定时任务的名字不能是空的，也不能带换行等控制字符");
-    if (name.includes("【") || name.includes("】")) throw fail("invalid", "定时任务的名字里不能有“【”“】”");
-    if (typeof args.prompt !== "string" || args.prompt.trim() === "") throw fail("invalid", "任务说明不能是空的");
-    assertHubLimit("schedule.prompt", args.prompt);
-    if ((args.daily === undefined) === (args.everyMinutes === undefined)) {
-      throw fail("invalid", "频率要写 --daily HH:MM（每天）或 --every 30m / 2h（每隔一段时间），二选一");
-    }
-    let frequency: Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">;
-    if (args.daily !== undefined) {
-      if (typeof args.daily !== "string" || parseDailyTime(args.daily) === null) throw fail("invalid", "每天的时间要写成 HH:MM（24 小时制，如 09:00）");
-      frequency = { kind: "daily", atTime: args.daily, everyMinutes: null };
-    } else {
-      const bad = checkEveryMinutes(args.everyMinutes);
-      if (bad !== null) throw fail("invalid", bad);
-      frequency = { kind: "interval", atTime: null, everyMinutes: args.everyMinutes! };
-    }
+    const checkedName = validateScheduleName(args.name);
+    if (!checkedName.ok) throw fail("invalid", checkedName.error);
+    const checkedPrompt = validateSchedulePrompt(args.prompt);
+    if (!checkedPrompt.ok) throw fail("invalid", checkedPrompt.error);
+    const checkedFrequency = validateScheduleFrequency(args.daily, args.everyMinutes);
+    if (!checkedFrequency.ok) throw fail("invalid", checkedFrequency.error);
+    const { name } = checkedName;
+    const { prompt } = checkedPrompt;
+    const { frequency } = checkedFrequency;
     const owned = db.get<{ n: number }>("SELECT count(*) AS n FROM schedules WHERE pm_id = ?", caller.pmId)!.n;
     assertHubLimitAmount("schedule.count", owned + 1, "conflict");
     const t = now();
@@ -99,7 +97,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
       frequency.kind,
       frequency.atTime,
       frequency.everyMinutes,
-      args.prompt,
+      prompt,
       nextRunAt,
       t,
       t,
@@ -121,7 +119,10 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
       const next = s.enabled ? `下次 ${scheduledTimeText(s.nextRunAt, t)}` : "已暂停";
       return `#${s.id} ${s.name} · ${scheduleLabel(s)} · ${next} · ${lastScheduleRunText(s, t)}`;
     });
-    return { text: ["你的定时任务：", ...lines, HUB_HELP_ONLY_COMMANDS["schedule.show"]].join("\n"), data: { schedules } };
+    return {
+      text: ["你的定时任务：", ...lines, HUB_HELP_ONLY_COMMANDS["schedule.show"], HUB_HELP_ONLY_COMMANDS["schedule.edit"]].join("\n"),
+      data: { schedules },
+    };
   };
 
   const pauseIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.pause">): HubResult<"schedule.pause"> => {

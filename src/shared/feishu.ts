@@ -147,9 +147,9 @@ export function feishuDeliveryPrefixes(origin: FeishuMessageOrigin): string[] {
 }
 
 export const FEISHU_GUEST_BLOCKED_HUB_COMMANDS: Readonly<Record<FeishuGuestTier, readonly HubCommand[]>> = {
-  chat_only: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit", "graph.decide", "schedule.add"],
+  chat_only: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit", "graph.decide", "schedule.add", "schedule.edit"],
   collaborator: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit"],
-  observer: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit", "graph.decide", "schedule.add"],
+  observer: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit", "graph.decide", "schedule.add", "schedule.edit"],
 };
 
 export function feishuGuestTurnBlockReason(command: HubCommand, origin: FeishuMessageOrigin | null): string | null {
