@@ -73,7 +73,9 @@ export {
   renameSyncWithWindowsRetry,
   renameWithWindowsRetry,
   unlinkDirectoryLinkSync,
+  writeExecutableFileAtomicSync,
   writeFileAtomicSyncWithRetry,
+  type WriteExecutableFileOptions,
 } from "./win32/fs-safe.ts";
 export {
   killWin32ProcessTree,
