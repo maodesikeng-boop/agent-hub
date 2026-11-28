@@ -156,6 +156,11 @@ export function parseUnifiedZeroHunks(stdout: string): Map<string, ParsedFileDif
   return result;
 }
 
+interface OldLineInterval {
+  readonly start: number;
+  readonly end: number;
+}
+
 function sameOwnSpaceHunk(a: UnifiedHunk, b: UnifiedHunk): boolean {
   return (
     a.oldStart === b.oldStart &&
@@ -165,25 +170,91 @@ function sameOwnSpaceHunk(a: UnifiedHunk, b: UnifiedHunk): boolean {
   );
 }
 
-function hunkCoversOwn(own: UnifiedHunk, candidate: UnifiedHunk): boolean {
-  if (own.oldCount === 0) {
-    if (candidate.oldCount === 0) return candidate.oldStart === own.oldStart;
-    if (candidate.newCount === 0) return false;
-    const candidateEnd = candidate.oldStart + candidate.oldCount - 1;
-    return (
-      (own.oldStart >= candidate.oldStart && own.oldStart <= candidateEnd) ||
-      (own.oldStart === 0 && candidate.oldStart === 1)
-    );
+function trimMainEdge(candidate: UnifiedHunk, mainHunk: UnifiedHunk): UnifiedHunk | null {
+  if (sameOwnSpaceHunk(candidate, mainHunk)) return null;
+  if (mainHunk.oldCount === 0 || mainHunk.oldCount !== mainHunk.addedLines.length) return candidate;
+  if (candidate.oldCount <= mainHunk.oldCount || candidate.addedLines.length < mainHunk.addedLines.length) return candidate;
+
+  const mainLen = mainHunk.addedLines.length;
+  if (
+    candidate.oldStart === mainHunk.oldStart &&
+    mainHunk.addedLines.every((line, idx) => candidate.addedLines[idx] === line)
+  ) {
+    return {
+      oldStart: candidate.oldStart + mainHunk.oldCount,
+      oldCount: candidate.oldCount - mainHunk.oldCount,
+      newStart: candidate.newStart + mainLen,
+      newCount: candidate.newCount - mainLen,
+      addedLines: candidate.addedLines.slice(mainLen),
+    };
   }
-  if (candidate.oldCount === 0) return false;
-  const ownEnd = own.oldStart + own.oldCount - 1;
+
   const candidateEnd = candidate.oldStart + candidate.oldCount - 1;
-  return own.oldStart <= candidateEnd && candidate.oldStart <= ownEnd;
+  const mainEnd = mainHunk.oldStart + mainHunk.oldCount - 1;
+  const suffixOffset = candidate.addedLines.length - mainLen;
+  if (
+    candidateEnd === mainEnd &&
+    mainHunk.addedLines.every((line, idx) => candidate.addedLines[suffixOffset + idx] === line)
+  ) {
+    return {
+      oldStart: candidate.oldStart,
+      oldCount: candidate.oldCount - mainHunk.oldCount,
+      newStart: candidate.newStart,
+      newCount: candidate.newCount - mainLen,
+      addedLines: candidate.addedLines.slice(0, suffixOffset),
+    };
+  }
+
+  return candidate;
+}
+
+function subtractMainHunks(containing: readonly UnifiedHunk[], mainHunks?: readonly UnifiedHunk[]): UnifiedHunk[] {
+  if (mainHunks === undefined || mainHunks.length === 0) return [...containing];
+  const effective: UnifiedHunk[] = [];
+  for (const hunk of containing) {
+    let trimmed: UnifiedHunk | null = hunk;
+    for (const mainHunk of mainHunks) {
+      if (trimmed === null) break;
+      trimmed = trimMainEdge(trimmed, mainHunk);
+    }
+    if (trimmed !== null) effective.push(trimmed);
+  }
+  return effective;
+}
+
+function mergeOldLineIntervals(hunks: readonly UnifiedHunk[]): OldLineInterval[] {
+  const intervals = hunks
+    .filter((h) => h.oldCount > 0)
+    .map((h) => ({ start: h.oldStart, end: h.oldStart + h.oldCount - 1 }))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: OldLineInterval[] = [];
+  for (const interval of intervals) {
+    const prev = merged.at(-1);
+    if (prev !== undefined && interval.start <= prev.end + 1) {
+      merged[merged.length - 1] = { start: prev.start, end: Math.max(prev.end, interval.end) };
+    } else {
+      merged.push(interval);
+    }
+  }
+  return merged;
+}
+
+function insertionCoveredBy(own: UnifiedHunk, candidate: UnifiedHunk): boolean {
+  if (candidate.oldCount === 0) return candidate.oldStart === own.oldStart;
+  if (candidate.newCount === 0) return false;
+  const candidateEnd = candidate.oldStart + candidate.oldCount - 1;
+  const touchesPoint =
+    (own.oldStart >= candidate.oldStart && own.oldStart <= candidateEnd) ||
+    (own.oldStart === 0 && candidate.oldStart === 1);
+  if (!touchesPoint) return false;
+  const strictlyInterior = own.oldStart >= candidate.oldStart && own.oldStart < candidateEnd;
+  if (strictlyInterior || candidate.newCount > candidate.oldCount) return true;
+  return own.addedLines.some((line) => candidate.addedLines.includes(line));
 }
 
 /**
  * Precondition: own, containing, and optional mainSinceOwn are parsed from diffs sharing the same left-hand base tree (ownMergeBase).
- * Postcondition: returns true only when neither own nor containing is binary, own has at least one hunk, and every own hunk overlaps at least one containing hunk that is not byte-identical to a mainSinceOwn hunk.
+ * Postcondition: returns true only when neither own nor containing is binary, own has at least one hunk, and every base line modified or deleted by own (and every pure insertion point) is covered by containing hunks after stripping mainSinceOwn-identical edits.
  */
 export function hunksCoverOwnDiff(
   own: ParsedFileDiff,
@@ -191,12 +262,16 @@ export function hunksCoverOwnDiff(
   mainSinceOwn?: ParsedFileDiff,
 ): boolean {
   if (own.binary || containing.binary || own.hunks.length === 0 || containing.hunks.length === 0) return false;
-  const effectiveContaining =
-    mainSinceOwn === undefined
-      ? containing.hunks
-      : containing.hunks.filter((c) => !mainSinceOwn.hunks.some((m) => sameOwnSpaceHunk(c, m)));
+  const effectiveContaining = subtractMainHunks(containing.hunks, mainSinceOwn?.hunks);
   if (effectiveContaining.length === 0) return false;
-  return own.hunks.every((ownHunk) => effectiveContaining.some((candidate) => hunkCoversOwn(ownHunk, candidate)));
+  const coveredOldRanges = mergeOldLineIntervals(effectiveContaining);
+  return own.hunks.every((ownHunk) => {
+    if (ownHunk.oldCount === 0) {
+      return effectiveContaining.some((candidate) => insertionCoveredBy(ownHunk, candidate));
+    }
+    const ownEnd = ownHunk.oldStart + ownHunk.oldCount - 1;
+    return coveredOldRanges.some((interval) => interval.start <= ownHunk.oldStart && ownEnd <= interval.end);
+  });
 }
 
 async function rawDiffTree(repoFolder: string, timeoutMs: number, fromTree: string, toTree: string): Promise<Map<string, RawTreeChange>> {

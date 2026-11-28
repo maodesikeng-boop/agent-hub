@@ -79,6 +79,75 @@ describe("relay-carry pure diff contracts", () => {
     expect(hunksCoverOwnDiff(file([], true), file([], true))).toBe(false);
   });
 
+  it("rejects partial revert inside a single contiguous hunk while accepting full contiguous refinement", () => {
+    const file = (hunks: ParsedFileDiff["hunks"]): ParsedFileDiff => ({ path: "content", binary: false, hunks });
+    const ownLines5And6 = file([
+      { oldStart: 5, oldCount: 2, newStart: 5, newCount: 2, addedLines: ["part1 line 5", "part1 line 6"] },
+    ]);
+
+    // Reverting line 5 while retaining line 6 leaves line 5 uncovered inside the original hunk.
+    expect(
+      hunksCoverOwnDiff(
+        ownLines5And6,
+        file([{ oldStart: 6, oldCount: 1, newStart: 6, newCount: 1, addedLines: ["part1 line 6"] }]),
+      ),
+    ).toBe(false);
+
+    // Reverting line 6 while retaining line 5 also fails.
+    expect(
+      hunksCoverOwnDiff(
+        ownLines5And6,
+        file([{ oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["part1 line 5"] }]),
+      ),
+    ).toBe(false);
+
+    // Reverting the middle line of a 3-line hunk fails even though both outer lines remain changed.
+    const ownLines5To7 = file([
+      { oldStart: 5, oldCount: 3, newStart: 5, newCount: 3, addedLines: ["p1 5", "p1 6", "p1 7"] },
+    ]);
+    expect(
+      hunksCoverOwnDiff(
+        ownLines5To7,
+        file([
+          { oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["p1 5"] },
+          { oldStart: 7, oldCount: 1, newStart: 7, newCount: 1, addedLines: ["p1 7"] },
+        ]),
+      ),
+    ).toBe(false);
+
+    // Legitimate refinement covering all lines (or a wider range) passes.
+    expect(
+      hunksCoverOwnDiff(
+        ownLines5And6,
+        file([{ oldStart: 5, oldCount: 2, newStart: 5, newCount: 2, addedLines: ["refined 5", "refined 6"] }]),
+      ),
+    ).toBe(true);
+    expect(
+      hunksCoverOwnDiff(
+        ownLines5And6,
+        file([{ oldStart: 4, oldCount: 4, newStart: 4, newCount: 4, addedLines: ["r4", "r5", "r6", "r7"] }]),
+      ),
+    ).toBe(true);
+
+    // Dropping line 5 in favor of main's exact line 5 inside a merged 2-line hunk fails.
+    expect(
+      hunksCoverOwnDiff(
+        ownLines5And6,
+        file([{ oldStart: 5, oldCount: 2, newStart: 5, newCount: 2, addedLines: ["main line 5", "part1 line 6"] }]),
+        file([{ oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["main line 5"] }]),
+      ),
+    ).toBe(false);
+
+    // Non-conflicting main edit on adjacent line 4 merged into one hunk still covers own line 5.
+    expect(
+      hunksCoverOwnDiff(
+        file([{ oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["part1 line 5"] }]),
+        file([{ oldStart: 4, oldCount: 2, newStart: 4, newCount: 2, addedLines: ["main line 4", "part1 line 5"] }]),
+        file([{ oldStart: 4, oldCount: 1, newStart: 4, newCount: 1, addedLines: ["main line 4"] }]),
+      ),
+    ).toBe(true);
+  });
+
   it("verifies relay content preservation across a 50-file branch without invoking external diff drivers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-hub-relay-carry-"));
     try {

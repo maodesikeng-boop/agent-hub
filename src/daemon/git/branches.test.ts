@@ -332,6 +332,24 @@ describe("isBranchSquashMergedToMain only trusts a containing ref that carried t
     squashInto(conflictRepo.repo, "hub/2-c", "other tweak (#2)");
     expect(await isBranchSquashMergedToMain(conflictRepo.repo, "hub/1-c", conflictRepo.base)).toBe(false);
   });
+
+  it("does not vouch when a later branch reverts one of two adjacent modified lines in a single contiguous hunk, but vouches when both lines are refined", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-contig");
+    commitFiles(repo, { "README.md": readme({ 5: "part1 lost", 6: "part1 kept" }) }, "edit adjacent lines 5 and 6");
+    git(repo, "checkout", "-q", "-b", "hub/2-partial-contig");
+    commitFiles(repo, { "README.md": readme({ 6: "part1 kept" }) }, "revert line 5 and keep line 6");
+    squashInto(repo, "hub/2-partial-contig", "partial contig (#2)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-contig", base)).toBe(false);
+
+    const refined = makeRepo();
+    git(refined.repo, "checkout", "-q", "-b", "hub/3-contig");
+    commitFiles(refined.repo, { "README.md": readme({ 5: "part1 line 5", 6: "part1 line 6" }) }, "edit lines 5 and 6");
+    git(refined.repo, "checkout", "-q", "-b", "hub/4-refined");
+    commitFiles(refined.repo, { "README.md": readme({ 5: "refined line 5", 6: "refined line 6" }) }, "refine lines 5 and 6");
+    squashInto(refined.repo, "hub/4-refined", "refined contig (#4)");
+    expect(await isBranchSquashMergedToMain(refined.repo, "hub/3-contig", refined.base)).toBe(true);
+  });
 });
 
 describe("isBranchSquashMergedToMain never runs repository merge drivers", () => {

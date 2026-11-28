@@ -290,4 +290,42 @@ describe("createBranchCleanup", () => {
     expect(branchExists("hub/50-part1")).toBe(true);
     expect(run.held.map((h) => h.branch)).toEqual(["hub/50-part1"]);
   });
+
+  it("holds rather than deletes an earlier relay branch when a later squash-merged branch reverted one of two adjacent edited lines", async () => {
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "ten lines");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "checkout", "-q", "-b", "hub/52-part1");
+    writeFileSync(
+      join(repo, "README.md"),
+      Array.from({ length: 10 }, (_, i) => (i === 4 ? "part1 lost" : i === 5 ? "part1 kept" : `line ${i + 1}`)).join("\n") + "\n",
+    );
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "edit adjacent lines 5 and 6");
+
+    git(repo, "checkout", "-q", "-b", "hub/53-part2");
+    writeFileSync(
+      join(repo, "README.md"),
+      Array.from({ length: 10 }, (_, i) => (i === 5 ? "part1 kept" : `line ${i + 1}`)).join("\n") + "\n",
+    );
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "revert line 5 and retain line 6");
+
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", "hub/53-part2");
+    git(repo, "commit", "-q", "-m", "squash part2");
+
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 52, projectId: 1, branch: "hub/52-part1", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+      { workerId: 53, projectId: 1, branch: "hub/53-part2", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const run = await cleanup.runOnce();
+
+    expect(run.deleted.map((d) => d.branch)).toEqual(["hub/53-part2"]);
+    expect(branchExists("hub/52-part1")).toBe(true);
+    expect(run.held.map((h) => h.branch)).toEqual(["hub/52-part1"]);
+  });
 });
