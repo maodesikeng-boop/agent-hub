@@ -4,240 +4,97 @@
 
 # Bellwood
 
-### 一个项目一个会话，统管你手头所有的编码 Agent。
+### 一个项目一个会话，统管你手头所有的编码 Agent CLI。
 
-**Claude Code 当项目经理，Codex 在独立工作树并行写代码，Antigravity 做异构审查。**<br>
-跨厂商持久记忆跟着项目走，换了工具记忆还在；<br>
-总助 Router 一个入口管住所有仓库与多台电脑，拉进飞书群里 `@` 机器人就能自动完成开发和验证。
+Bellwood 在本机为每个仓库配一位**项目经理（PM）**，把短命 **Worker** 派进操作系统沙箱与独立 git worktree 并行干活，用 **总助（Router）**汇总多台电脑的待拍板事项，并免公网服务器接入**飞书**。
 
-**[下载安装](#快速开始)** &nbsp;·&nbsp; **[整体结构](#整体结构)** &nbsp;·&nbsp; **[一个项目一个会话](#一个项目一个会话)** &nbsp;·&nbsp; **[总助 Router](#总助-router一个入口管住所有项目与多台电脑)** &nbsp;·&nbsp; **[飞书入口](#飞书入口走出电脑桌把整个团队拉进闭环)** &nbsp;·&nbsp; **[安全与条款](#安全边界与厂商条款)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
+**[快速开始](#快速开始)** &nbsp;·&nbsp; **[工作原理](#工作原理)** &nbsp;·&nbsp; **[总助 Router](#总助-router)** &nbsp;·&nbsp; **[飞书入口](#飞书入口)** &nbsp;·&nbsp; **[安全与条款](#安全边界与厂商条款)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
 
 <br>
 
-<img src="docs/screenshots/readme/workspace-zh.png" width="900" alt="Bellwood 四栏主界面：最左栏置顶总助 Router 与多台已配对设备，项目列表支持置顶与调宽，中栏单一项目经理对话展示折叠过程、Worker 线程卡与拍板卡，右侧面板实时展示 Pieces 与任务流图管道">
+<img src="docs/screenshots/readme/workspace-zh.png" width="900" alt="Bellwood 木纹壳主界面：顶部木纹栏居中放置快速总助输入框，最左栏展示总助 Router 与已配对设备，项目列表旁侧是单一项目经理连续对话（含实时进度清单与拍板卡）以及带 Active、Completed、Info 三个标签页的右侧工作面板">
 
-</div>
-
-<br>
-
-## Bellwood 适合你吗？
-
-同时开好几个编码 Agent 并行干活时，真正的瓶颈很快就会从写代码变成**管会话**：手动建 git worktree、在不同终端之间来回复制背景、盯着屏幕看哪个窗口卡住了，某家额度用完换个工具又要从头交代一遍项目规矩。
-
-Bellwood 给每个项目配一位专属的**项目经理（PM）**，把繁琐的编排和状态收进一个本地应用里：
-
-- **一个项目只留一个主对话**。你只在一个连续会话里和项目经理对齐目标、点选拍板卡；拆步骤、派 **Worker**（界面里叫 **Pieces**）去各自的独立 git worktree 并行写代码、看测试结果、合 PR，都交给项目经理处理。
-- **自由混用各家工具，换了工具记忆还在**。项目经理和每个 Worker 都可以独立选 `claude`、`codex`、`agy`、`pi`、`dsh`、`cursor-agent`、`opencode` 或 `kimi`，用你自己的订阅或 API Key 跑。长期记忆存在 Bellwood 自己的本地账本与 Markdown 文件里，哪怕中途换了厂商，项目攒下的架构约束、踩坑记录和你的个人习惯照样都在。
-- **跨项目、跨设备与团队群聊一个入口打通**。**总助（Router）**把你名下所有项目、多台电脑上的待拍板事项和进展汇成一处，还不会撑爆上下文；接上**飞书**后不用公网 IP，一个人手机随时遥控，团队拉群正常聊天、需要落实时 `@` 一下机器人就能自动改完代码并把验证截图发回群里。
-
-如果你同时推进不止一个需求或仓库、混用不止一家命令行 Agent，或者希望在手机和飞书群里随时拍板验收，它就适合你。如果你平时只在一个仓库里开一个终端跑单个 Agent 而且够用，那就不需要它。
-
-支持 **Apple 芯片 Mac**（macOS 13+，`Bellwood.app` 原生窗口）、**Windows x64**（Tauri 2 原生桌面应用，随包自带官方 Node 24 LTS，无需管理员权限、无需 WSL 2）、**Linux**（`systemd` 常驻守护进程），以及手机和电脑上的**飞书**。
-
-## 整体结构
-
-本地守护进程在后台统一管理对话账本、任务流图、项目记忆与交付文件，在操作系统级沙箱里调度你电脑上装好的各家命令行 Agent，并通过桌面窗口与飞书向你汇总进展。
-
-<div align="center">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/architecture-zh-dark.svg">
-  <img src="docs/screenshots/readme/architecture-zh.svg" width="900" alt="Bellwood 整体结构：桌面端、飞书会话、支持自动接管的账号级机器人和账号组网，经总助、项目经理与沙箱工作树调用本机命令行 Agent">
-</picture>
-</div>
-
-## 一个项目一个会话
-
-一个会话跑上几周，往往会撞上上下文膨胀、分支冲突和换工具失忆这几道坎。Bellwood 在底层做了七件事，让单会话长期顺畅运转：
-
-<table>
-<tr>
-<td width="50%">
-<img src="docs/screenshots/readme/task-graph-zh.png" alt="任务流图全览弹窗：展示并行分支、自动递进管道与节点内联拍板卡">
-</td>
-<td width="50%">
-<img src="docs/screenshots/readme/memory-zh.png" alt="项目经理资料面板：在对话旁侧展开可编辑的专题持久记忆文件">
-</td>
-</tr>
-</table>
-
-### 1. 专属记忆与工具同步，换家也不重来
-
-各家命令行自带的记忆锁在各自目录里，MCP、工具和 Skill 的配置格式也互不相通。平时换一家工具，之前教过的项目规矩全丢了，连顺手的工具链也得按新格式重配一遍。
-
-Bellwood 为每个项目保存一份独立于厂商之外的专属记忆，项目经理会在日常协作中自动记下你的偏好、架构约定和踩过的坑，资料页里随时可查、可改、可回退。同时，在 **Settings → Providers** 点一下同步，就能把已配好的 MCP 服务器、工具与 Skill 一键对齐到本机所有 CLI。上午用 Claude Code，下午切 Codex，晚上换 Antigravity，项目的记忆和工具箱始终一致。
-
-### 2. 无感后台换代，秒切厂商与模型
-
-会话聊长了容易变笨卡顿，中途换家又怕丢掉聊了一半的进度，Bellwood 在底层把这两件事都抹平了：
-
-- **长会话自动后台换代**：上下文快满时，后台会悄悄复制当前会话整理好交接单，不打断你正在进行的对话。两轮之间的空隙里自动切入干净的新会话，保留关键上下文与最近原话，顺手甩掉臃肿的历史工具输出，一个窗口连聊几周依然轻快。
-- **零等待切换厂商与模型**：某家额度用完，或者想换个模型拿主意时，在资料页点一下就能当场切过去，不用等它写交接。新模型会直接拿到你最近聊过的原话、附件、Worker 汇报和正在跑的任务图状态，就算在几家工具之间连续来回切，上下文也始终完整连贯。
-
-### 3. 独立工作树与系统级沙箱
-
-每个改代码的 Worker 都会自动进入独立的 `git worktree` 并行开发，互不踩脚，也不污染你的主分支；配好一次准备脚本后，新建工作树时还会自动装好依赖再开工，合入主干后自动回收。所有 Worker 全程跑在操作系统原生沙箱里，严格限制越界读写；负责独立审查的只读 Worker 从系统层直接封死写权限。
-
-### 4. 一个 `hub` 命令统管子 Worker
-
-项目经理通过内置的 `hub` 命令就能完成建任务图、派 Worker、查进度、挂拍板卡和更新记忆，不用拼凑复杂的脚本：
-
-```sh
-hub graph create --stdin        # 声明自动交棒的多步任务流图
-hub worker start --stdin        # 派单个 Worker 进独立工作树干活
-hub ask --option "…" --stdin    # 向你挂出带推荐项的拍板卡
-hub persona edit --stdin        # 更新跨厂商项目记忆
-```
-
-平时在聊天框输入 `/hub:worker`，你也可以直接指定这一轮派出去的 Worker 用哪家厂商、哪个模型和哪档思考程度。
-
-### 5. 后台自动递进，顺利时不打扰
-
-任务图一建好，后续推进全由后台接管。上一步顺利做完，守护进程会自动把总目标、分支进展和交接要点传给下一步并拉起新 Worker，项目经理不用在中间反复传话。只有遇到方案偏离、运行报错、需要你确认的检查点，或者整张图全部做完待验收时，系统才会叫醒项目经理或给你弹卡。
-
-### 6. 只需关注拍板与验收
-
-翻代码、跑测试、看长日志这些消耗注意力和上下文的体力活，全留在用完即走的短命 Worker 里；碰到关键改动，还会自动排入另一家模型的独立只读审查，不用你在主对话里硬啃几千行 diff。交到你面前的只有带推荐项的拍板卡，以及直接在对话里渲染好的截图、录屏、流程图与验收结论，你只管看证据做决定。
-
-### 7. 清爽的四栏视图
-
-| 区域 | 放什么 |
-| :-- | :-- |
-| **最左栏** | 固定 **Router（总助）**，下面并排展示各台已配对电脑及待处理角标，底部常驻实时额度、设置与账号入口。 |
-| **项目列表** | 支持拖拽调宽与 **Pinned** 置顶，每个项目对应一只专属像素水果史莱姆，成百上千个历史子任务绝不挤占会话列表。 |
-| **中栏** | 单一连续的项目经理主对话。繁琐的工具调用默认折叠收起，界面干净得像普通聊天。 |
-| **右侧面板** | 同屏实时展示 **Task Graph** 任务管道、正在跑的 **Pieces**、任意 Worker 线程详情与项目经理设置，无需切走主对话上下文。 |
-
-## 总助 Router：一个入口管住所有项目与多台电脑
-
-当你手头有十几个项目散落在笔记本、台式机和远端服务器上时，最左栏置顶的 **Router（总助）**就是你的全局控制台。不用在十几行列表和几台电脑之间来回找，为什么一个入口就能稳稳管住全局？
-
-<div align="center">
-<img src="docs/screenshots/readme/router-zh.png" width="900" alt="总助 Router 工作台：铺满主区域汇总 Studio Mac 与东京构建机上的待拍板卡片，并直接回答跨设备项目进展">
 </div>
 
 <br>
 
-### 1. 所有待办与验收一处收齐
+同时开多个编码 Agent 并行开发时，瓶颈很快会从写代码变成管会话：手动建 git worktree、在终端间复制上下文、盯着哪个窗口卡住，或者某家额度用完换工具后从头交代项目约定。
 
-不管哪个项目、哪台电脑上的任务跑完了，或者卡在某个分岔口等你拿主意，拍板卡和完工简报都会自动汇进总助托盘。你在一个界面里点选选项、点开截图验收，决定会实时同步回对应的项目经理推进下一步。
+Bellwood 以本地守护进程运行，提供 **macOS 13+（Apple 芯片）** 原生应用（`Bellwood.app`）、**Windows x64** 原生 Tauri 2 应用（内置 Node 24 LTS，免管理员权限、免 WSL 2）、**Linux** `systemd` 常驻守护进程，以及手机和电脑上的**飞书**入口。
 
-### 2. 说人话就能跨机派活、追进度
+- **一个项目只留一条主对话**。你在一个连续线程里和项目经理对齐目标、处理拍板卡；拆步骤、派 Worker 进独立 git worktree 并行干活、汇总测试结果与交付文件，全由项目经理协调。
+- **自由混用 8 家 Agent CLI，项目记忆跟着项目走**。项目经理和每个 Worker 都可以独立选用 `claude`、`agy`、`codex`、`pi`、`dsh`、`cursor-agent`、`opencode` 或 `kimi`，用你自己的订阅或 API Key 运行。长期记忆保存在 Bellwood 本地账本与 Markdown 文件里，换工具不丢约定。
+- **多台电脑与团队群聊统一收口**。**总助（Router）**把 Mac、Windows 与 Linux 服务器上的待拍板卡片和进度汇成一处；接上**飞书**后无需公网 IP，出门用手机批示，团队在群里讨论后 `@` 机器人即可开工并回传验证结果。
 
-不用记机器名和完整仓库路径，哪怕直接喊项目的日常简称或口头代号（比如“帮我看看支付网关刚合进去的改动上线没”），总助也能自动对上号，把指令精准转交给对应电脑上的项目经理，并在你原问题下面直接把项目经理的答复带回来。
-
-### 3. 两层项目档案，懂全局又不爆上下文
-
-总助之所以认识你所有项目的来龙去脉，是因为后台会在项目推进时静默提炼出两层档案：一层是极轻量的「一句话名片与近期主线」，另一层是按需展开的「阶段详细近况」。总助平时只扫一眼名片就能精准分派，遇到复杂追问才翻开详细近况，根本不用去硬啃百万字的原始聊天记录。
-
-### 4. 单轮轻量分派，长年使用零卡顿
-
-总助本身不背负冗长的历史包袱。你每问一句话，后台都在干净的独立环境里完成识别与分派，干完即走；不管你接了二十个项目还是连用几个月，响应速度始终像刚装好第一天一样快，随时切换总助自己的厂商和模型也是当场生效。
-
-### 5. 登录同一账号，多台电脑自动组网
-
-在你的 Mac、Windows 和 Linux 服务器上登录同一个 GitHub 账号，核对一次六位数字码就能把所有设备安全连成一张网：在同一局域网时自动直连，异地时通过端到端加密中继互通。各台电脑代码与日志留在本地各管各账，只向总助同步轻量名片与指令，彻底告别手工配公网 IP、SSH 隧道或内网穿透。
-
-## 飞书入口：走出电脑桌，把整个团队拉进闭环
-
-不用公网服务器、不用申请域名或配反向代理，只要在手机或电脑上打开飞书，既能一个人随时随地遥控手头所有电脑，也能把产品、设计和研发同事拉进群里，在日常聊天中直接完成开发与验证。
-
-<div align="center">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/feishu-group-zh-dark.svg">
-  <img src="docs/screenshots/readme/feishu-group-zh.svg" width="900" alt="飞书团队群聊验证闭环：群成员照常讨论并静默记入上下文，@Bellwood 触发本机独立工作树改代码与真机截图验证，JSON 2.0 卡片把验收截图和拍板按钮直接发回群里">
-</picture>
-</div>
-
-<br>
-
-### 1. 免公网扫码即用，全账号共用一个机器人
-
-后台通过飞书官方长连接主动向外连接，在终端跑一行命令、拿手机飞书扫个码，一分钟就自动建好你的专属机器人。多台电脑登录同一账号后共用这唯一一个机器人：你可以排好主力电脑顺序，平时由排第一的设备挂载；一旦笔记本合盖或服务器维护掉线，下一台在线电脑会自动无缝接管，网络闪断恢复后还会主动补拉断网期间漏掉的消息。
-
-### 2. 单聊管全局，每个项目自动建专属群
-
-点开机器人单聊就是找**总助 Router**，跨机派活、收全局拍板卡在手机单聊里就能全办完；而你手头的每一个项目，都会自动拉起一个带专属像素史莱姆头像的独立项目群。回复在群里实时流式滚动并自带停止按钮，高清截图、录屏视频、方案文档和拍板卡直接铺在主聊天流里，手机点一下或电脑点一下，两边状态实时同步。
-
-### 3. 团队群里照常聊，`@` 一下自动改码交截图
-
-项目群里只有你一个人时，发每句话都直达项目经理；一旦你把团队同事拉进群，这个群就会**自动切换为 `@机器人` 触发模式**：
-
-- 同事们平时在群里自由讨论需求、发报错截图或手机直拍长视频，机器人只在后台静默记下最近的讨论脉络，绝不插嘴刷屏。
-- 大家聊出结论后，直接在群里 `@机器人` 交代一句（比如“按上面聊定的改好，跑完测试把桌面和手机真机图发群里”）。
-- 项目经理直接带着刚才整段群聊前因后果拉起独立工作树改代码、跑测试、用浏览器截好真机验证画面，把结果连同拍板卡直接发回群里让大家当场验看。
-
-### 4. 手机上随时切模型、调思考档位
-
-在单聊或项目群发 `/settings`（或 `/设置`、`/群设置`），就能随时呼出交互设置卡。出门在外遇到某家模型限额，或者碰到硬骨头想临时换个顶配推理模型，不用回电脑开网页，在飞书卡片下拉框里直接就能零等待切好厂商、模型与思考程度。
-
-### 5. 按群设置的三档访客权限
-
-你可以在每个项目群的设置卡里将访客权限设为**只读**、**仅对话**或**协作者**。**只读**档成员的发言不会唤醒项目经理，仅在你发起对话时作为背景参考。默认的**仅对话**档允许成员 `@` 机器人与项目经理对话，拍板卡、停止和发送附件仍仅限主人。**协作者**档还可回答拍板卡、点停止和发送附件。在访客触发的轮次中，账本层会拦截新建项目、挂卸目录、修改准备脚本与性格设定等主人专属命令。
-
-由于项目经理以当前系统用户身份运行且不受外层沙箱限制，凡是加入飞书项目群且权限不是**只读**的成员，包括默认的**仅对话**与**协作者**两档，都必须是你信任的人。这两档成员都可以向未受沙箱限制的项目经理发消息，而账本层的命令拦截无法限制项目经理执行的 shell 命令。
-
-## 支持的 Agent
-
-<table>
-<tr><td>
-
-**Claude Code** (`claude`) · **Codex** (`codex`) · **Antigravity** (`agy`) · **Pi** (`pi`) · **DeepSeek Harness** (`dsh`) · **Cursor** (`cursor-agent`) · **OpenCode** (`opencode`) · **Kimi Code** (`kimi`)
-
-</td></tr>
-</table>
-
-在 macOS、Windows 或 Linux 上打开 **Settings → Providers**，即可一键安装任意支持的命令行 Agent，并直接在界面内登录（支持浏览器 OAuth、设备码、无头服务器粘贴回环地址或填写 API Key），查看实时额度窗口（`claude`、`agy`、`codex`），以及一键扫描合并各家已配的 MCP 服务器与技能。首次打开还没有就绪厂商时，这个面板会自动弹出。
-
-<div align="center">
-<img src="docs/screenshots/readme/providers.png" width="900" alt="Settings › Providers 面板：展示目标设备选择栏，以及各家命令行 Agent 的版本与登录入口">
-</div>
+如果你平时只在一个仓库里开一个终端跑单个 Agent 且够用，就不需要 Bellwood。
 
 ## 快速开始
 
 ### 1. 下载桌面安装包（未签名预览版）
 
-直接从 **[GitHub Releases](https://github.com/maodesikeng-boop/agent-hub/releases/latest)** 下载预编译安装包（无需预先安装 Node 或拉取源码）：
+从 **[GitHub Releases](https://github.com/maodesikeng-boop/agent-hub/releases/latest)** 下载预编译安装包：
 
 | 平台 | 安装包 | 校验文件 |
 | :-- | :-- | :-- |
-| **macOS 13+**（Apple 芯片，内置官方 Node 24 LTS 与后台） | [`Bellwood-macos-arm64.dmg`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg.sha256) |
-| **Windows x64**（推荐 Windows 11；免管理员、免 WSL 2，内置官方 Node 24 LTS） | [`Bellwood-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe.sha256) |
+| **macOS 13+**（Apple 芯片，内置 Node 24 LTS 与守护进程） | [`Bellwood-macos-arm64.dmg`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg.sha256) |
+| **Windows x64**（推荐 Windows 11；免管理员、免 WSL 2，内置 Node 24 LTS） | [`Bellwood-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe.sha256) |
 
-<sub>两个安装包目前均为未签名预览版，首次打开需系统放行一次。**Mac 首次打开：** 打开 DMG 把 **Bellwood** 拖进「应用程序」，双击遇到“无法验证开发者”时点「完成」，随后到「系统设置 → 隐私与安全性」底部点 Bellwood 旁边的「仍要打开」（可用 `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256` 校验）。**Windows 首次运行：** SmartScreen 提示时点「更多信息 → 仍要运行」；关闭窗口会隐藏到系统托盘，右键托盘图标选 `Quit Bellwood` 可优雅关停守护进程及其全部子进程树；如需派发并行 Git worktree，可在 **Settings → Providers** 一键安装 Git for Windows 或执行 `winget install --id Git.Git -e --source winget`。</sub>
+打开前可先核对 SHA-256 校验值与 GitHub 构建溯源证明：
+
+```sh
+# macOS 校验文件与溯源证明
+shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256
+gh attestation verify Bellwood-macos-arm64.dmg -R maodesikeng-boop/agent-hub
+```
+
+```powershell
+# Windows 校验文件与溯源证明
+Get-FileHash Bellwood-windows-x64-setup.exe -Algorithm SHA256
+gh attestation verify Bellwood-windows-x64-setup.exe -R maodesikeng-boop/agent-hub
+```
+
+两个安装包目前为未签名预览版，首次打开需要系统放行。**macOS**：把 **Bellwood** 拖入「应用程序」，双击遇到提示时点「完成」，再到「系统设置 → 隐私与安全性」底部点「仍要打开」。**Windows**：在 SmartScreen 提示中点「更多信息 → 仍要运行」；关闭窗口会收进系统托盘，右键托盘选 **Quit Bellwood** 可优雅停掉守护进程。如需在 Windows 上派发并行 git worktree，可在 **Settings → Providers** 安装 Git for Windows 或执行 `winget install --id Git.Git -e --source winget`。
 
 ### 2. 安装并登录至少一家 Agent CLI
 
-打开 **Bellwood**，在弹出的 **Settings → Providers** 页面点对应厂商右侧的 **Install** 一键安装，再点 **Sign in…** 登录你的订阅账号或填入 API Key 即可开聊。
+Bellwood 支持 **Claude Code** (`claude`)、**Antigravity** (`agy`)、**Codex** (`codex`)、**Pi** (`pi`)、**DeepSeek Harness** (`dsh`)、**Cursor** (`cursor-agent`)、**OpenCode** (`opencode`) 和 **Kimi Code** (`kimi`)。
+
+打开 **Bellwood** 并进入 **Settings → Providers**（首次启动如无可用 CLI 会自动打开）。点击对应厂商右侧的 **Install** 安装，再点击 **Sign in...** 完成登录（支持浏览器 OAuth、设备码、无头服务器粘贴回环回调地址或填写 API Key）。新建项目经理或使用总助 **Auto** 模式且未指定厂商时，Bellwood 会自动选择这台电脑上第一个可用的 CLI。
+
+<div align="center">
+<img src="docs/screenshots/readme/providers.png" width="900" alt="Settings Providers 页面：列出全部支持的命令行 Agent、版本号、账号状态与登录入口">
+</div>
+
+<br>
 
 <details>
 <summary><b>在终端手动安装与登录各家 CLI</b></summary>
 
 <br>
 
-- **Claude Code (`claude`)**：macOS/Linux `curl -fsSL https://claude.ai/install.sh | bash`，Windows PowerShell `irm https://claude.ai/install.ps1 | iex`；登录运行 `claude auth login`。
-- **Codex (`codex`)**：macOS/Linux `curl -fsSL https://chatgpt.com/codex/install.sh | sh` 或 `npm install -g @openai/codex`；登录运行 `codex login`（远端无浏览器终端用 `codex login --device-auth`）。
-- **Antigravity (`agy`)**：macOS/Linux `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录或配置 `GEMINI_API_KEY`。
-- **Pi (`pi`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；运行 `pi` 后输入 `/login`。
-- **DeepSeek Harness (`dsh`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：运行 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，执行 `dsh` 登录或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`。
-- **Cursor (`cursor-agent`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl https://cursor.com/install -fsS | bash`，Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`；运行 `cursor-agent login` 登录。
-- **OpenCode (`opencode`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://opencode.ai/v2/install | bash`，Windows `npm install -g @opencode/cli`；运行 `opencode auth login` 登录，或在 **Settings → Providers** 里填 OpenCode Zen 的 Key（`OPENCODE_API_KEY`）。
-- **Kimi Code (`kimi`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`，Windows PowerShell `irm https://code.kimi.com/kimi-code/install.ps1 | iex`（或在 Node.js 22.19+ 下 `npm install -g @moonshot-ai/kimi-code`）；运行 `kimi login` 登录，或在 **Settings → Providers** 里填 Kimi 开放平台 API Key。
+- **Claude Code (`claude`)**：macOS/Linux 运行 `curl -fsSL https://claude.ai/install.sh | bash`，Windows PowerShell 运行 `irm https://claude.ai/install.ps1 | iex`；登录运行 `claude auth login`。
+- **Antigravity (`agy`)**：macOS/Linux 运行 `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell 运行 `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录或配置 `GEMINI_API_KEY`。
+- **Codex (`codex`)**：macOS/Linux 运行 `curl -fsSL https://chatgpt.com/codex/install.sh | sh`，Windows 运行 `npm install -g @openai/codex`；登录运行 `codex login`（无浏览器服务器用 `codex login --device-auth`）。
+- **Pi (`pi`)**：macOS/Linux 运行 `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell 运行 `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；运行 `pi` 后输入 `/login`。
+- **DeepSeek Harness (`dsh`)**：运行 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，运行 `dsh` 或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`。
+- **Cursor (`cursor-agent`)**：macOS/Linux 运行 `curl https://cursor.com/install -fsS | bash`，Windows PowerShell 运行 `irm 'https://cursor.com/install?win32=true' | iex`；登录运行 `cursor-agent login`。
+- **OpenCode (`opencode`)**：macOS/Linux 运行 `curl -fsSL https://opencode.ai/v2/install | bash`，Windows 运行 `npm install -g @opencode/cli`；登录运行 `opencode auth login`，或在 **Settings → Providers** 填入 OpenCode Zen Key（`OPENCODE_API_KEY`）。
+- **Kimi Code (`kimi`)**：macOS/Linux 运行 `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`，Windows PowerShell 运行 `irm https://code.kimi.com/kimi-code/install.ps1 | iex`（或在 Node.js 22.19+ 下运行 `npm install -g @moonshot-ai/kimi-code`）；登录运行 `kimi login`，或在 **Settings → Providers** 填入 Kimi 开放平台 API Key。
 
 </details>
 
-### 3. 接入飞书与其他电脑（可选）
+### 3. 接入飞书、Linux 或其他电脑（可选）
 
-- **接入飞书机器人与项目群**：守护进程运行期间，在终端执行 `node src/feishu/main.ts connect` 并用手机飞书扫码即可。运行 `node src/feishu/main.ts status` 查看绑定状态。同一账号的设备共用一个机器人，当前设备离线后由另一台自动接管。
-- **多台电脑组网**：内置官方公共盲中继和公开的 GitHub Device Flow Client ID，无需额外配置；在每台电脑的 **Settings → Computers** 登录同一个 GitHub 账号。批准新设备时核对两台电脑显示的六位数字码。如需自建中继，设置 `FUSA_RELAY_URL` 和 `FUSA_GITHUB_CLIENT_ID` 覆盖。手机通过飞书操作这些设备。
-- **Linux 常驻后台**：在 Ubuntu 上部署 `systemd` 用户服务，运行一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap` 沙箱。详见 [Linux 部署指南](docs/linux.md)与[账号组网设计](docs/account-mesh-design.md)。
+- **飞书机器人与项目群**：守护进程运行时执行 `node src/feishu/main.ts connect` 并用飞书扫码；执行 `node src/feishu/main.ts status` 查看绑定状态。
+- **多台电脑组网**：内置官方公共盲中继与 GitHub Device Flow Client ID，无需额外配置。在每台电脑的 **Settings → Computers** 登录同一个 GitHub 账号，核对两端显示的六位数字码即可互信。自建中继时通过 `FUSA_RELAY_URL` 和 `FUSA_GITHUB_CLIENT_ID` 覆盖。
+- **Linux 常驻守护进程**：以 `systemd --user` 服务运行，并执行一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`。详见 [Linux 部署指南](docs/linux.md)。
 
 <details>
-<summary><b>从源码构建或直接在终端启动守护进程</b></summary>
+<summary><b>从源码构建或直接启动守护进程</b></summary>
 
 <br>
 
-需要 **Node.js >= 24.12**（原生执行 `.ts` 并使用内置 `node:sqlite`）、**pnpm 10** 与 **git**。
-仓库包名、默认数据目录 `~/.agent-hub` 与 Windows 原生 crate `fusa-*` 保留历史兼容命名，以便老用户升级免迁移；完整命名映射与架构文档索引见 [docs/README.md](docs/README.md#naming-lineage)。
+需要 **Node.js >= 24.12**（原生执行 `.ts` 并内置 `node:sqlite`）、**pnpm 10** 与 **git**。仓库包名、`~/.agent-hub` 默认目录与 `fusa-*` crate 保留兼容命名以支持零迁移升级，详见 [docs/README.md](docs/README.md#naming-lineage)。
 
 ```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -246,69 +103,172 @@ pnpm install --frozen-lockfile
 pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启动守护进程
 ```
 
-`pnpm start` 启动后会在终端打印带登录令牌的本地网址 `http://127.0.0.1:4317/auth?token=...`，在浏览器中打开即可进入界面。
+`pnpm start` 会在终端打印带令牌的本机登录链接（`http://127.0.0.1:4317/auth?token=...`），在浏览器打开即可登录。
 
-- **在 macOS 上编译安装 `/Applications/Bellwood.app`**（需 Xcode 命令行工具 `swiftc`）：
+- **在 macOS 上编译安装 `/Applications/Bellwood.app`**（需 Xcode Command Line Tools `swiftc`）：
   ```sh
   pnpm build
-  bash scripts/build-mac-app.sh --install   # 仅生成 build/Bellwood.app 可用 `pnpm app:mac`
+  bash scripts/build-mac-app.sh --install   # 仅构建 build/Bellwood.app 可用 pnpm app:mac
   ```
-  开发模式打出的 `.app` 会在 `Info.plist` 里记录当前仓库路径（`AgentHubRepoDir`）与 Node 路径（`AgentHubNodePath`），挪动目录后请重跑脚本；独立自包含 DMG 用 `--dist` 模式打包（见 [docs/mac-distribution-design.md](docs/mac-distribution-design.md)）。
-- **在 Windows 上从源码编译 NSIS 安装包**（需 Rust `x86_64-pc-windows-msvc` 与 VS C++ Build Tools；未发版提交也可在 GitHub Actions `windows-desktop` 工作流底部下载 `fusa-windows-x64-nsis-unsigned-preview` 产物，解压运行 `Bellwood_<version>_x64-setup-unsigned-preview.exe`）：
+  源码模式打包会在 `Info.plist` 中写入仓库路径（`AgentHubRepoDir`）与 Node 路径（`AgentHubNodePath`），移动目录后请重跑；打独立自包含安装包请加 `--dist`（详见 [docs/mac-distribution-design.md](docs/mac-distribution-design.md)）。
+- **在 Windows 上从源码构建 NSIS 安装包**（需 Rust `x86_64-pc-windows-msvc` 与 VS C++ Build Tools）：
   ```powershell
   pnpm install --frozen-lockfile
   pnpm build
   cargo build --release --manifest-path apps/windows/Cargo.toml --workspace --bins --locked
   node scripts/stage-win-runtime.ts --out-dir apps/windows/crates/fusa-desktop/staged-runtime --helpers-dir apps/windows/target/release --target-os win32
   cd apps/windows/crates/fusa-desktop
-  ..\..\..\..\node_modules\.bin\tauri build --bundles nsis --config tauri.bundle.conf.json
+  ..\..\..\..\node_modules\.bin\tauri build --bundles nsis --config tauri.bundle.conf.json -- --locked
   ```
 
 </details>
 
 <details>
-<summary><b>环境变量配置</b>（全部可选；底层默认保持 <code>~/.agent-hub</code>，老用户升级零迁移）</summary>
+<summary><b>环境变量配置</b>（全部可选）</summary>
 
 <br>
 
 | 变量名 | 默认值 | 说明 |
 | :-- | :-- | :-- |
-| `AGENT_HUB_HOME` | `~/.agent-hub` | 数据目录（SQLite 账本、令牌、worktrees、上传附件、日志、PM 持久记忆）。macOS/Linux 受 Unix Socket 长度限制请保持在 103 字节内；Windows 使用命名管道。 |
-| `AGENT_HUB_PORT` | `4317` | 本机网页服务端口，只监听 `127.0.0.1`。设为 `0` 由系统分配空闲端口。 |
-| `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` / `OPENCODE` / `KIMI` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` / `opencode` / `kimi` | 覆盖各家 CLI 的命令名或可执行文件路径（支持 `~/` 展开）。 |
-| `AGENT_HUB_DEFAULT_MODEL` | 未设置 | 首次启动自动创建默认项目经理时使用的模型。 |
-| `FUSA_RELAY_URL` | 官方公共中继 | 覆盖账号组网的中继地址。同一账号下的设备使用同一个中继。 |
-| `FUSA_GITHUB_CLIENT_ID` | 官方公开 Client ID | 覆盖为自建的、已启用 Device Flow 的 GitHub OAuth App Client ID。 |
-| `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` 内置值 | 仅源码编译的 `Bellwood.app`：运行时覆盖仓库目录或 Node 可执行文件路径。 |
+| `AGENT_HUB_HOME` | `~/.agent-hub` | 数据目录（SQLite 账本、令牌、worktrees、上传附件、日志、PM 记忆）。macOS/Linux 受 Unix Socket 长度限制需控制在 103 字节内；Windows 使用命名管道。 |
+| `AGENT_HUB_PORT` | `4317` | 本机网页端口，仅监听 `127.0.0.1`。设为 `0` 由系统分配空闲端口。 |
+| `FUSA_MESH_PORT` | `4320` | 账号组网的局域网双向 TLS 监听端口。设为 `0` 由系统分配空闲端口。 |
+| `AGENT_HUB_CLAUDE`、`AGENT_HUB_AGY`、`AGENT_HUB_CODEX`、`AGENT_HUB_PI`、`AGENT_HUB_DEEPSEEK`、`AGENT_HUB_CURSOR`、`AGENT_HUB_OPENCODE`、`AGENT_HUB_KIMI` | `claude`、`agy`、`codex`、`pi`、`dsh`、`cursor-agent`、`opencode`、`kimi` | 覆盖各家 CLI 的命令名或可执行文件路径（支持 `~/` 展开）。 |
+| `AGENT_HUB_DEFAULT_MODEL` | 未设置 | 首次启动自动创建初始项目经理时使用的默认模型。 |
+| `FUSA_RELAY_URL` | 官方公共中继 | 覆盖账号组网中继地址。同一账号下所有设备须使用同一个中继。 |
+| `FUSA_GITHUB_CLIENT_ID` | 官方公开 Client ID | 覆盖为自建、已开启 Device Flow 的 GitHub OAuth App Client ID。 |
+| `AGENT_HUB_REPO_DIR`、`AGENT_HUB_NODE` | `Info.plist` 内置值 | 仅源码编译的 `Bellwood.app`：运行时覆盖仓库目录或 Node 路径。 |
 
-当项目配置了 `hub project setup` 准备脚本时，守护进程在新建 worktree 执行脚本时会自动注入 `AGENT_HUB_ROOT_PATH` 与 `AGENT_HUB_WORKTREE_PATH`。
-`Bellwood`、`~/.agent-hub` 与 `fusa-*` 的兼容命名映射见 [docs/README.md](docs/README.md#naming-lineage)。
+当项目设置了 `hub project setup` 准备命令时，守护进程在新建 worktree 执行脚本时会自动注入 `AGENT_HUB_ROOT_PATH` 和 `AGENT_HUB_WORKTREE_PATH`。
 
 </details>
+
+## 工作原理
+
+本地守护进程统一维护 SQLite 对话账本、任务图、项目记忆与交付产物，在系统级沙箱中调度已安装的各家 CLI，并将状态实时同步到桌面端、移动端网页与飞书。
+
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/architecture-zh-dark.svg">
+  <img src="docs/screenshots/readme/architecture-zh.svg" width="900" alt="Bellwood 整体结构：macOS、Windows、Linux、飞书会话、支持自动接管的账号级机器人与账号组网，经总助、项目经理与沙箱工作树连接 8 家本机命令行 Agent">
+</picture>
+</div>
+
+<br>
+
+<table>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/readme/task-graph-zh.png" alt="木纹工作台上的任务流图全览弹窗：展示并行分支与节点内联拍板卡">
+</td>
+<td width="50%">
+<img src="docs/screenshots/readme/memory-zh.png" alt="右侧工作面板 Info 标签页：在对话旁侧查看与编辑项目持久记忆 Markdown 文件">
+</td>
+</tr>
+</table>
+
+### 项目经理与工作面板
+
+工作台把长期对话与执行细节分成四个固定区域：
+
+| 区域 | 内容 |
+| :-- | :-- |
+| **顶部栏** | 桌面端木纹顶栏居中内置快速 **Router** 输入框，回车直接在非模态浮层里收发跨项目指令，点 **Expand** 可展开到完整总助页。 |
+| **最左栏** | 置顶 **Router**（带待处理数字角标），下方列出每台已配对电脑及其在线状态点，底部常驻实时额度、**Settings**（当 **Resources** 有待清理项时显示提示点）与账号入口。 |
+| **项目列表** | 可调宽列表，展示 **Pinned** 与活跃项目经理（每个项目一只像素水果史莱姆），历史子任务不会挤占主列表。 |
+| **主对话与工作面板** | 中间是连续的项目经理对话，默认折叠日常工具调用，并内置多步骤实时进度清单与拍板卡；右侧宽幅工作面板提供 **Active**、**Completed** 和 **Info** 三个标签页。 |
+
+每轮多步骤操作都会在对话流内渲染实时进度清单，展示当前步骤与耗时；窄屏与手机端自动切为单栏视图，切换窗口宽度不丢草稿。
+
+### 跨厂商记忆、后台换代与即时切换
+
+- **项目级持久记忆**：每个项目的架构约束、习惯与踩坑记录存在独立的 `MEMORY.md` 与专题 Markdown 文件中，可在工作面板 **Info** 标签页直接查看、编辑或删除。在 **Settings → Providers** 中可扫描并同步各家 CLI 的 MCP 服务器与技能配置。
+- **后台自动会话换代**：长会话接近上下文上限（默认 400K token）时，后台在不打断当前对话的情况下分叉整理交接内容，于两轮间隙切入干净新会话，保留最近原话与核心背景，丢弃冗长的历史工具输出。
+- **即时切换厂商与模型**：遇到限额或想换模型时，在 **Info** 标签页直接切换厂商、模型或思考档位即可继续。下一轮会自动带上最近对话、附件、Worker 汇报与当前任务图状态。
+
+### 任务流图、独立工作树与 `hub` 命令
+
+项目经理通过内置 `hub` CLI 调度 Worker、挂拍板卡、建定时任务、盯外部条件与查询能力：
+
+```sh
+hub graph create --stdin                             # 声明自动交棒的多步任务流图
+hub worker start --title "..." --stdin               # 派单个 Worker 进入独立 git worktree
+hub ask --option "A" --option "B" --stdin            # 挂出带推荐项的拍板卡
+hub watch add --until "..." --every 30s --stdin      # 让后台盯外部检查条件，满足或超时后叫醒
+hub schedule add --name "..." --daily 09:00 --stdin  # 建立周期性定时提醒或巡检任务
+hub caps                                             # 查看当前项目可用的 skill、MCP 与连接器
+hub persona edit --stdin                             # 修改项目经理的工作模式或性格设定
+```
+
+- **后台自动递进**：任务图启动后，上一步顺利完成时守护进程会自动把总目标、分支状态和交接说明传给下游 Worker 并立即开工；只有报错、偏离范围、到达检查点或整张图完成时才唤醒项目经理或弹卡。
+- **工作流保持中立**：Bellwood 不强行绑定某一套研发流程。先写方案、派另一家模型做只读独立审查（`"review": true`）或合并 PR 均按需启用，只有你明确要求或项目约定写了才会执行。
+- **独立 git worktree 与准备脚本**：每个改代码的 Worker 都在独立工作树里运行，并行开发互不干扰。用 `hub project setup` 配好一次依赖安装命令后，每次新建 worktree 会自动执行；在输入框输入 `/hub:worker` 可为本轮派出的 Worker 指定厂商、模型与思考档位。
+
+### 设置页：Providers、Capabilities 与 Resources
+
+从最左栏打开 **Settings** 可管理六个页面：**General**、**Providers**、**Capabilities**、**Resources**、**Computers** 与 **Security & Access**。
+
+- **Capabilities**：分别为总助、项目默认配置或单个项目开关技能、MCP 服务器与连接器，并为 Worker 配置 `inherit`、`none` 或 `custom` 能力白名单。
+- **Resources**：自检数据库体量、磁盘目录、未回收的 worktree、未合并分支、遗留临时目录和后台进程，确认后再清理或保留。
+
+## 总助 Router
+
+当项目分散在笔记本、台式机和 Linux 服务器上时，**总助（Router）**既是顶部栏里的快捷入口，也是最左栏置顶的全局工作台。
+
+<div align="center">
+<img src="docs/screenshots/readme/router-zh.png" width="900" alt="总助 Router 工作台：汇总 Studio Mac 与 Tokyo Mini 的待拍板卡片并展示跨设备进展答复">
+</div>
+
+<br>
+
+- **跨机待办一处收齐**：任意电脑上的项目完成任务图或停在分岔口等你确认时，拍板卡和交付摘要都会汇入总助托盘，点选后实时同步回对应项目经理。
+- **自然语言跨机分派**：直接喊项目简称即可查询进度或派活，无需记主机名和仓库路径。总助匹配对应电脑与项目经理，转发请求并把答复贴在原问题下方。
+- **两层项目档案与无状态单轮分派**：后台静默维护「一句话摘要卡片」与按需展开的「详细近况」。总助每轮都在干净的无状态单轮会话里完成识别与分派，不累积历史包袱，切换总助模型立即生效。
+- **私有账号组网**：在 Mac、Windows 和 Linux 上登录同一个 GitHub 账号并核对一次六位数字码，设备即通过双向 TLS 1.3 自动组网：同局域网直连，跨网走端到端加密盲中继。代码与日志留在各自本机，无需公网 IP、SSH 隧道或端口映射。
+
+## 飞书入口
+
+无需公网服务器、域名或反向代理，通过出站 WebSocket 连接**飞书**（或 **Lark**），手机随时跟进，或拉团队进群协作。
+
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/feishu-group-zh-dark.svg">
+  <img src="docs/screenshots/readme/feishu-group-zh.svg" width="900" alt="飞书团队群聊流程：群内讨论静默缓冲，@Bellwood 触发本机独立工作树改码与浏览器验证，JSON 2.0 卡片回传截图与拍板按钮">
+</picture>
+</div>
+
+<br>
+
+- **全账号共用一个机器人**：执行 `node src/feishu/main.ts connect` 扫码即可创建。同一账号下多台电脑按优先级共享该机器人，主力机离线时下一台在线设备自动接管，断网重连后自动补拉漏收消息。
+- **单聊找总助，项目建专属群**：与机器人单聊直达总助 Router；每个项目自动拥有带像素水果史莱姆头像的专属群，支持流式输出与**停止**按钮，截图、录屏和拍板卡与桌面端实时同步。
+- **团队群自动切换 `@机器人` 模式**：群里只有你一人时每条消息直达项目经理；拉入同事后自动切换为 `@机器人` 触发，平时讨论只在后台缓冲近期上下文，需要落实时 `@` 机器人即可带上下文开工并把结果发回群里。
+- **手机端切换模型与思考档位**：在单聊或项目群发送 `/settings`（或 `/设置`、`/群设置`、`/model`、`/policy`）即可打开交互设置卡，直接切换厂商、模型与思考档位。
+- **按群三档访客权限**：可为每个项目群设置**只读**（仅作主人发言的背景参考，不唤醒 PM）、**仅对话**（默认：允许 `@` 机器人对话，拍板卡、停止与附件仍仅限主人）或**协作者**（还可操作拍板卡、停止与发送附件）。访客触发轮次中，账本会拦截建项目、挂卸目录、改准备脚本和改性格等主人专属命令。因为项目经理以当前系统用户运行且不受外层沙箱限制，**仅对话**与**协作者**仅应授予你信任的成员。
 
 ## 安全边界与厂商条款
 
 ### 沙箱与权限边界
 
-Worker 以你当前系统用户的身份改代码、跑命令，使用前请留意实际边界：
+Worker 以你当前系统用户身份改代码和运行命令，在敏感机器上使用前请了解实际边界：
 
-- **普通 Worker 写隔离与数据目录读隔离**：在 macOS、Linux 与 Windows 原生系统沙箱内，每个普通 Worker 在受保护根目录下只能写自己的独立工作树，同时禁止读取 `state/` 与 `backups/`（账本数据库、界面与厂商令牌、飞书与组网私钥、项目经理记忆及其他会话启动目录），且只能连接 `run/hub.sock`、禁连 `run/admin.sock`（详见 [docs/write-scope.md](docs/write-scope.md)）；受保护目录之外允许正常读写你的项目目录、运行测试和联网。
-- **只读审查 Worker**：除私有临时目录外全盘禁写，仅放行只读工具，执行同样的数据目录读与连接边界，并禁止读取 SSH、云厂商、各家 CLI 凭据与 `.env` 私钥文件（详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。
-- **项目经理与网络边界**：项目经理以当前系统用户身份运行且不受外层沙箱限制，本地网页服务默认仅监听本机回环地址 `127.0.0.1`。在飞书项目群中，处于**仅对话**或**协作者**这两个非只读档位的成员都可以向未受沙箱限制的项目经理发消息，因此非只读档权限仅限可信人员，其余成员请设为**只读**。详细说明与安全漏洞私密报告方式见 [SECURITY.md](SECURITY.md)。
+- **普通 Worker**：在原生系统沙箱内（macOS 为 `sandbox-exec`，Linux 为 `bubblewrap`，Windows 为 `fusa-run.exe` Job Object、受限令牌与 NTFS ACL），每个普通 Worker 在受保护根目录下只能写入自己的 worktree，禁止读取 `state/` 与 `backups/`（SQLite 账本、界面与厂商令牌、飞书与组网私钥、PM 记忆或其他会话启动目录），且只能连接 `run/hub.sock`、禁连 `run/admin.sock`（详见 [docs/write-scope.md](docs/write-scope.md)）。受保护目录之外保留你的常规读写与联网权限。
+- **只读 Worker**：除私有临时目录和必要厂商运行路径外全盘禁写，仅放行只读工具，执行同等的数据目录边界，并拦截读取 SSH、云厂商、各家 CLI 凭据与 `.env` 文件（详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。
+- **需人工确认的 Computer Use 例外（仅 macOS）**：在 macOS 上，明确挂载 Computer Use 能力的 Worker 可申请 `--no-outer-sandbox`，以避开嵌套 `sandbox-exec` 冲突并改由厂商内置沙箱接管。Worker 必须等待你在网页工作台点击**批准本次运行**后才开工（飞书仅发送只读提示），且每次尝试控制新的桌面应用都需逐应用弹出确认卡（允许本次运行或拒绝）。退出外层沙箱期间，Worker 在厂商内置沙箱下可读取全盘文件（含 Bellwood 数据目录），两类授权均在该 Worker 结束时立即失效。
+- **项目经理与本机网络**：项目经理以当前系统用户身份运行，不进外层沙箱；本机网页界面默认仅监听 `127.0.0.1`。完整威胁模型与私密漏洞报告渠道见 [SECURITY.md](SECURITY.md)。
 
 ### 厂商服务条款风险
 
-Bellwood 在你的电脑上、用**你自己的账号或 API Key**，以无头、RPC 或 ACP 模式调用各家官方命令行 Agent，本身不中转或售卖任何模型 API。这种自动化调用方式是否符合你所用订阅套餐及服务商条款，请在使用前自行查阅判断，本项目不替任何厂商作“允许”承诺：
+Bellwood 不中转或售卖任何模型 API，仅在你的本机用**你自己的账号或 API Key**，通过无头、RPC 或 ACP 模式调用各家官方命令行 Agent。请在使用前自行确认所用订阅和条款，本项目无法替任何厂商背书或保证账号状态：
 
-- **Google Antigravity (`agy`)**：[Google Antigravity 附加条款](https://antigravity.google/terms/)第 6 条写明：*“Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts.”* 官方未明确说明在本地调用官方 `agy` 无头模式是否属于此条，请将其视为**可能导致账号被暂停或终止的真实风险**自行决定。
-- **Claude Code (`claude`)**：[Anthropic 合规说明](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`)**：[OpenAI 使用条款](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`，MIT 开源)**：[pi.dev](https://pi.dev)（请同时遵守所连模型商条款） · **DeepSeek Harness (`dsh`，MIT 预览版)**：[DeepSeek 开放平台条款](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`)**：[Cursor 服务条款](https://cursor.com/terms-of-service) · **OpenCode (`opencode`，MIT 开源)**：[opencode.ai](https://opencode.ai)（请同时遵守所连模型商条款） · **Kimi Code (`kimi`)**：[Kimi Code 文档](https://www.kimi.com/code/docs/)（用 API Key 时请同时遵守 Kimi 开放平台条款）。
+- **Google Antigravity (`agy`)**：[Google Antigravity 附加条款](https://antigravity.google/terms/)第 6 条禁止使用第三方软件、工具或服务访问该服务，并提示违规可能导致 Antigravity 或 Gemini CLI 账号被暂停或终止。Google 尚未明确在本地无头调用官方 `agy` CLI 是否适用此条，请将其视为**可能导致账号被暂停或终止的真实风险**自行决定。
+- **Claude Code (`claude`)**：[Anthropic 合规说明](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`)**：[OpenAI 使用条款](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`，MIT 开源)**：[pi.dev](https://pi.dev)（同时遵守所连模型商条款） · **DeepSeek Harness (`dsh`，MIT 预览版)**：[DeepSeek 开放平台条款](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`)**：[Cursor 服务条款](https://cursor.com/terms-of-service) · **OpenCode (`opencode`，MIT 开源)**：[opencode.ai](https://opencode.ai)（同时遵守所连模型商条款） · **Kimi Code (`kimi`)**：[Kimi Code 文档](https://www.kimi.com/code/docs/)（使用 API Key 时同时遵守 Kimi 开放平台条款）。
 
 ## 参与贡献
 
-报告问题、本机检查和 PR 规矩见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+报告问题、本地检查命令与 PR 规范见 [CONTRIBUTING.md](CONTRIBUTING.md)，用户指南与架构文档索引见 [docs/README.md](docs/README.md)。
 
 ## 致谢与许可证
 
-- 项目经理像素水果史莱姆、总助嫩芽铃与拍板小铃均由 [`src/shared/slimes.ts`](src/shared/slimes.ts) 中的共享像素稿渲染生成。
-- 第三方依赖遵循各自许可证（见 `pnpm-lock.yaml`；其中 `mermaid` 传递引入的 `elkjs` 为 `EPL-2.0 OR GPL-3.0-or-later`，`khroma` 上游仓库为 MIT）。
-- 本项目采用 [MIT](LICENSE) 许可证发布。
+- 项目经理像素水果史莱姆、总助嫩芽铃与拍板小铃均由 [`src/shared/slimes.ts`](src/shared/slimes.ts) 中的像素稿渲染生成。
+- 第三方依赖遵循 `pnpm-lock.yaml` 中的各自许可证（`mermaid` 传递引入的 `elkjs` 为 `EPL-2.0 OR GPL-3.0-or-later`，`khroma` 上游仓库为 MIT）。
+- 本项目以 [MIT](LICENSE) 许可证发布。

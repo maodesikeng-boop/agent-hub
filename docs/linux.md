@@ -28,7 +28,7 @@ sudo scripts/linux-sandbox-setup.sh
 
 ## 2. Install and sign in to agent CLIs
 
-You can install and authenticate any supported CLI from **Settings** under **Providers** in the web UI (including headless device-code and loopback callback paste flows), or run `scripts/provision-linux.sh` or manual commands as the daemon's OS user:
+You can install and authenticate any supported CLI from **Settings → Providers** in the web UI (including headless device-code and loopback callback paste flows), or run `scripts/provision-linux.sh` or manual commands as the daemon's OS user:
 
 | Vendor | Install on Linux | Headless sign-in |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ loginctl enable-linger "$USER"
 journalctl --user -u agent-hub -f
 ```
 
-Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
+Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. If you run more than one Bellwood instance on the same Linux host, set `AGENT_HUB_PORT` (`4317` by default) and `FUSA_MESH_PORT` (`4320` by default; `0` asks the OS for a free port) in the unit file so the two instances do not collide. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
 
 ## 4. Connect from your laptop or phone
 
