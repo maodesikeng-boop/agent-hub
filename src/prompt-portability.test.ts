@@ -7,9 +7,16 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildLaunchPrompt, buildWorkerFirstMessage, buildWorkerSystemPrompt } from "./daemon/prompt.ts";
 import { buildRouterSystemPrompt } from "./daemon/router/prompt.ts";
 import { buildCatalogSystemPrompt } from "./daemon/project-catalog/prompt.ts";
+import { taskGraphManualNote } from "./daemon/task-graph-skill.ts";
+import { handoverRequestText } from "./daemon/ledger/handover-text.ts";
 import { card, noProjectContext, projectContext, workerContext } from "./daemon/test-helpers.ts";
 import { HUB_USAGE } from "./hub/usage.ts";
-import { PM_MODES } from "./shared/index.ts";
+import { PM_MODES, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./shared/index.ts";
+import {
+  auditShippedPromptSurfaces,
+  describeWorkflowOverfitViolation,
+  workflowOverfitViolationsIn,
+} from "./shared/prompt-policy.ts";
 import { REVIEW_CHECKLIST } from "./shared/review.ts";
 import { taskGraphSkillMarkdown } from "./shared/task-graph-skill.ts";
 import { AGENT_VENDORS } from "./shared/vendors.ts";
@@ -239,9 +246,14 @@ function renderedTexts(): Array<{ name: string; text: string }> {
     { name: "router system prompt", text: buildRouterSystemPrompt() },
     { name: "project catalog prompt", text: buildCatalogSystemPrompt() },
     { name: "task graph skill", text: taskGraphSkillMarkdown() },
+    { name: "task graph manual note", text: taskGraphManualNote(undefined, 1) },
+    { name: "task graph create json hint", text: TASK_GRAPH_CREATE_JSON_HINT },
+    { name: "task graph patch json hint", text: TASK_GRAPH_PATCH_JSON_HINT },
     { name: "review checklist", text: REVIEW_CHECKLIST },
     { name: "hub usage", text: HUB_USAGE },
     { name: "worker report format", text: WORKER_REPORT_FORMAT },
+    { name: "handover request (auto)", text: handoverRequestText({ auto: true, transcriptPath: null, forked: false }) },
+    { name: "handover request (manual forked)", text: handoverRequestText({ auto: false, transcriptPath: "/logs/t.jsonl", forked: true }) },
   ];
   for (const vendor of AGENT_VENDORS) {
     for (const mode of PM_MODES) {
@@ -326,20 +338,24 @@ describe("product text holds in any project", () => {
     for (const [id, text] of binding) expect(ruleIdsIn(text), text).toContain(id);
   });
 
-  it("Chinese string literals in product source write no repo, toolchain, host, or POSIX-only specifics as instructions", () => {
+  it("Chinese string literals in product source write no repo, toolchain, host, POSIX-only, or workflow-overfit specifics as instructions", () => {
     const hits: string[] = [];
     for (const file of productSourceFiles()) {
       const source = readFileSync(join(ROOT, file), "utf8");
       for (const literal of textLiterals(file, source)) {
         for (const v of violationsIn(literal.text)) hits.push(`${file}:${lineOf(source, literal, v.index)} ${describeViolation(literal.text, v)}`);
+        for (const v of workflowOverfitViolationsIn(literal.text)) {
+          hits.push(`${file}:${lineOf(source, literal, v.index)} ${describeWorkflowOverfitViolation(literal.text, v)}`);
+        }
       }
     }
     expect(hits).toEqual([]);
   });
 
   it("rendered prompts, skills, checklists, and hub help write no repo, toolchain, host, or POSIX-only specifics as instructions", () => {
+    const surfaces = renderedTexts();
     const surfacesByHit = new Map<string, string[]>();
-    for (const { name, text } of renderedTexts()) {
+    for (const { name, text } of surfaces) {
       for (const v of violationsIn(text)) {
         const key = describeViolation(text, v);
         surfacesByHit.set(key, [...(surfacesByHit.get(key) ?? []), name]);
@@ -347,6 +363,7 @@ describe("product text holds in any project", () => {
     }
     const hits = [...surfacesByHit].map(([key, names]) => `${names[0]}${names.length > 1 ? ` (+${names.length - 1} more)` : ""} ${key}`);
     expect(hits).toEqual([]);
+    expect(auditShippedPromptSurfaces(surfaces)).toEqual([]);
   });
 
   it("only hub help lists the command that restarts this product's own daemon", () => {

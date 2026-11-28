@@ -1,10 +1,9 @@
 import { existsSync } from "node:fs";
-import type { TaskGraphId, TaskNodeKey } from "../../../shared/domain.ts";
+import type { TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { Db } from "../../store/index.ts";
 import { fail } from "../context.ts";
 import { readStoredArtifact, workerIdsOf } from "./rows.ts";
-import { buildGraphMaps } from "./store.ts";
 import type { KeyAdjacency, StepWorkspacePlan, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
 type StepMaps = { byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>; incoming: KeyAdjacency; outgoing: KeyAdjacency };
@@ -196,19 +195,4 @@ export function findActiveDownstream(
     queue.push(...(outgoing.get(k) ?? []));
   }
   return null;
-}
-
-export function sameVendorReviewHint(db: Db, graphId: TaskGraphId, pmVendor: string): string {
-  const { nodeRows, byKey, incoming } = buildGraphMaps(db, graphId);
-  const hints: string[] = [];
-  for (const n of nodeRows) {
-    if (n.review !== 1 || n.status === "done") continue;
-    const myVendor = n.vendor ?? pmVendor;
-    const sameUp = (incoming.get(n.node_key) ?? []).find((uk) => {
-      const u = byKey.get(uk);
-      return u !== undefined && (u.vendor ?? pmVendor) === myVendor;
-    });
-    if (sameUp !== undefined) hints.push(`提醒：审查步骤「${n.node_key}」和上游「${sameUp}」是同一家模型（${myVendor}）。`);
-  }
-  return hints.length > 0 ? `\n${hints.join(" ")}` : "";
 }

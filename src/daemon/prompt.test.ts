@@ -235,7 +235,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       // 换人接手只有一种写法；绑节点的 --incomplete、--node 在任务图手册里，基础提示词不出现
       expect(section).not.toContain("--incomplete");
       expect(section.split(`${hub} worker end`)).toHaveLength(2); // 只有做完了收工一处
-      expect(section.split("验收只看证据")).toHaveLength(2);
+      expect(section.split("核对结果看汇报与产物")).toHaveLength(2);
       expect(section.split("不要只在文字里问一句干等")).toHaveLength(2);
     }
   });
@@ -387,7 +387,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     }
   });
 
-  it("不用厂商自带的子代理：点名各家内置工具（含 invoke_subagent）、厂商 label 和命令行；技能里“派 subagent”换成派 Worker 或建图，“主控亲自审子代理 diff”换成加审查步骤", () => {
+  it("不用厂商自带的子代理：点名各家内置工具（含 invoke_subagent）、厂商 label 和命令行；技能里“派 subagent”换成派 Worker 或建图", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     expect(prompt).toContain(PM_COMMON_RULES);
     expect(PM_COMMON_RULES).toContain("**不用厂商自带的子代理**");
@@ -396,7 +396,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     for (const cli of ["`claude`", "`agy`", "`codex`"]) expect(PM_COMMON_RULES).toContain(cli);
     expect(PM_COMMON_RULES).not.toContain("`gemini`");
     expect(PM_COMMON_RULES).toContain("技能或提示词要求“派 subagent”的，换成派 Worker 或建图");
-    expect(PM_COMMON_RULES).toContain("要求“主控亲自审子代理 diff”的，换成在图里加审查步骤");
+    expect(PM_COMMON_RULES).not.toContain("审子代理 diff");
     // 这两条接在“怎么干活”的通用规矩里，不另起一节
     const section = workSection(prompt);
     expect(section.indexOf("## 通用规矩")).toBeLessThan(section.indexOf("**不用厂商自带的子代理**"));
@@ -539,14 +539,13 @@ describe("提示词：项目经理（M3）", () => {
       expect(analyze).toContain(`- **交给 Worker**：耗时久或消耗 Token 多的事，通过 \`${hub}\` 命令交给 Worker。`);
       expect(analyze).toContain("- **派一个 Worker**：当任务是一个完整的单元，从头到尾由一个 Agent 做完更合适时，直接派一个 Worker。");
       expect(analyze).toContain("- **建图**：当任务适合拆成多个步骤时，选择建图。");
-      expect(analyze).toContain("建图就是把一个任务拆成有依赖的几步，避免上下文过多导致模型干活质量下降。");
-      expect(analyze).toContain("  - **步骤不要拆太碎**：");
-      expect(analyze).toContain("拆成「写方案 → 写代码 → 审查」即可");
-      expect(analyze).toContain("  - **不要拆并行**：不要把同一个单元内的工作拆成两路去并行。");
-      expect(analyze).toContain("**不要自己写详细方案**");
-      expect(analyze).toContain("简单划清范围、注入必要的上下文，让 Worker 自己去做方案");
+      expect(analyze).toContain("建图用于把任务拆成有依赖或需分段确认的几步，避免单步上下文过大导致质量下降。");
+      expect(analyze).toContain("  - **按会话边界拆步骤**：");
+      expect(analyze).toContain("  - **避免同文件写冲突**：互不依赖的子任务可以并行，但不要让多个 Worker 同时改同一批文件造成冲突。");
+      expect(analyze).toContain("**不要在自己会话里包办重型执行或长篇设计**");
+      expect(analyze).toContain("简单划清范围、补齐必要上下文，直接交给 Worker 去做");
       // 建图前先加载任务图技能（默认厂商 claude 有原生入口，带插件前缀）；没给启动目录时兜底指到 hub help graph
-      expect(analyze).toContain(`**建图前先加载 \`fusa:${TASK_GRAPH_SKILL_NAME}\` 技能**，建图、改图、换人、审查的做法都在里面；技能清单里没有它，就运行 \`${hub} help graph\`。`);
+      expect(analyze).toContain(`**建图前先加载 \`fusa:${TASK_GRAPH_SKILL_NAME}\` 技能**，建图、改图、换人与步骤跟进的做法都在里面；技能清单里没有它，就运行 \`${hub} help graph\`。`);
       // 旧的三档判断和“怎么拆”的细节没有了
       for (const gone of ["先定这件事走哪一档", "不建图", "分析要快", "这是默认判断"]) expect(analyze, gone).not.toContain(gone);
     }
@@ -578,36 +577,33 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("交付与汇报（第 5 步）：验收只看证据（汇报、PR 改动文件名单和检查结果、截图或实测输出），不读代码 diff；该审查没审查的交付前补上；同时向对话和总助汇报：说人话、对话里摆能点开的证据、没建图的发汇报卡、建了图的用 hub graph finish 结束", () => {
+  it("交付与汇报（第 5 步）：核对结果看汇报与产物，不替项目硬定流程（审查、方案、PR、合并、发布均按需）；向对话汇报并按需同步总助", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const delivery = section.slice(section.indexOf("## 5. 交付与汇报"), section.indexOf("## 通用规矩"));
       for (const word of [
-        "**验收只看证据**：看汇报（或任务图交付单）、PR 改动文件名单和检查结果、截图或实测输出。",
-        "不读代码 diff，代码质量由审查负责。",
-        `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
-        "**按项目规矩或用户要求安排审查**：项目要求审查或改动风险较高而还没审查的，交付前按任务图手册补一个独立审查步骤。",
-        "合并、发布这类收尾动作按项目自己的约定和用户要求做，没要求的不做。",
-        "**同时向对话和总助汇报交付**：",
+        "**核对结果看汇报与产物**：核对结果优先看汇报（或任务图交付单）、产物文件、运行或检查结果，避免把大段 diff 拉进项目经理上下文",
+        `缺关键结果就打回让 Worker 补（\`${hub} worker send\`）`,
+        "**不替项目硬定流程**：独立审查、方案确认、PR、合并、发布这类步骤，只在用户要求或项目自身规矩明确需要时安排，不要擅自加塞。",
+        "**向对话汇报并按需同步总助**：",
         "1. **只讲结论，说人话**：开头说清用户原本要做什么、现在做成了什么、何时生效",
-        "2. **在对话里摆出能点开的证据**：用绝对路径写 Markdown（图片写 `![说明](/绝对/路径.png)`，文件或录屏写 `[文件名](/绝对/路径)`，路径含空格用 `<...>` 包裹）",
-        `3. **同步发到总助供用户验收**：建了图的验收完用 \`${hub} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）`,
-        `没建图的用 \`${hub} router report --pr … --worker … --file <截图或文件>\` 发一张以“请验收”开头的汇报卡到总助（不把路径写进卡片标题，也不贴到 PR 评论里代替）`,
+        "2. **在对话里摆出能点开的产物**：用绝对路径写 Markdown（图片写 `![说明](/绝对/路径.png)`，文件或录屏写 `[文件名](/绝对/路径)`，路径含空格用 `<...>` 包裹）",
+        `3. **同步里程碑到总助**：建了图的核对完用 \`${hub} graph finish\` 结束（交付摘要和各步“文件”栏会自动发到总助）`,
+        `有值得在总助汇总的阶段成果时用 \`${hub} router report\` 补发一张简洁的汇报卡（用跟用户一致的自然措辞，不把路径写进卡片标题）`,
       ]) {
         expect(delivery, word).toContain(word);
       }
     }
   });
 
-  it("派活（第 3 步）：任务说明要写全（派单个 Worker 也要用）、“怎么算做完”写成能核对给人看的证据、建图填好总目标与每步职责；建图规矩挪进任务图手册", () => {
+  it("派活（第 3 步）：任务说明要写全（派单个 Worker 也要用）、按任务实际情况写清完成标准与交付文件、建图填好总目标与每步职责", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const dispatch = section.slice(section.indexOf("## 3. 派活"), section.indexOf("## 4. 跟进反馈"));
       for (const word of [
         "**任务说明要写全**：Worker 看不到你和用户的聊天，也不知道总助，只靠任务说明对齐方向。",
         "长材料存成文件给路径。",
-        "**“怎么算做完”写成能核对、给人看的证据**：比如测试命令、截图、实测输出、PR 检查全绿、录屏等",
-        "要足以说服你的领导相信你完美实现了这个功能",
+        "**写清完成标准与交付文件**：按任务和项目实际情况写清完成标准（如测试、运行结果、产出文件或截图等）",
         "让 Worker 写进它汇报的“文件”栏（系统收工时会自动提取）",
         "建图时填好总目标与每步职责，就绪步骤会自动开工并按顺序交棒（见任务图手册）。",
       ]) {
@@ -1115,7 +1111,7 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
           expect(analyze).toContain(`**建图前先加载 \`${spec.prompt.skillNamePrefix ?? ""}${TASK_GRAPH_SKILL_NAME}\` 技能**`);
           expect(analyze).toContain(`技能清单里没有它，就直接读 \`${skillFile}\`。`);
         } else {
-          expect(analyze).toContain(`**建图前先读任务图手册 \`${skillFile}\`**，建图、改图、换人、审查的做法都在里面。`);
+          expect(analyze).toContain(`**建图前先读任务图手册 \`${skillFile}\`**，建图、改图、换人与步骤跟进的做法都在里面。`);
           expect(analyze).not.toContain("技能清单");
         }
         // 建图手册、JSON 契约、拍板和换人的做法不常驻（在 fusa-task-graph 里，task-graph-skill.test.ts 守着）

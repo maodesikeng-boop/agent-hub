@@ -42,7 +42,6 @@ import { writeStepSlot } from "./slots.ts";
 import { getGraphRow, insertEdgeRow, insertStepRow, listStepRows, publishGraphIn, resolveGraphForPm } from "./store.ts";
 import { formatGraphText, unlockedNoteOf } from "./text.ts";
 import type { PmCaller, TaskEdgeDbRow, TaskGraphCtx, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
-import { sameVendorReviewHint } from "./workspace.ts";
 
 interface PatchLists {
   add: CreateTaskGraphNodeInput[];
@@ -365,10 +364,9 @@ export function patchIn(
   syncDeliveryNoteAfterProgressIn(g, p, refreshedRow, wasAllSettled);
   const graph = publishGraphIn(g, p, graphRow.id);
   const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
-  const reviewHint = sameVendorReviewHint(g.db, graphRow.id, caller.vendor);
   const doneNotes = plan.doneSteps.map((node) => `\n步骤「${node.node_key}」${node.status === "done" ? "已经完成" : "已放行"}。`).join("");
   return {
-    text: `已更新${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${doneNotes}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
+    text: `已更新${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${doneNotes}${progressNote !== "" ? `\n${progressNote}` : ""}`,
     data: { graph },
   };
 }

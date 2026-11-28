@@ -18,6 +18,7 @@ import {
   TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS,
   TASK_GRAPH_SKILL_MAX_BYTES,
   TAKEOVER_PREDECESSORS_MAX,
+  TASK_GRAPH_MANUAL_SUMMARY,
   TASK_GRAPH_SKILL_NAME,
   taskGraphSkillBody,
   taskGraphSkillMarkdown,
@@ -68,7 +69,7 @@ const row = (cwd: string): AgentSessionRow => ({
 });
 
 describe("任务图技能正文", () => {
-  it("建图规矩匹配第 5 步自动开工与交棒终稿：goal + steps、一图一事、按步骤拆、默认一条线共用 worktree、多路合流落盘 upstream/、项目经理检查点、四条红线加 review 步骤", () => {
+  it("建图规矩：goal + steps、一图一事、按会话边界拆步骤、默认一条线共用 worktree、多路合流落盘 upstream/、项目经理检查点、可选的独立审查步骤", () => {
     const body = taskGraphSkillBody();
     // 编排简化第 4 步：节点类型只剩一种、状态只剩四个，手册里不再出现 gate 节点、kind 和旧状态
     expect(taskGraphSkillMarkdown()).not.toMatch(/\bgate\b|\bkind\b|\bready\b|attention|waiting_user|门禁/u);
@@ -77,9 +78,7 @@ describe("任务图技能正文", () => {
       `用 \`${hub} graph create\` 一次写下整张图的 \`goal\`（总目标）和 \`steps\`（步骤数组），带 \`brief\` 的就绪步骤建好即自动开工。`,
       "**总目标（`goal`）要写全**",
       "**一张图只装一件事**：互不相干的几件事各建一张图。",
-      "**按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。",
-      "写测试、改代码、截图（项目要提 PR 的连同提 PR）是同一步，一个 Worker 一口气做完。",
-      "只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。",
+      "**按会话边界拆步骤**：同一个上下文能一口气做完的活留在同一步里，不要为了拆而拆",
       "**默认一条线，同线共用工作目录和分支**：`steps` 里不写 `deps` 默认按书写顺序串成一条线",
       "同一个 git worktree 和同一条分支",
       "`upstream/<stepKey>.md`",
@@ -90,7 +89,7 @@ describe("任务图技能正文", () => {
       "**下一步开始前要审的结果**",
       `确实需要用户决定时，再用 \`${hub} ask --node <步骤>\`，卡片默认提供「通过 / 打回」`,
       "步骤只有四个状态：没轮到（`pending`）、在干（`running`）、等人（`waiting`，等你处理或等用户拍板）、完了（`done`，跳过也算完了）。",
-      "**需要独立审查时，在实现后面加一个审查步骤**（设 `\"review\": true`，需要跨模型审查的指定另一家 `vendor`",
+      "**可选的独立审查步骤**：仅在用户要求或项目自身规矩需要独立审查时，再加审查步骤（设 `\"review\": true`",
       "项目不是 git 仓库的，改加一个只读（`\"readonly\": true`）的普通步骤",
       "结论只有 PASS 和 FAIL，并写明验证提交号。",
       "什么时候需要审查、怎么判定严重程度，按项目自身的规矩或用户要求来。",
@@ -112,7 +111,7 @@ describe("任务图技能正文", () => {
       "前任的工作目录与分支",
       `最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
       "**计划变了**：随时 `" + `${hub} graph patch` + "`（用 `addSteps`、`updateSteps`、`removeSteps`、`skipSteps`、`doneSteps` 或更新 `goal`",
-      "原本没建图、做着发现要分段或加审查的，随时补建一张图。",
+      "原本没建图、做着发现需要分段推进的，随时补建一张图。",
       "**交付在图的最后一行**：图里画的步骤都做完时，你会收到交付单",
       `用 \`${hub} graph finish\` 收尾（交付摘要自动同步给总助）。`,
       `顺利交棒后的进展在 \`${hub} status\` 看。`,
@@ -192,9 +191,9 @@ describe("技能文件：只在项目经理的启动目录里写一份", () => {
   it("手册那一行（graph create/patch 回执、hub status）：有启动目录写这个会话的绝对路径，没有只指 hub help graph", () => {
     const launchDir = join(dir, "launch");
     expect(taskGraphManualNote(launchDir, 12)).toBe(
-      `任务图手册（建图、改图、换人、审查的做法）：\`${taskGraphSkillFile(sessionLaunchDir(launchDir, 12))}\`（也可以 \`${hub} help graph\`）`,
+      `任务图手册（${TASK_GRAPH_MANUAL_SUMMARY}）：\`${taskGraphSkillFile(sessionLaunchDir(launchDir, 12))}\`（也可以 \`${hub} help graph\`）`,
     );
-    expect(taskGraphManualNote(undefined, 12)).toBe(`任务图手册（建图、改图、换人、审查的做法）：运行 \`${hub} help graph\``);
+    expect(taskGraphManualNote(undefined, 12)).toBe(`任务图手册（${TASK_GRAPH_MANUAL_SUMMARY}）：运行 \`${hub} help graph\``);
   });
 });
 

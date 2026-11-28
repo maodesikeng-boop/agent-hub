@@ -34,6 +34,7 @@ import {
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { CAPABILITY_KINDS } from "../shared/pm-capabilities.ts";
 import { formatDurationShort } from "../shared/schedule.ts";
+import { TASK_GRAPH_MANUAL_SUMMARY } from "../shared/task-graph-skill.ts";
 import { AGENT_VENDORS, ALL_EFFORTS } from "../shared/vendors.ts";
 
 const hub = HUB_COMMAND;
@@ -227,7 +228,7 @@ export const HUB_CLI_REGISTRY: readonly HubCliEntry[] = [
                                                           --caps 外接能力：inherit 照项目能力设置挂（默认），none 一个不带，custom 只挂 --allow 点名的
                                                           skill:<名>、mcp:<名>、connector:<厂商>:<编号>（项目里关掉的点名了也挂不上，可用 ${hub} caps 查看）；读写文件、终端和 hub 永远都在；
                                                           --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）；
-                                                          独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审
+                                                          需要隔离检出与防篡改核对的独立审查，可在任务图中使用审查步骤（"review": true）
   --clear-effort：不继承思考程度，不能与 --effort 同时用。
   --no-outer-sandbox：仅明确挂载 Computer Use 时可申请，Worker 等用户在工作台确认后才开工。Computer Use 控制每个应用前都要等用户在工作台确认；用户拒绝时，换个办法或汇报。
   ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--clear-effort] [--stdin]
@@ -340,7 +341,7 @@ export const HUB_CLI_REGISTRY: readonly HubCliEntry[] = [
     summary: "向用户挂提问/拍板卡（支持 --node、--option、--file）",
     usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin
                                                           向用户挂一张提问/拍板卡，问题从标准输入读；${ASK_CARD_WHERE}；
-                                                          要用户看的文件（方案、验收结论、截图、录屏）用 --file 挂在卡片下面，不写进问题里；
+                                                          要用户看的文件（文档、报告、截图、录屏等）用 --file 挂在卡片下面，不写进问题里；
                                                           ${FILE_ARG_PATH_HINT}；
                                                           有明确选项时用 --option（至少 ${ASK_MIN_OPTIONS} 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
                                                           加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
@@ -638,7 +639,7 @@ export const HUB_CLI_REGISTRY: readonly HubCliEntry[] = [
     action: "finish",
     cli: "graph finish",
     summary: "全部完成后提交交付摘要结束任务图",
-    usage: `  ${hub} graph finish [<图编号>] [--unmerged-ok] --stdin        所有节点完成后结束任务图，正文是交付摘要（自动同步给总助；有未合并 PR 时默认拦下提醒）`,
+    usage: `  ${hub} graph finish [<图编号>] [--unmerged-ok] --stdin        所有节点完成后结束任务图，正文是交付摘要（自动同步给总助；若有未合并 PR 会在回执中注明，--unmerged-ok 为兼容保留参数）`,
     allowedFlags: ["unmerged-ok", "stdin"],
     minPositionals: 0,
     maxPositionals: 1,
@@ -928,7 +929,7 @@ export function renderFullHelp(): string {
   return `用法：
 ${standardEntries.map(renderEntryUsage).join("\n")}
 ${reloadEntry.usage}
-  ${hub} help graph                                        打印任务图手册：建图、改图、换人、审查的做法和全部 graph 命令
+  ${hub} help graph                                        打印任务图手册：${TASK_GRAPH_MANUAL_SUMMARY}和全部 graph 命令
 
 长文本用 --stdin 从标准输入原样读，标准输入最多 ${hubLimitMaximum("stdin")}。下面的例子照抄时保持顶格，结束标记前不能有空格。
 bash、zsh 用 heredoc（引号不能省），例如：
