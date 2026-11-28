@@ -190,6 +190,7 @@ html[data-ui-scale="xl"] {
   --border: rgb(110 74 0 / 0.14);
   --border-strong: rgb(110 74 0 / 0.26);
   --border-focus: #4a4038;
+  --card-inner-radius: calc(var(--radius-sm) - 1px);
   --hover: #f6f2e9;
   --open: #fff6d6;
   --ring: var(--border-focus);
@@ -2205,7 +2206,39 @@ input[type="search"]::-webkit-search-cancel-button {
     min-height: 44px;
   }
 }
+@layer components {
+  .card-reply-row {
+    border-end-start-radius: var(--card-inner-radius);
+    border-end-end-radius: var(--card-inner-radius);
+    transition: box-shadow var(--motion-press) ease-out;
+  }
+  .card-reply-row:focus-within {
+    box-shadow: inset 0 0 0 1px var(--border-focus);
+  }
+  .card-reply-row[data-invalid="true"] {
+    box-shadow: inset 0 0 0 1px var(--danger);
+  }
+  .event-strip-trigger {
+    border-radius: 0;
+  }
+  .event-strip-trigger[data-state="closed"] {
+    border-radius: var(--radius-sm);
+  }
+  .event-strip-trigger[data-state="open"] {
+    border-start-start-radius: var(--radius-sm);
+    border-start-end-radius: var(--radius-sm);
+  }
+  .event-strip-shell > :first-child .event-strip-trigger {
+    border-start-start-radius: var(--radius-sm);
+    border-start-end-radius: var(--radius-sm);
+  }
+  .event-strip-shell > :last-child .event-strip-trigger {
+    border-end-start-radius: var(--radius-sm);
+    border-end-end-radius: var(--radius-sm);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
+  .card-reply-row,
   .work-panel-tab,
   .info-tab,
   .work-expand-btn,
