@@ -26,11 +26,11 @@ This plan adds `hub schedule edit <id>` so a Project Manager (PM) can update an 
 
 None for the user. `hub schedule edit` adds a help-only PM CLI subcommand that updates existing schedule rows through the existing `schedule.updated` WebSocket event without altering the web workbench layout, Feishu cards, or system prompts.
 
-Routine choices for the Project Manager to confirm before implementation:
+Routine choices settled by the Project Manager (all approved as recommended on PR #518):
 
-- **D1. Web scope in this PR (recommended: live sync only, no inline edit form).** `ScheduleGroup.tsx` already reflects every `schedule.updated` event in place. Adding a human inline edit form and a new `PATCH /api/schedules/:id` route is deferred so this PR stays focused on the user's `hub schedule edit` request; `scheduleEditIn` is structured so a future UI route can wrap it directly (just like `addForUser` wraps `addIn`).
-- **D2. `nextRunAt` when editing frequency while paused (recommended: recompute and stay paused).** When a paused schedule changes frequency (`--daily` or `--every`), `scheduleEditIn` keeps `enabled = 0` and recomputes `next_run_at = nextRunAfter(newFrequency, now)` so the stored row carries no stale slot from the previous cadence. The schedule never fires while paused, and `schedule.resume` still recalculates `next_run_at` from the later resume timestamp.
-- **D3. Conversation timeline notice on edit (recommended: emit `schedule.updated` only, no conversation system message).** Matching `schedule.pause` and `schedule.resume`, editing emits a `schedule.updated` WebSocket change and records the call in `hub_calls`, rather than adding a new `schedule.edited` event to `SYSTEM_EVENTS` that would clutter PM chats on repeated prompt tweaks.
+- **D1 -> Live sync only, no inline edit form (approved).** `ScheduleGroup.tsx` already reflects every `schedule.updated` event in place. Adding a human inline edit form and a new `PATCH /api/schedules/:id` route is deferred so this PR stays focused on the user's `hub schedule edit` request; `scheduleEditIn` is structured so a future UI route can wrap it directly (just like `addForUser` wraps `addIn`).
+- **D2 -> Recompute `nextRunAt` and stay paused when editing frequency while paused (approved).** When a paused schedule changes frequency (`--daily` or `--every`), `scheduleEditIn` keeps `enabled = 0` and recomputes `next_run_at = nextRunAfter(newFrequency, now)` so the stored row carries no stale slot from the previous cadence. The schedule never fires while paused, and `schedule.resume` still recalculates `next_run_at` from the later resume timestamp.
+- **D3 -> Emit `schedule.updated` only, no conversation system message (approved).** Matching `schedule.pause` and `schedule.resume`, editing emits a `schedule.updated` WebSocket change and records the call in `hub_calls`, rather than adding a new `schedule.edited` event to `SYSTEM_EVENTS` that would clutter PM chats on repeated prompt tweaks.
 
 ## 1. User goal
 

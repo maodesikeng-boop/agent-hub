@@ -9,7 +9,7 @@ import { createLedger } from "../daemon/ledger/index.ts";
 import { HUB_USAGE_PROMPT, WORKER_HUB_USAGE_PROMPT } from "../daemon/prompt.ts";
 import { buildRouterSystemPrompt } from "../daemon/router/prompt.ts";
 import { openTestDb } from "../daemon/store/test-helpers.ts";
-import { HUB_EXIT, HUB_HELP_ONLY_COMMANDS } from "../shared/hub.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, HUB_HELP_ONLY_COMMANDS } from "../shared/hub.ts";
 import { MAX_SCHEDULE_NAME_CHARS } from "../shared/limits.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { runHub } from "./cli.ts";
@@ -17,12 +17,12 @@ import { parseCommand } from "./parse.ts";
 import { HUB_CLI_REGISTRY, renderHelpIndex, resolveHelpTarget } from "./registry.ts";
 import { HUB_USAGE } from "./usage.ts";
 
-async function invokeHub(argv: string[], stdinText = "") {
+async function invokeHub(argv: string[], stdinText = "", env: Record<string, string | undefined> = {}) {
   let stdout = "";
   let stderr = "";
   const code = await runHub({
     argv,
-    env: {},
+    env,
     cwd: "/work/demo",
     stdin: () => Readable.from(stdinText === "" ? [] : [stdinText]),
     stdout: { write: (chunk: string) => { stdout += chunk; } },
@@ -59,6 +59,10 @@ describe("S1 & S6 (CLI): hub schedule edit argument parsing and diagnostics", ()
   });
 
   it("S6.cli: rejects invalid schedule edit invocations with actionable errors and never says unknown subcommand", async () => {
+    const missingId = await invokeHub(["schedule", "edit"]);
+    expect(missingId.code).toBe(HUB_EXIT.usage);
+    expect(missingId.stderr).not.toContain("不认识的子命令");
+
     const noFields = await invokeHub(["schedule", "edit", "7"]);
     expect(noFields.code).toBe(HUB_EXIT.usage);
     expect(noFields.stderr).not.toContain("不认识的子命令");
@@ -67,6 +71,18 @@ describe("S1 & S6 (CLI): hub schedule edit argument parsing and diagnostics", ()
     const badId = await invokeHub(["schedule", "edit", "abc", "--name", "x"]);
     expect(badId.code).toBe(HUB_EXIT.usage);
     expect(badId.stderr).toContain("定时任务编号");
+
+    const zeroId = await invokeHub(["schedule", "edit", "0", "--name", "x"]);
+    expect(zeroId.code).toBe(HUB_EXIT.usage);
+    expect(zeroId.stderr).toContain("定时任务编号");
+
+    const blankStdin = await invokeHub(
+      ["schedule", "edit", "7", "--stdin"],
+      "  \n",
+      { [ENV_HUB_TOKEN]: "test-token", [ENV_HUB_SOCK]: "tcp://127.0.0.1:1" },
+    );
+    expect(blankStdin.code).toBe(HUB_EXIT.usage);
+    expect(blankStdin.stderr).toContain("标准输入读到的正文是空的");
 
     const bothCadences = await invokeHub(["schedule", "edit", "7", "--daily", "09:00", "--every", "30m"]);
     expect(bothCadences.code).toBe(HUB_EXIT.usage);
@@ -100,6 +116,7 @@ describe("S6 & S4 (Agent API): POST /v1/schedule.edit validation and round-trip"
   let app: ReturnType<typeof createAgentApi>;
   let tokenLin: string;
   let tokenZhou: string;
+  let tokenRouter: string;
   let scheduleId: number;
 
   beforeEach(async () => {
@@ -115,10 +132,19 @@ describe("S6 & S4 (Agent API): POST /v1/schedule.edit validation and round-trip"
     const lin = ledger.createPm({ name: "小林", mode: "manage_only", persona: "" });
     const zhou = ledger.createPm({ name: "阿周", mode: "manage_only", persona: "" });
     scheduleId = ledger.hubCall(lin.sessionId, "schedule.add", { name: "日报", prompt: "v1", daily: "09:00" }).data.schedule.id;
+    const routerSessionId = Number(
+      db.run(
+        "INSERT INTO agent_sessions (role, vendor_session_id, cwd, created_at, updated_at) VALUES ('assistant', 'vs-router', ?, ?, ?)",
+        root,
+        now,
+        now,
+      ).lastInsertRowid,
+    );
 
     const tokens = createSessionTokens();
     tokenLin = tokens.issue(lin.sessionId);
     tokenZhou = tokens.issue(zhou.sessionId);
+    tokenRouter = tokens.issue(routerSessionId);
     app = createAgentApi({ ledger, tokens });
     await app.ready();
   });
@@ -137,7 +163,7 @@ describe("S6 & S4 (Agent API): POST /v1/schedule.edit validation and round-trip"
       payload,
     });
 
-  it("S6.api: updates in place with HTTP 200 and rejects empty patch, unknown keys, limit overflow, and cross-PM edits", async () => {
+  it("S6.api: updates in place with HTTP 200 and rejects empty patch, unknown keys, limit overflow, cross-PM, and Router edits", async () => {
     const okRes = await postEdit({ scheduleId, name: "新日报", everyMinutes: 45, prompt: "v2" });
     expect(okRes.statusCode).toBe(200);
     expect(okRes.json()).toMatchObject({
@@ -150,6 +176,9 @@ describe("S6 & S4 (Agent API): POST /v1/schedule.edit validation and round-trip"
     expect((await postEdit({ scheduleId, name: "a\nb" })).statusCode).toBe(400);
     expect((await postEdit({ scheduleId, name: "长".repeat(MAX_SCHEDULE_NAME_CHARS + 1) })).statusCode).toBe(400);
     expect((await postEdit({ scheduleId, name: "越权" }, tokenZhou)).statusCode).toBe(403);
+    const routerRes = await postEdit({ scheduleId, name: "总助改" }, tokenRouter);
+    expect(routerRes.statusCode).toBe(403);
+    expect(routerRes.json()).toMatchObject({ ok: false, code: "forbidden" });
     expect((await postEdit({ scheduleId: 99_999, name: "无" })).statusCode).toBe(404);
   });
 });

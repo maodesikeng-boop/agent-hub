@@ -393,7 +393,7 @@ describe("S3: enabled/paused nextRunAt recalculation, in-flight runs, archive/un
 });
 
 describe("S4: permissions, project isolation, and Feishu guest gating", () => {
-  it("S4.1: rejects editing another PM's schedule (forbidden), missing id (not_found), and Worker sessions (forbidden)", () => {
+  it("S4.1: rejects editing another PM's schedule (forbidden), missing id (not_found), and Worker or Router sessions (forbidden)", () => {
     const theirs = addSchedule({ name: "阿周的任务" }, zhou.sessionId);
     expectLedgerError(() => hub(lin.sessionId, "schedule.edit", { scheduleId: theirs.id, name: "越权改" }), "forbidden", /不是你建的/);
     expectLedgerError(() => hub(lin.sessionId, "schedule.edit", { scheduleId: 99_999, name: "不存在" }), "not_found", /没有编号 99999/);
@@ -405,6 +405,16 @@ describe("S4: permissions, project isolation, and Feishu guest gating", () => {
     const worker = hub(lin.sessionId, "worker.start", { title: "干活", task: "做一件事", noWorktree: true }).data.worker;
     const workerSession = db.get<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!;
     expectLedgerError(() => hub(workerSession.id, "schedule.edit", { scheduleId: theirs.id, name: "worker 改" }), "forbidden");
+
+    const routerSessionId = Number(
+      db.run(
+        "INSERT INTO agent_sessions (role, vendor_session_id, cwd, created_at, updated_at) VALUES ('assistant', 'vs-router', ?, ?, ?)",
+        root,
+        now,
+        now,
+      ).lastInsertRowid,
+    );
+    expectLedgerError(() => hub(routerSessionId, "schedule.edit", { scheduleId: theirs.id, name: "router 改" }), "forbidden");
   });
 
   it("S4.2: Feishu chat_only and observer guest turns block schedule.edit while collaborator and owner turns allow it", () => {
