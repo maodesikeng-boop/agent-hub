@@ -36,11 +36,72 @@ export interface ModuleSummary {
   readonly file: string;
   readonly imports: readonly ModuleImportEdge[];
   readonly reexports: readonly ModuleReexportEdge[];
+  readonly fileDeps: readonly string[];
   readonly localDecls: ReadonlyMap<string, ReadonlySet<string>>;
   readonly exportedLocals: ReadonlyMap<string, string>;
   readonly topLevelSideEffectRefs: ReadonlySet<string>;
   readonly parseFailed: boolean;
 }
+
+export interface ScopedSourceGuard {
+  readonly testFile: string;
+  readonly include: readonly string[];
+  readonly exclude?: readonly string[];
+}
+
+// Guards that scan a directory or template-constructed list of source files instead of importing every symbol they inspect.
+export const SCOPED_SOURCE_GUARDS: readonly ScopedSourceGuard[] = [
+  {
+    testFile: "src/daemon/platform/win32.test.ts",
+    include: ["src/**/*.ts", "src/**/*.tsx"],
+    exclude: ["**/*.test.ts", "**/*.test.tsx"],
+  },
+  {
+    testFile: "src/web/info-style.test.tsx",
+    include: ["src/web/**/*.tsx"],
+    exclude: ["**/*.test.tsx"],
+  },
+  {
+    testFile: "src/web/lib/palette.test.ts",
+    include: ["src/web/**/*.tsx"],
+    exclude: ["**/*.test.tsx"],
+  },
+  {
+    testFile: "src/web/ui/icons.test.ts",
+    include: ["src/web/**/*.ts", "src/web/**/*.tsx"],
+    exclude: ["**/*.test.ts", "**/*.test.tsx"],
+  },
+  {
+    testFile: "src/web/ui-scale.test.tsx",
+    include: ["src/web/components/**/*.tsx", "src/web/ui/**/*.tsx"],
+    exclude: ["**/*.test.tsx"],
+  },
+  {
+    testFile: "src/web/ui/ui-standard.test.tsx",
+    include: ["src/web/components/**/*.tsx", "src/web/ui/**/*.tsx", "src/web/main.tsx"],
+    exclude: ["**/*.test.tsx"],
+  },
+  {
+    testFile: "src/web/motion.test.tsx",
+    include: ["src/web/components/Conversation.tsx", "src/web/components/WorkerConversation.tsx"],
+  },
+  {
+    testFile: "src/web/charts.test.tsx",
+    include: [
+      "src/web/components/Markdown.tsx",
+      "src/web/components/CodeBlock.tsx",
+      "src/web/components/ChartBlock.tsx",
+      "src/web/charts/registry.ts",
+      "src/web/charts/cache.ts",
+      "src/web/charts/remark-chart-blocks.ts",
+      "src/web/charts/theme.ts",
+    ],
+  },
+  {
+    testFile: "scripts/related-graph-followups.test.ts",
+    include: ["**/*.test.ts", "**/*.test.tsx"],
+  },
+];
 
 export type ExportChangeSet =
   | { readonly kind: "none" }
@@ -59,6 +120,7 @@ export interface ResolveAffectedInput {
   readonly changedFiles: readonly string[];
   readonly projects: readonly VitestProjectSpec[];
   readonly alwaysRunTests: readonly string[];
+  readonly scopedGuards?: readonly ScopedSourceGuard[];
   readonly sources: ReadonlyMap<string, string>;
   readonly readBaseFile: (repoRelativePath: string) => string | undefined;
   readonly platform?: NodeJS.Platform;
@@ -174,9 +236,22 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`${out}$`);
 }
 
-export async function loadVitestProjectSpecs(repoRoot: string): Promise<VitestProjectSpec[]> {
-  const configUrl = pathToFileURL(resolve(repoRoot, "vitest.config.ts")).href;
-  const loaded = (await import(configUrl)) as { default?: unknown };
+export async function loadVitestProjectSpecs(repoRoot: string, platform?: NodeJS.Platform): Promise<VitestProjectSpec[]> {
+  const baseUrl = pathToFileURL(resolve(repoRoot, "vitest.config.ts")).href;
+  let loaded: { default?: unknown };
+  if (platform !== undefined && platform !== process.platform) {
+    // Load vitest/config under the host platform first so native rolldown bindings resolve before swapping process.platform.
+    await import("vitest/config");
+    const desc = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { ...desc, value: platform });
+    try {
+      loaded = (await import(`${baseUrl}?platform=${platform}`)) as { default?: unknown };
+    } finally {
+      if (desc) Object.defineProperty(process, "platform", desc);
+    }
+  } else {
+    loaded = (await import(baseUrl)) as { default?: unknown };
+  }
   const rawConfig =
     typeof loaded.default === "function"
       ? await (loaded.default as (env: { command: string; mode: string }) => unknown)({ command: "serve", mode: "test" })
@@ -273,8 +348,9 @@ function buildProjectIndex(
 function buildReverseEdges(
   sources: ReadonlyMap<string, string>,
   knownFiles: ReadonlySet<string>,
-): Map<string, ReverseEdge[]> {
+): { reverse: Map<string, ReverseEdge[]>; directFileConsumers: Map<string, string[]> } {
   const reverse = new Map<string, ReverseEdge[]>();
+  const directFileConsumers = new Map<string, string[]>();
   const push = (target: string, edge: ReverseEdge): void => {
     let list = reverse.get(target);
     if (!list) {
@@ -282,6 +358,14 @@ function buildReverseEdges(
       reverse.set(target, list);
     }
     list.push(edge);
+  };
+  const pushFileDep = (target: string, consumer: string): void => {
+    let list = directFileConsumers.get(target);
+    if (!list) {
+      list = [];
+      directFileConsumers.set(target, list);
+    }
+    if (!list.includes(consumer)) list.push(consumer);
   };
 
   for (const [file, text] of sources) {
@@ -292,6 +376,9 @@ function buildReverseEdges(
     for (const reexp of edges.reexports) {
       push(reexp.target, { consumer: file, kind: "reexport", imported: reexp.imported, exported: reexp.exported, local: null });
     }
+    for (const dep of edges.fileDeps) {
+      pushFileDep(dep, file);
+    }
     if (VENDOR_DAEMON_FILE.test(file) && sources.has("src/vendors/daemon-registry.ts")) {
       push(file, { consumer: "src/vendors/daemon-registry.ts", kind: "vendor-bridge", imported: "*", local: null });
     }
@@ -299,7 +386,7 @@ function buildReverseEdges(
       push(file, { consumer: "src/vendors/paths-registry.ts", kind: "vendor-bridge", imported: "*", local: null });
     }
   }
-  return reverse;
+  return { reverse, directFileConsumers };
 }
 
 function propagateEdge(
@@ -319,17 +406,23 @@ function propagateEdge(
     return;
   }
 
+  // A module-evaluation side effect (`*`) executes whenever any static importer or re-exporter loads this module.
+  if (cur.symbol === "*") {
+    emit("*");
+    return;
+  }
+
   if (edge.kind === "reexport") {
     if (edge.exported === "*" && edge.imported === "*") {
       // `export *` never forwards `default` in ESM.
       if (cur.symbol !== "default") emit(cur.symbol);
-    } else if (edge.imported === "*" || cur.symbol === "*" || cur.symbol === edge.imported) {
+    } else if (edge.imported === "*" || cur.symbol === edge.imported) {
       emit(edge.exported ?? "*");
     }
     return;
   }
 
-  if (!(cur.symbol === "*" || edge.imported === "*" || edge.imported === cur.symbol)) return;
+  if (!(edge.imported === "*" || edge.imported === cur.symbol)) return;
   if (edge.local === null || allTestFiles.has(edge.consumer) || setupFileToProjects.has(edge.consumer)) {
     emit("*");
     return;
@@ -383,7 +476,14 @@ export function resolveAffectedTests(input: ResolveAffectedInput): AffectedTests
   const knownFiles = new Set<string>(sources.keys());
   for (const file of changedFiles) if (MODULE_FILE.test(file)) knownFiles.add(file);
 
-  const reverse = buildReverseEdges(sources, knownFiles);
+  const { reverse, directFileConsumers } = buildReverseEdges(sources, knownFiles);
+  const compiledScopedGuards = (input.scopedGuards ?? SCOPED_SOURCE_GUARDS)
+    .filter((guard) => allTestFiles.has(toRepoPosixPath(guard.testFile)))
+    .map((guard) => ({
+      testFile: toRepoPosixPath(guard.testFile),
+      include: guard.include.map(globToRegExp),
+      exclude: (guard.exclude ?? []).map(globToRegExp),
+    }));
   const summaryCache = new Map<string, ModuleSummary>();
   const summaryOf = (file: string): ModuleSummary | undefined => {
     const cached = summaryCache.get(file);
@@ -418,6 +518,17 @@ export function resolveAffectedTests(input: ResolveAffectedInput): AffectedTests
   };
 
   for (const file of changedFiles) {
+    for (const guard of compiledScopedGuards) {
+      if (guard.include.some((re) => re.test(file)) && !guard.exclude.some((re) => re.test(file))) {
+        addReason(guard.testFile, { changedFile: file, symbol: "*", path: [file, `source-guard:${guard.testFile}`] });
+      }
+    }
+    const directConsumers = directFileConsumers.get(file);
+    if (directConsumers) {
+      for (const consumer of directConsumers) {
+        enqueue({ file: consumer, symbol: "*", rootFile: file, rootSymbol: "*", path: [file, consumer] });
+      }
+    }
     if (!MODULE_FILE.test(file)) continue;
     if (allTestFiles.has(file)) addReason(file, { changedFile: file, symbol: "*", path: [file] });
     const diff = diffChangedExports(file, input.readBaseFile(file), sources.get(file), knownFiles);

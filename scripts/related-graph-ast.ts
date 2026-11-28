@@ -1,22 +1,36 @@
 // AST analysis and export-level diffing for scripts/related-graph.ts; fails closed on syntax errors or ambiguous side effects.
-import { posix } from "node:path";
 import { parseSync } from "oxc-parser";
+import {
+  collectDynamicMockAndFileRefs,
+  DYNAMIC_OR_PATH_HINT,
+  isAstNode,
+  isTypeOnlyNode,
+  resolveRelativeModule,
+  staticStringValue,
+  toRepoPosixPath,
+  TS_WRAPPER_TYPES,
+  type AstNode,
+} from "./related-graph-paths.ts";
 import type { ExportChangeSet, ModuleImportEdge, ModuleReexportEdge, ModuleSummary } from "./related-graph.ts";
 
-type AstNode = { type: string; [key: string]: unknown };
+export { toRepoPosixPath };
 
-const VI_MOCK_METHODS = new Set(["mock", "doMock", "unmock", "importActual", "importMock"]);
-const VI_MOCK_HINT = /\bvi\s*\./;
-const DYNAMIC_OR_MOCK_HINT = /\bimport\s*\(|\bvi\s*\./;
-const RESOLVE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
-const JS_EXT_SWAP = /\.[cm]?jsx?$/;
-const TS_WRAPPER_TYPES = new Set([
-  "TSAsExpression",
-  "TSSatisfiesExpression",
-  "TSNonNullExpression",
-  "TSTypeAssertion",
-  "TSInstantiationExpression",
+// TypeScript-only `optional` markers are erased at runtime; runtime MemberExpression and CallExpression keep `optional`.
+const TS_OPTIONAL_NODE_TYPES = new Set([
+  "Identifier",
+  "ObjectPattern",
+  "ArrayPattern",
+  "AssignmentPattern",
+  "RestElement",
+  "Property",
+  "PropertyDefinition",
+  "AccessorProperty",
+  "MethodDefinition",
 ]);
+const PURE_UNARY_OPS = new Set(["+", "-", "!", "~", "void", "typeof"]);
+const PURE_GLOBAL_IDENTS = new Set(["undefined", "NaN", "Infinity"]);
+const SAFE_SUPERCLASSES = new Set(["Error", "TypeError", "RangeError", "SyntaxError"]);
+const PURE_CONTAINER_CTORS = new Set(["Map", "Set", "WeakMap", "WeakSet"]);
 const SKIPPED_AST_KEYS = new Set([
   "start",
   "end",
@@ -30,75 +44,15 @@ const SKIPPED_AST_KEYS = new Set([
   "superTypeArguments",
   "implements",
   "definite",
-  "optional",
   "importKind",
   "exportKind",
 ]);
-
-const isAstNode = (value: unknown): value is AstNode =>
-  typeof value === "object" && value !== null && typeof (value as AstNode).type === "string";
-
-export function toRepoPosixPath(filePath: string): string {
-  return filePath.split("\\").join("/").replace(/^\.\//, "");
-}
-
-function resolveRelativeModule(fromFile: string, specifier: string, knownFiles: ReadonlySet<string>): string | null {
-  if (!(specifier.startsWith("./") || specifier.startsWith("../") || specifier === "." || specifier === "..")) {
-    return null;
-  }
-  const clean = specifier.split(/[?#]/, 1)[0]!;
-  const dir = posix.dirname(fromFile);
-  const candidate = toRepoPosixPath(posix.normalize(dir === "." ? clean : posix.join(dir, clean)));
-  if (knownFiles.has(candidate)) return candidate;
-  if (JS_EXT_SWAP.test(candidate)) {
-    const stem = candidate.replace(JS_EXT_SWAP, "");
-    for (const ext of RESOLVE_EXTENSIONS) {
-      const hit = `${stem}${ext}`;
-      if (knownFiles.has(hit)) return hit;
-    }
-  }
-  for (const ext of RESOLVE_EXTENSIONS) {
-    const hit = `${candidate}${ext}`;
-    if (knownFiles.has(hit)) return hit;
-  }
-  for (const ext of RESOLVE_EXTENSIONS) {
-    const hit = `${candidate}/index${ext}`;
-    if (knownFiles.has(hit)) return hit;
-  }
-  return null;
-}
-
-function staticStringValue(node: unknown): string | null {
-  if (!isAstNode(node)) return null;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  if (
-    node.type === "TemplateLiteral" &&
-    Array.isArray(node.expressions) &&
-    node.expressions.length === 0 &&
-    Array.isArray(node.quasis) &&
-    node.quasis.length === 1
-  ) {
-    const quasi = node.quasis[0] as { value?: { cooked?: unknown; raw?: unknown } } | undefined;
-    const val = quasi?.value?.cooked ?? quasi?.value?.raw;
-    return typeof val === "string" ? val : null;
-  }
-  return null;
-}
 
 function exportOrImportName(node: unknown): string | null {
   if (!isAstNode(node)) return null;
   if (node.type === "Identifier") return node.name as string;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   return null;
-}
-
-function isTypeOnlyNode(node: AstNode): boolean {
-  if (node.declare === true) return true;
-  if (node.type === "TSEnumDeclaration" || node.type === "TSModuleDeclaration" || node.type === "TSParameterProperty") {
-    return false;
-  }
-  if (TS_WRAPPER_TYPES.has(node.type)) return false;
-  return node.type.startsWith("TS");
 }
 
 function collectPatternNames(pattern: unknown, names: string[], defaultRefs: Set<string>): void {
@@ -232,51 +186,6 @@ function collectRuntimeRefs(node: unknown, refs: Set<string>): void {
   }
 }
 
-function collectDynamicAndMockImports(
-  node: unknown,
-  file: string,
-  knownFiles: ReadonlySet<string>,
-  addImport: (edge: ModuleImportEdge) => void,
-): void {
-  if (!isAstNode(node) || isTypeOnlyNode(node)) return;
-  if (TS_WRAPPER_TYPES.has(node.type)) {
-    collectDynamicAndMockImports(node.expression, file, knownFiles, addImport);
-    return;
-  }
-  if (node.type === "ImportExpression") {
-    const spec = staticStringValue(node.source);
-    if (spec !== null) {
-      const target = resolveRelativeModule(file, spec, knownFiles);
-      if (target !== null) addImport({ target, imported: "*", local: null });
-    }
-  } else if (node.type === "CallExpression" && isAstNode(node.callee)) {
-    const callee = node.callee;
-    if (
-      callee.type === "MemberExpression" &&
-      callee.computed !== true &&
-      isAstNode(callee.object) &&
-      callee.object.type === "Identifier" &&
-      callee.object.name === "vi" &&
-      isAstNode(callee.property) &&
-      callee.property.type === "Identifier" &&
-      VI_MOCK_METHODS.has(callee.property.name as string) &&
-      Array.isArray(node.arguments) &&
-      node.arguments.length > 0
-    ) {
-      const spec = staticStringValue(node.arguments[0]);
-      if (spec !== null) {
-        const target = resolveRelativeModule(file, spec, knownFiles);
-        if (target !== null) addImport({ target, imported: "*", local: null });
-      }
-    }
-  }
-  for (const [key, value] of Object.entries(node)) {
-    if (SKIPPED_AST_KEYS.has(key)) continue;
-    if (Array.isArray(value)) for (const item of value) collectDynamicAndMockImports(item, file, knownFiles, addImport);
-    else collectDynamicAndMockImports(value, file, knownFiles, addImport);
-  }
-}
-
 function canonicalizeRuntimeAst(node: unknown): unknown {
   if (typeof node === "bigint") return `${node}n`;
   if (node instanceof RegExp) return String(node);
@@ -296,6 +205,7 @@ function canonicalizeRuntimeAst(node: unknown): unknown {
   const out: Record<string, unknown> = { type: node.type };
   for (const key of Object.keys(node).sort()) {
     if (key === "type" || SKIPPED_AST_KEYS.has(key)) continue;
+    if (key === "optional" && TS_OPTIONAL_NODE_TYPES.has(node.type)) continue;
     out[key] = canonicalizeRuntimeAst(node[key]);
   }
   return out;
@@ -303,10 +213,133 @@ function canonicalizeRuntimeAst(node: unknown): unknown {
 
 const canonicalFingerprint = (node: unknown): string => JSON.stringify(canonicalizeRuntimeAst(node));
 
+function isPureContainerNewExpr(node: AstNode, pureLocals: ReadonlySet<string>, shadowedBuiltins: ReadonlySet<string>): boolean {
+  if (!isAstNode(node.callee) || node.callee.type !== "Identifier") return false;
+  const ctor = node.callee.name as string;
+  if (!PURE_CONTAINER_CTORS.has(ctor) || shadowedBuiltins.has(ctor)) return false;
+  const args = Array.isArray(node.arguments) ? node.arguments : [];
+  if (args.length === 0) return true;
+  if (ctor === "WeakMap" || ctor === "WeakSet" || args.length > 1) return false;
+  const first = args[0];
+  if (!isAstNode(first) || first.type !== "ArrayExpression" || !Array.isArray(first.elements)) return false;
+  if (ctor === "Set") {
+    return first.elements.every((el) => el === null || (isAstNode(el) && el.type !== "SpreadElement" && isPureModuleInitializer(el, pureLocals, shadowedBuiltins)));
+  }
+  return first.elements.every(
+    (entry) =>
+      isAstNode(entry) &&
+      entry.type === "ArrayExpression" &&
+      Array.isArray(entry.elements) &&
+      entry.elements.length === 2 &&
+      entry.elements.every((item) => isAstNode(item) && item.type !== "SpreadElement" && isPureModuleInitializer(item, pureLocals, shadowedBuiltins)),
+  );
+}
+
+function isPureModuleInitializer(
+  node: unknown,
+  pureLocals: ReadonlySet<string>,
+  shadowedBuiltins: ReadonlySet<string>,
+): boolean {
+  if (node === null || node === undefined) return true;
+  if (!isAstNode(node)) return false;
+  if (TS_WRAPPER_TYPES.has(node.type)) return isPureModuleInitializer(node.expression, pureLocals, shadowedBuiltins);
+  switch (node.type) {
+    case "Literal":
+    case "ArrowFunctionExpression":
+    case "FunctionExpression":
+      return true;
+    case "Identifier":
+      return PURE_GLOBAL_IDENTS.has(node.name as string) || pureLocals.has(node.name as string);
+    case "TemplateLiteral":
+      return Array.isArray(node.expressions) && node.expressions.every((expr) => isPureModuleInitializer(expr, pureLocals, shadowedBuiltins));
+    case "UnaryExpression": {
+      const op = String(node.operator ?? "");
+      if (!PURE_UNARY_OPS.has(op)) return false;
+      if (op === "typeof" && isAstNode(node.argument) && node.argument.type === "Identifier") return true;
+      return isPureModuleInitializer(node.argument, pureLocals, shadowedBuiltins);
+    }
+    case "BinaryExpression":
+      return (
+        node.operator !== "in" &&
+        node.operator !== "instanceof" &&
+        isPureModuleInitializer(node.left, pureLocals, shadowedBuiltins) &&
+        isPureModuleInitializer(node.right, pureLocals, shadowedBuiltins)
+      );
+    case "LogicalExpression":
+      return (
+        isPureModuleInitializer(node.left, pureLocals, shadowedBuiltins) &&
+        isPureModuleInitializer(node.right, pureLocals, shadowedBuiltins)
+      );
+    case "ConditionalExpression":
+      return (
+        isPureModuleInitializer(node.test, pureLocals, shadowedBuiltins) &&
+        isPureModuleInitializer(node.consequent, pureLocals, shadowedBuiltins) &&
+        isPureModuleInitializer(node.alternate, pureLocals, shadowedBuiltins)
+      );
+    case "ArrayExpression":
+      return (
+        Array.isArray(node.elements) &&
+        node.elements.every((el) => el === null || (isAstNode(el) && el.type !== "SpreadElement" && isPureModuleInitializer(el, pureLocals, shadowedBuiltins)))
+      );
+    case "ObjectExpression":
+      return (
+        Array.isArray(node.properties) &&
+        node.properties.every(
+          (prop) =>
+            isAstNode(prop) &&
+            prop.type === "Property" &&
+            prop.kind === "init" &&
+            (prop.computed !== true || isPureModuleInitializer(prop.key, pureLocals, shadowedBuiltins)) &&
+            isPureModuleInitializer(prop.value, pureLocals, shadowedBuiltins),
+        )
+      );
+    case "NewExpression":
+      return isPureContainerNewExpr(node, pureLocals, shadowedBuiltins);
+    default:
+      return false;
+  }
+}
+
+function isPureClassDeclaration(
+  decl: AstNode,
+  pureLocals: ReadonlySet<string>,
+  shadowedBuiltins: ReadonlySet<string>,
+): boolean {
+  if (Array.isArray(decl.decorators) && decl.decorators.length > 0) return false;
+  if (decl.superClass !== null && decl.superClass !== undefined) {
+    if (
+      !isAstNode(decl.superClass) ||
+      decl.superClass.type !== "Identifier" ||
+      (!SAFE_SUPERCLASSES.has(decl.superClass.name as string) && !pureLocals.has(decl.superClass.name as string))
+    ) {
+      return false;
+    }
+  }
+  const members = isAstNode(decl.body) && Array.isArray(decl.body.body) ? (decl.body.body as AstNode[]) : [];
+  for (const member of members) {
+    if (!isAstNode(member)) continue;
+    if (member.type === "StaticBlock") return false;
+    if (Array.isArray(member.decorators) && member.decorators.length > 0) return false;
+    if (member.computed === true && !isPureModuleInitializer(member.key, pureLocals, shadowedBuiltins)) return false;
+    if (
+      (member.type === "PropertyDefinition" || member.type === "AccessorProperty") &&
+      member.static === true &&
+      !isPureModuleInitializer(member.value, pureLocals, shadowedBuiltins)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function recordDeclaration(
   decl: AstNode,
   localDecls: Map<string, Set<string>>,
+  pureLocals: Set<string>,
+  shadowedBuiltins: ReadonlySet<string>,
+  topLevelSideEffectRefs: Set<string>,
   localFingerprints?: Map<string, string>,
+  topLevelSideEffectFingerprints?: string[],
 ): string[] {
   if (isTypeOnlyNode(decl)) return [];
   const declared: string[] = [];
@@ -318,11 +351,21 @@ function recordDeclaration(
       const refs = new Set<string>();
       collectPatternNames(declarator.id, names, refs);
       collectRuntimeRefs(declarator.init, refs);
+      const pure =
+        isAstNode(declarator.id) &&
+        declarator.id.type === "Identifier" &&
+        isPureModuleInitializer(declarator.init, pureLocals, shadowedBuiltins);
       const fp = localFingerprints ? `${kind}:${canonicalFingerprint(declarator)}` : "";
       for (const name of names) {
         declared.push(name);
         localDecls.set(name, refs);
         if (localFingerprints) localFingerprints.set(name, fp);
+      }
+      if (pure) {
+        if (kind === "const" && names[0]) pureLocals.add(names[0]);
+      } else {
+        for (const ref of refs) topLevelSideEffectRefs.add(ref);
+        if (topLevelSideEffectFingerprints) topLevelSideEffectFingerprints.push(`init:${fp}`);
       }
     }
     return declared;
@@ -337,7 +380,26 @@ function recordDeclaration(
     collectRuntimeRefs(decl, refs);
     declared.push(name);
     localDecls.set(name, refs);
-    if (localFingerprints) localFingerprints.set(name, canonicalFingerprint(decl));
+    const fp = localFingerprints ? canonicalFingerprint(decl) : "";
+    if (localFingerprints) localFingerprints.set(name, fp);
+    if (decl.type === "FunctionDeclaration") {
+      pureLocals.add(name);
+    } else if (decl.type === "ClassDeclaration") {
+      if (isPureClassDeclaration(decl, pureLocals, shadowedBuiltins)) {
+        pureLocals.add(name);
+      } else {
+        for (const ref of refs) topLevelSideEffectRefs.add(ref);
+        if (topLevelSideEffectFingerprints) topLevelSideEffectFingerprints.push(`class:${fp}`);
+      }
+    } else if (decl.type === "TSEnumDeclaration") {
+      const members = Array.isArray(decl.members) ? (decl.members as AstNode[]) : [];
+      const enumPure = members.every((m) => isPureModuleInitializer(m.initializer, pureLocals, shadowedBuiltins));
+      if (enumPure) pureLocals.add(name);
+      else {
+        for (const ref of refs) topLevelSideEffectRefs.add(ref);
+        if (topLevelSideEffectFingerprints) topLevelSideEffectFingerprints.push(`enum:${fp}`);
+      }
+    }
     return declared;
   }
   return declared;
@@ -367,6 +429,7 @@ function analyzeModuleDetailed(
         file,
         imports: [],
         reexports: [],
+        fileDeps: [],
         localDecls: new Map(),
         exportedLocals: new Map(),
         topLevelSideEffectRefs: new Set(),
@@ -389,6 +452,13 @@ function analyzeModuleDetailed(
     seenImports.add(key);
     imports.push(edge);
   };
+  const fileDeps: string[] = [];
+  const seenFileDeps = new Set<string>();
+  const addFileDep = (target: string): void => {
+    if (seenFileDeps.has(target)) return;
+    seenFileDeps.add(target);
+    fileDeps.push(target);
+  };
 
   const reexports: ModuleReexportEdge[] = [];
   const localDecls = new Map<string, Set<string>>();
@@ -402,6 +472,36 @@ function analyzeModuleDetailed(
   const topLevelSideEffectFingerprints: string[] = [];
 
   const body = (parsed.program as unknown as { body: AstNode[] }).body;
+  const pureLocals = new Set<string>();
+  const shadowedBuiltins = new Set<string>();
+  for (const stmt of body) {
+    const inner =
+      (stmt.type === "ExportNamedDeclaration" || stmt.type === "ExportDefaultDeclaration") && isAstNode(stmt.declaration)
+        ? stmt.declaration
+        : stmt;
+    if (inner.type === "FunctionDeclaration" && isAstNode(inner.id) && inner.id.type === "Identifier") {
+      pureLocals.add(inner.id.name as string);
+      if (PURE_CONTAINER_CTORS.has(inner.id.name as string)) shadowedBuiltins.add(inner.id.name as string);
+    } else if (inner.type === "ImportDeclaration" && Array.isArray(inner.specifiers)) {
+      for (const s of inner.specifiers as AstNode[]) {
+        if (isAstNode(s.local) && s.local.type === "Identifier" && PURE_CONTAINER_CTORS.has(s.local.name as string)) {
+          shadowedBuiltins.add(s.local.name as string);
+        }
+      }
+    } else if (inner.type === "VariableDeclaration" && Array.isArray(inner.declarations)) {
+      for (const d of inner.declarations as AstNode[]) {
+        if (isAstNode(d.id) && d.id.type === "Identifier" && PURE_CONTAINER_CTORS.has(d.id.name as string)) {
+          shadowedBuiltins.add(d.id.name as string);
+        }
+      }
+    } else if ((inner.type === "ClassDeclaration" || inner.type === "TSEnumDeclaration") && isAstNode(inner.id) && inner.id.type === "Identifier") {
+      if (PURE_CONTAINER_CTORS.has(inner.id.name as string)) shadowedBuiltins.add(inner.id.name as string);
+    }
+  }
+
+  const fpOut = computeFingerprints ? localFingerprints : undefined;
+  const sideEffectFpOut = computeFingerprints ? topLevelSideEffectFingerprints : undefined;
+
   for (const stmt of body) {
     if (stmt.type === "EmptyStatement" || isTypeOnlyNode(stmt)) continue;
 
@@ -467,7 +567,7 @@ function analyzeModuleDetailed(
         continue;
       }
       if (isAstNode(stmt.declaration)) {
-        const names = recordDeclaration(stmt.declaration, localDecls, computeFingerprints ? localFingerprints : undefined);
+        const names = recordDeclaration(stmt.declaration, localDecls, pureLocals, shadowedBuiltins, topLevelSideEffectRefs, fpOut, sideEffectFpOut);
         for (const name of names) exportedLocals.set(name, name);
       }
       const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
@@ -486,20 +586,30 @@ function analyzeModuleDetailed(
       if (decl.type === "Identifier") {
         exportedLocals.set("default", decl.name as string);
       } else if ((decl.type === "FunctionDeclaration" || decl.type === "ClassDeclaration") && isAstNode(decl.id) && decl.id.type === "Identifier") {
-        const names = recordDeclaration(decl, localDecls, computeFingerprints ? localFingerprints : undefined);
+        const names = recordDeclaration(decl, localDecls, pureLocals, shadowedBuiltins, topLevelSideEffectRefs, fpOut, sideEffectFpOut);
         if (names[0]) exportedLocals.set("default", names[0]);
       } else {
         const refs = new Set<string>();
         collectRuntimeRefs(decl, refs);
         localDecls.set("default", refs);
-        if (computeFingerprints) localFingerprints.set("default", canonicalFingerprint(decl));
+        const fp = computeFingerprints ? canonicalFingerprint(decl) : "";
+        if (computeFingerprints) localFingerprints.set("default", fp);
         exportedLocals.set("default", "default");
+        const pure =
+          decl.type === "FunctionDeclaration" ||
+          (decl.type === "ClassDeclaration" || decl.type === "ClassExpression"
+            ? isPureClassDeclaration(decl, pureLocals, shadowedBuiltins)
+            : isPureModuleInitializer(decl, pureLocals, shadowedBuiltins));
+        if (!pure) {
+          for (const ref of refs) topLevelSideEffectRefs.add(ref);
+          if (sideEffectFpOut) sideEffectFpOut.push(`default:${fp}`);
+        }
       }
       continue;
     }
 
     if (stmt.type === "VariableDeclaration" || stmt.type === "FunctionDeclaration" || stmt.type === "ClassDeclaration" || stmt.type === "TSEnumDeclaration") {
-      recordDeclaration(stmt, localDecls, computeFingerprints ? localFingerprints : undefined);
+      recordDeclaration(stmt, localDecls, pureLocals, shadowedBuiltins, topLevelSideEffectRefs, fpOut, sideEffectFpOut);
       continue;
     }
 
@@ -507,12 +617,12 @@ function analyzeModuleDetailed(
     if (computeFingerprints) topLevelSideEffectFingerprints.push(canonicalFingerprint(stmt));
   }
 
-  if (DYNAMIC_OR_MOCK_HINT.test(source)) {
-    collectDynamicAndMockImports(parsed.program, file, knownFiles, addImport);
+  if (DYNAMIC_OR_PATH_HINT.test(source)) {
+    collectDynamicMockAndFileRefs(parsed.program, file, knownFiles, SKIPPED_AST_KEYS, addImport, addFileDep, new Map());
   }
 
   return {
-    summary: { file, imports, reexports, localDecls, exportedLocals, topLevelSideEffectRefs, parseFailed: false },
+    summary: { file, imports, reexports, fileDeps, localDecls, exportedLocals, topLevelSideEffectRefs, parseFailed: false },
     localFingerprints,
     importBindingFingerprints,
     sideEffectImportTargets,
@@ -526,10 +636,10 @@ export function extractModuleEdges(
   rawFile: string,
   source: string,
   knownFiles: ReadonlySet<string>,
-): { imports: ModuleImportEdge[]; reexports: ModuleReexportEdge[]; parseFailed: boolean } {
+): { imports: ModuleImportEdge[]; reexports: ModuleReexportEdge[]; fileDeps: string[]; parseFailed: boolean } {
   const file = toRepoPosixPath(rawFile);
   const parsed = parseSync(file, source);
-  if (parsed.errors.length > 0) return { imports: [], reexports: [], parseFailed: true };
+  if (parsed.errors.length > 0) return { imports: [], reexports: [], fileDeps: [], parseFailed: true };
 
   const imports: ModuleImportEdge[] = [];
   const seenImports = new Set<string>();
@@ -538,6 +648,13 @@ export function extractModuleEdges(
     if (seenImports.has(key)) return;
     seenImports.add(key);
     imports.push(edge);
+  };
+  const fileDeps: string[] = [];
+  const seenFileDeps = new Set<string>();
+  const addFileDep = (target: string): void => {
+    if (seenFileDeps.has(target)) return;
+    seenFileDeps.add(target);
+    fileDeps.push(target);
   };
   const reexports: ModuleReexportEdge[] = [];
   const mod = parsed.module;
@@ -573,11 +690,11 @@ export function extractModuleEdges(
     }
   }
 
-  // Only deserialize the full JS AST for files that actually contain dynamic imports or vi.* mock helpers.
-  if (mod.dynamicImports.length > 0 || VI_MOCK_HINT.test(source)) {
-    collectDynamicAndMockImports(parsed.program, file, knownFiles, addImport);
+  // Only deserialize the full JS AST for files that actually contain dynamic imports, vi.* mocks, or path-based source reads.
+  if (mod.dynamicImports.length > 0 || DYNAMIC_OR_PATH_HINT.test(source)) {
+    collectDynamicMockAndFileRefs(parsed.program, file, knownFiles, SKIPPED_AST_KEYS, addImport, addFileDep, new Map());
   }
-  return { imports, reexports, parseFailed: false };
+  return { imports, reexports, fileDeps, parseFailed: false };
 }
 
 function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {

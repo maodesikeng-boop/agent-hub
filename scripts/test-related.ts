@@ -1,5 +1,5 @@
 // Runs every test affected by this branch's changes using a symbol-aware static impact graph and bounded local concurrency.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -124,21 +124,42 @@ export function sandboxSkipReport(logText: string): string | undefined {
   ].join("\n");
 }
 
-function runVitest(args: readonly string[]): number {
-  const vitest = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "test-related-"));
+export async function runVitest(
+  args: readonly string[],
+  options?: { readonly scriptPath?: string; readonly cwd?: string; readonly tmpRoot?: string },
+): Promise<number> {
+  const vitest = options?.scriptPath ?? join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
+  const cwd = options?.cwd ?? REPO_ROOT;
+  const dir = mkdtempSync(join(options?.tmpRoot ?? tmpdir(), "test-related-"));
   const log = join(dir, "sandbox-skips.txt");
+  const child = spawn(process.execPath, [vitest, ...args], {
+    cwd,
+    stdio: "inherit",
+    env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
+  });
+  let receivedSignal: NodeJS.Signals | null = null;
+  const forwardSignal = (sig: NodeJS.Signals): void => {
+    receivedSignal = sig;
+    if (child.exitCode === null && child.signalCode === null) child.kill(sig);
+  };
+  const onSigInt = (): void => forwardSignal("SIGINT");
+  const onSigTerm = (): void => forwardSignal("SIGTERM");
+  process.on("SIGINT", onSigInt);
+  process.on("SIGTERM", onSigTerm);
   try {
-    const run = spawnSync(process.execPath, [vitest, ...args], {
-      cwd: REPO_ROOT,
-      stdio: "inherit",
-      env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit, rejectExit) => {
+      child.once("error", rejectExit);
+      child.once("close", (code, signal) => resolveExit({ code, signal }));
     });
-    if (run.error) throw run.error;
     const report = sandboxSkipReport(existsSync(log) ? readFileSync(log, "utf8") : "");
     if (report) console.log(report);
-    return run.status ?? 1;
+    if (exit.code !== null) return exit.code;
+    if (receivedSignal === "SIGINT" || exit.signal === "SIGINT") return 130;
+    if (receivedSignal === "SIGTERM" || exit.signal === "SIGTERM") return 143;
+    return 1;
   } finally {
+    process.off("SIGINT", onSigInt);
+    process.off("SIGTERM", onSigTerm);
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -203,7 +224,7 @@ async function main(argv: string[]): Promise<number> {
   if (result.testFiles.length === 0) return 0;
 
   const targetArgs = result.fullSuite ? [] : result.testFiles;
-  return runVitest(["run", "--passWithNoTests", ...concurrency.extraArgs, ...vitestArgs, ...targetArgs]);
+  return await runVitest(["run", "--passWithNoTests", ...concurrency.extraArgs, ...vitestArgs, ...targetArgs]);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
