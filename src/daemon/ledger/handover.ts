@@ -1,15 +1,10 @@
-import { preambleAgendaSection } from "../../shared/pm-agenda.ts";
-import { dropAgendaCursorIn, enqueueHandoverAgendaNoticeIn, pmAgendaOf } from "./pm-agenda.ts";
-import { PROCESS_MESSAGE_KINDS_SQL } from "./checklist.ts";
+import { dropAgendaCursorIn, enqueueHandoverAgendaNoticeIn } from "./pm-agenda.ts";
 import { CHECKLIST_REMINDER_SQL } from "./checklist-reminders.ts";
 // Handover runs in the background on a fork of the PM session and swaps sessions between two turns, so the user keeps chatting throughout.
-import { agentTextOf } from "../../shared/attachments.ts";
-import { pendingAsksSection } from "../../shared/pending-asks.ts";
-import { pendingAsksOfPm } from "./pending-asks.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import { systemEventOf, systemMessageDedupeKey, workerEventOf } from "../../shared/domain.ts";
-import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
-import type { DriverEvent } from "../../shared/driver.ts";
+import { systemEventOf, systemMessageDedupeKey } from "../../shared/domain.ts";
+import type { AgentSessionRow, ConversationId, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
+import type { DriverEvent, SessionPreambleOptions } from "../../shared/driver.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { ForkRef, ForkerKind, HandoverCleanJob, HandoverFailure, HandoverId, HandoverJob, HandoverStatus } from "../../shared/handover.ts";
 import {
@@ -20,21 +15,19 @@ import {
   HANDOVER_READY_MAX_MS,
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
-  VENDOR_SWITCH_TRANSCRIPTS_MAX,
 } from "../../shared/limits.ts";
-import { HUB_COMMAND } from "../../shared/names.ts";
-import { handoverTokenThresholdOf, vendorLabel, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
-import { workerLineText } from "../../shared/worker.ts";
+import { handoverTokenThresholdOf, isAgentVendor, vendorLabel, vendorSpec, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
+import { commandNameOf } from "../../vendors/types.ts";
 import { deletePendingSessionSend, hasRunningSessionAction } from "../actions/index.ts";
-import { getAgentSession, type Db } from "../store/index.ts";
+import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { clearConsumedHandoverBlobsIn } from "./db-table-retention.ts";
-import { pickRecent, recentText, type RecentMessage } from "./handover-recent.ts";
+import { buildBudgetedSessionPreamble, recentRowsOf } from "./handover-preamble.ts";
+import { pickRecent } from "./handover-recent.ts";
 import {
   HANDOVER_EMPTY_REASON,
   HANDOVER_NOT_WRITTEN_TEXT,
   handoverRequestText,
-  sessionPreambleText,
 } from "./handover-text.ts";
 import type { LedgerLoadedSkills } from "./loaded-skills.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -42,13 +35,6 @@ import type { LedgerPersona } from "./persona.ts";
 import { toMessage, toPm } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
-import {
-  buildVendorSwitchPreamble,
-  collectGenerationContext,
-  describeGenerationTranscripts,
-  type GenerationAnchor,
-  type PriorSessionTranscriptRef,
-} from "./vendor-switch-context.ts";
 
 export { HANDOVER_EMPTY_REASON, HANDOVER_NOT_WRITTEN_TEXT, HANDOVER_STALE_HINT } from "./handover-text.ts";
 
@@ -124,134 +110,9 @@ type HandoverMeta = {
 const ACTIVE = "status IN ('queued', 'forking', 'writing', 'ready')";
 const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
 const IS_R = "sender = 'system' AND kind = 'text' AND json_extract(meta, '$.event') = 'session.renewed'";
-const NOT_HANDOVER_TURN = "COALESCE(json_extract(CASE WHEN json_valid(m.meta) THEN m.meta END, '$.handover'), 0) != 1";
-const RECENT_PAGE = 100;
 const VENDOR_SWITCH_METHOD = "vendor_switch";
 const isVendorSwitchRow = (row: Pick<HandoverDbRow, "method">): boolean =>
   row.method === VENDOR_SWITCH_METHOD || row.method === "direct";
-
-function* recentRowsOf(db: Db, conversationId: ConversationId, upTo = Number.MAX_SAFE_INTEGER - 1): Generator<RecentMessage> {
-  let before = upTo + 1;
-  for (;;) {
-    const rows = db.all<MessageDbRow & { generation: number | null }>(
-      `SELECT m.*, s.generation AS generation FROM messages m LEFT JOIN agent_sessions s ON s.id = m.session_id
-       WHERE m.conversation_id = ? AND m.id < ? AND m.kind = 'text'
-         AND ((m.sender = 'agent' AND ${NOT_HANDOVER_TURN}) OR (m.sender = 'user' AND m.status IN ('replied', 'failed', 'stopped')))
-       ORDER BY m.id DESC LIMIT ?`,
-      conversationId,
-      before,
-      RECENT_PAGE,
-    );
-    for (const row of rows) yield { id: row.id, sender: row.sender === "user" ? "user" : "agent", text: agentTextOf(toMessage(row)), generation: row.generation ?? 1 };
-    if (rows.length < RECENT_PAGE) return;
-    before = rows.at(-1)!.id;
-  }
-}
-
-function generationAnchorOfDb(db: Db, conversationId: ConversationId): GenerationAnchor {
-  const row = db.get<{ text: string; cut_message_id: number | null; to_session_id: number | null }>(
-    `SELECT text, cut_message_id, to_session_id
-       FROM handovers
-      WHERE conversation_id = ?
-        AND status = 'switched'
-        AND (method IS NULL OR method NOT IN ('direct', 'vendor_switch'))
-        AND text IS NOT NULL
-        AND trim(text) != ''
-      ORDER BY id DESC
-      LIMIT 1`,
-    conversationId,
-  );
-  if (row !== undefined) {
-    return { summaryText: row.text, cutMessageId: row.cut_message_id ?? 0, startSessionId: row.to_session_id ?? 0 };
-  }
-  const msg = db.get<{ id: number; text: string; session_id: number | null }>(
-    `SELECT m.id, m.text,
-            CASE WHEN json_valid(m.meta) THEN CAST(json_extract(m.meta, '$.sessionId') AS INTEGER) END AS session_id
-       FROM messages m
-      WHERE m.conversation_id = ?
-        AND m.sender = 'system' AND m.kind = 'text'
-        AND CASE WHEN json_valid(m.meta) THEN json_extract(m.meta, '$.event') = 'session.renewed' ELSE 0 END
-        AND trim(m.text) != ''
-        AND NOT EXISTS (
-              SELECT 1 FROM handovers h
-               WHERE h.id = CASE WHEN json_valid(m.meta) THEN CAST(json_extract(m.meta, '$.handoverId') AS INTEGER) END
-                 AND h.method IN ('direct', 'vendor_switch')
-            )
-      ORDER BY m.id DESC
-      LIMIT 1`,
-    conversationId,
-  );
-  if (msg !== undefined) {
-    return { summaryText: msg.text, cutMessageId: msg.id, startSessionId: msg.session_id ?? 0 };
-  }
-  return { summaryText: null, cutMessageId: 0, startSessionId: 0 };
-}
-
-function* generationMessagesNewestFirstOf(db: Db, conversationId: ConversationId, cutMessageId: MessageId): Generator<Message> {
-  let before = Number.MAX_SAFE_INTEGER;
-  for (;;) {
-    const page = db.all<MessageDbRow>(
-      `SELECT * FROM messages
-        WHERE conversation_id = ? AND id > ? AND id < ? AND kind NOT IN ${PROCESS_MESSAGE_KINDS_SQL}
-        ORDER BY id DESC
-        LIMIT ?`,
-      conversationId,
-      cutMessageId,
-      before,
-      RECENT_PAGE,
-    );
-    for (const row of page) yield toMessage(row);
-    if (page.length < RECENT_PAGE) return;
-    before = page.at(-1)!.id;
-  }
-}
-
-function priorGenerationSessionsOfDb(
-  db: Db,
-  conversationId: ConversationId,
-  startSessionId: SessionId,
-  beforeSessionId: SessionId,
-): PriorSessionTranscriptRef[] {
-  return db
-    .all<{ id: number; vendor: string; vendor_session_id: string; cwd: string }>(
-      `SELECT s.id, s.vendor, s.vendor_session_id, s.cwd
-         FROM agent_sessions s
-        WHERE s.conversation_id = ?
-          AND s.id >= ?
-          AND s.id < ?
-          AND (
-            s.has_completed_turn = 1
-            OR EXISTS (
-              SELECT 1 FROM messages m
-               WHERE m.session_id = s.id
-                 AND (m.sender = 'agent' OR m.status IN ('replied', 'failed', 'stopped'))
-            )
-          )
-        ORDER BY s.id DESC
-        LIMIT ?`,
-      conversationId,
-      startSessionId,
-      beforeSessionId,
-      VENDOR_SWITCH_TRANSCRIPTS_MAX,
-    )
-    .map((r) => ({ id: r.id, vendor: r.vendor, vendorSessionId: r.vendor_session_id, cwd: r.cwd }));
-}
-
-function reportsAfterOf(db: Db, conversationId: ConversationId, cut: MessageId): string[] {
-  return db
-    .all<MessageDbRow>(
-      "SELECT * FROM messages WHERE conversation_id = ? AND id > ? AND kind = 'worker' AND status IS NOT NULL AND status != 'queued' ORDER BY id",
-      conversationId,
-      cut,
-    )
-    .flatMap((row) => {
-      const meta = workerEventOf(toMessage(row));
-      if (meta === null) return [];
-      const line = workerLineText({ ...meta, summary: null }).replace(/^Worker/, "");
-      const where = `${HUB_COMMAND} worker show ${meta.workerId}${meta.event === "report" ? " --report" : ""}`;
-      return [`- #${meta.workerId}${line}，全文 \`${where}\``];
-    });
-}
 
 export function createLedgerHandover(
   ctx: LedgerContext,
@@ -415,14 +276,12 @@ export function createLedgerHandover(
     const conversationId = row.conversation_id;
     const vendorSwitch = row.method === VENDOR_SWITCH_METHOD;
     const cut = row.cut_message_id ?? 0;
-    let picked: RecentMessage[] = [];
     if (!vendorSwitch) {
       const recent = pickRecent(recentRowsOf(db, conversationId), cut, HANDOVER_RECENT_CHARS);
       if (!isVendorSwitchRow(row) && row.to_vendor === null && recent.postCutChars > HANDOVER_POST_CUT_MAX_CHARS) {
         failRow(p, row, withDetail(HANDOVER_REASONS.postCut, `${recent.postCutChars} 字`));
         return false;
       }
-      picked = recent.picked;
     }
     const auto = row.auto === 1;
     const vendor = (row.to_vendor ?? old.vendor) as AgentVendor;
@@ -438,7 +297,7 @@ export function createLedgerHandover(
       model,
       effort,
     });
-    const skills = loadedSkills.carryIn(conversationId, old.generation, next);
+    const skills = loadedSkills.carryIn(conversationId, old.generation, next, { vendorSwitch });
     // A quota hit on the old session carries over to a same-vendor successor, otherwise its first message fails again; cross-vendor switches do not copy it.
     if (vendor === old.vendor && old.rateLimit !== null) {
       db.run("UPDATE agent_sessions SET rate_limit = ? WHERE id = ?", JSON.stringify(old.rateLimit), next.id);
@@ -467,27 +326,14 @@ export function createLedgerHandover(
       enqueue(p, { type: "session.send", params: { sessionId: next.id, messageId: message.id, source: message.sender === "user" || message.sender === "pm" ? "user" : "system" } });
       p.changes.push({ type: "message.updated", data: { message: getMessage(message.id)! } });
     }
-    const preamble = vendorSwitch
-      ? null
-      : sessionPreambleText({
-          auto,
-          skills,
-          handover,
-          recent: recentText(picked),
-          reports: reportsAfterOf(db, conversationId, cut),
-          transcriptPath: transcriptOf(old),
-          fromVendor: old.vendor,
-          toVendor: next.vendor,
-        });
     // Prespawn the new process so the first reply does not wait for startup.
     enqueue(p, { type: "session.start", params: { sessionId: next.id, generation: next.generation } });
     const t = now();
     db.run(
-      "UPDATE handovers SET status = 'switched', to_session_id = ?, text = ?, cut_message_id = ?, preamble = ?, skills_section = ?, switched_at = ?, updated_at = ? WHERE id = ?",
+      "UPDATE handovers SET status = 'switched', to_session_id = ?, text = ?, cut_message_id = ?, preamble = NULL, skills_section = ?, switched_at = ?, updated_at = ? WHERE id = ?",
       next.id,
       vendorSwitch ? null : handover,
       vendorSwitch ? null : row.cut_message_id,
-      preamble,
       skills,
       t,
       t,
@@ -853,15 +699,30 @@ export function createLedgerHandover(
     switchIn(p, { ...row, status: "ready", text: handover }, session, handover, metaOf(request).turnStartId);
   };
 
+  const markPreambleSeenIn = (session: AgentSessionRow) => {
+    db.run("INSERT OR IGNORE INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)", session.id, now());
+    clearConsumedHandoverBlobsIn(db, session.id);
+    const renewed = renewedOf(session);
+    if (renewed !== undefined && metaOf(renewed).seen !== true) setMeta(renewed.id, { ...metaOf(renewed), seen: true });
+  };
+
+  const hasNonCommandTurnMessage = (session: AgentSessionRow, messageIds: readonly MessageId[]): boolean => {
+    if (messageIds.length === 0) return false;
+    const rows = db.all<{ sender: string; text: string }>(
+      `SELECT sender, text FROM messages WHERE id IN (${messageIds.map(() => "?").join(", ")}) AND session_id = ?`,
+      ...messageIds,
+      session.id,
+    );
+    const prefix = isAgentVendor(session.vendor) ? vendorSpec(session.vendor).composer.commandPrefix : "/";
+    return rows.some((r) => r.sender !== "user" || commandNameOf(r.text, prefix) === null);
+  };
+
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "pm" || session.conversationId === null) return;
     const conversationId = session.conversationId;
     if (event.type === "message.processing") {
-      if (event.preamble === true && session.generation > 1) {
-        db.run("INSERT OR IGNORE INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)", session.id, now());
-        clearConsumedHandoverBlobsIn(db, session.id);
-        const renewed = renewedOf(session);
-        if (renewed !== undefined && metaOf(renewed).seen !== true) setMeta(renewed.id, { ...metaOf(renewed), seen: true });
+      if (session.generation > 1 && (event.preamble === true || hasNonCommandTurnMessage(session, event.messageIds))) {
+        markPreambleSeenIn(session);
       }
       if (inSessionOf(conversationId) === undefined) return;
       const request = requestOf(session);
@@ -889,6 +750,15 @@ export function createLedgerHandover(
       return;
     }
     if (event.type !== "turn.ended" && event.type !== "session.exited" && event.type !== "driver.error") return;
+    if (
+      event.type === "turn.ended" &&
+      event.ok &&
+      !event.interrupted &&
+      session.generation > 1 &&
+      hasNonCommandTurnMessage(session, event.messageIds)
+    ) {
+      markPreambleSeenIn(session);
+    }
     if (!queue.has(conversationId) && activeOf(conversationId) === undefined &&
         (event.type !== "turn.ended" || session.usage.context < thresholdOf(session.vendor))) return;
     const request = inSessionOf(conversationId) === undefined ? undefined : requestOf(session);
@@ -919,7 +789,7 @@ export function createLedgerHandover(
     if (message !== null && message.sessionId === action.params.sessionId) settleInSession(p, message.conversationId);
   };
 
-  const sessionPreamble = (sessionId: SessionId): string | null => {
+  const sessionPreamble = (sessionId: SessionId, options?: SessionPreambleOptions): string | null => {
     const session = getAgentSession(db, sessionId);
     if (session === null || session.role !== "pm" || session.conversationId === null || session.generation <= 1) return null;
     if (db.get("SELECT 1 AS x FROM session_preamble_seen WHERE session_id = ?", sessionId) !== undefined) return null;
@@ -928,55 +798,18 @@ export function createLedgerHandover(
       "SELECT * FROM handovers WHERE to_session_id = ? AND status = 'switched' ORDER BY id DESC LIMIT 1",
       sessionId,
     );
-    let base: string | null;
-    if (hRow !== undefined && hRow.method === VENDOR_SWITCH_METHOD) {
-      const anchor = generationAnchorOfDb(db, session.conversationId);
-      const context = collectGenerationContext(
-        generationMessagesNewestFirstOf(db, session.conversationId, anchor.cutMessageId),
-        { targetSessionId: session.id },
-      );
-      const priorSessions = priorGenerationSessionsOfDb(db, session.conversationId, anchor.startSessionId, session.id);
-      const fromSession = getAgentSession(db, hRow.from_session_id);
-      base = buildVendorSwitchPreamble({
-        fromVendor: fromSession?.vendor ?? session.vendor,
-        toVendor: session.vendor,
-        anchor,
-        context,
-        skills: hRow.skills_section,
-        transcriptSummary: describeGenerationTranscripts(priorSessions, findTranscript),
-      });
-    } else {
-      const row = renewedOf(session);
-      if (row === undefined || row.status !== null) return null;
-      const meta = metaOf(row);
-      if (meta.seen === true) return null;
-      if (hRow !== undefined) {
-        base = hRow.preamble;
-      } else if (meta.handoverId !== undefined) {
-        base = db.get<{ preamble: string | null }>("SELECT preamble FROM handovers WHERE id = ?", meta.handoverId)?.preamble ?? null;
-      } else {
-        const old = meta.fromSessionId === undefined ? null : getAgentSession(db, meta.fromSessionId);
-        const upTo = meta.turnStartId ?? row.id;
-        const { picked } = pickRecent(recentRowsOf(db, session.conversationId, upTo), upTo, HANDOVER_RECENT_CHARS);
-        base = sessionPreambleText({
-          auto: meta.auto === true,
-          skills: null,
-          handover: row.text,
-          recent: recentText(picked),
-          reports: [],
-          transcriptPath: old === null ? null : transcriptOf(old),
-          fromVendor: old?.vendor,
-          toVendor: session.vendor,
-        });
-      }
-    }
-    if (base === null) return null;
-    const waiting = `${base}\n\n## 在等用户的提问卡（账本实时状态）\n\n${pendingAsksSection(session.pmId === null ? [] : pendingAsksOfPm(db, session.pmId), now())}`;
-    if (session.pmId === null) return waiting;
-    const at = now();
-    const agenda = pmAgendaOf(db, session.pmId, at);
-    if (agenda.graphs.length === 0 && agenda.outside.length === 0 && agenda.userCards === 0) return waiting;
-    return `${waiting}\n\n${preambleAgendaSection(agenda, at)}`;
+    const renewedRow = hRow?.method === VENDOR_SWITCH_METHOD ? undefined : renewedOf(session);
+    return buildBudgetedSessionPreamble({
+      db,
+      session,
+      hRow,
+      renewedRow,
+      renewedMeta: renewedRow === undefined ? undefined : metaOf(renewedRow),
+      rowById: rowOf,
+      findTranscript,
+      at: now(),
+      options,
+    });
   };
 
   const waitsForHandover = (messageId: MessageId): boolean => {

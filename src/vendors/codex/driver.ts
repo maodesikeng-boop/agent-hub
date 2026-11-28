@@ -244,7 +244,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     source: MessageSource,
   ): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
-    const { notes, prefixes } = this.takeNotesPrefixes(st);
+    const { notes, prefixes } = this.takeNotesPrefixes(st, { turnBody: body });
     return { ...newBatch(messageIds, combineCodexTurnText(body.text, [...prefixes, ...body.prefixes]), notes, source), includeDeliverySuffix: true };
   }
 

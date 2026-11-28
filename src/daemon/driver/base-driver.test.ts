@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CRASH_RECOVERY_NOTE,
   EMPTY_TOKEN_USAGE,
+  HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
@@ -16,6 +17,7 @@ import {
   type DriverSendResult,
   type LaunchFiles,
   type SessionId,
+  type SessionPreambleOptions,
 } from "../../shared/index.ts";
 import {
   BaseSessionDriver,
@@ -90,7 +92,7 @@ class DummyDriver extends BaseSessionDriver<DummyProc, DummyBatch, DummyState> {
         source: taken.source,
       };
     }
-    const { notes, prefixes } = this.takeNotesPrefixes(st);
+    const { notes, prefixes } = this.takeNotesPrefixes(st, { turnBody: taken.body });
     return {
       messageIds: taken.messageIds,
       text: taken.body.text,
@@ -394,6 +396,65 @@ describe("BaseSessionDriver 公共状态机", () => {
     expect(personaRestored).toBe(true);
     expect(st.preambleTaken).toBe(false);
     expect(st.personaSeen).toBe(1);
+  });
+
+  it("takeNotesPrefixes 将本轮合并后的用户正文、其他前缀与投递后缀预留字节传给 sessionPreamble", () => {
+    const received: Array<SessionPreambleOptions | undefined> = [];
+    const { store } = makeMemoryStore({ personaRevision: 1 });
+    const driver = new DummyDriver({
+      store,
+      prepareLaunch: dummyLaunchFiles,
+      sessionPreamble: (_id, opts) => {
+        received.push(opts);
+        return "【预算内开场】";
+      },
+      personaNote: () => ({ revision: 2, note: "【性格更新】" }),
+    });
+
+    const st = driver.exposeState(1);
+    const bodyText = "最".repeat(4_000);
+    st.pending.push({ messageIds: [11], source: "user", text: bodyText, prefixes: ["【用户前缀】"], resend: false });
+
+    const batch = driver.exposeTakeBatch(1)!;
+    expect(batch.prefixes[0]).toBe("【预算内开场】");
+    expect(received).toHaveLength(1);
+    expect(received[0]?.reservedBytes).toBeGreaterThanOrEqual(
+      Buffer.byteLength(bodyText, "utf8") +
+        Buffer.byteLength("【性格更新】", "utf8") +
+        Buffer.byteLength("【用户前缀】", "utf8") +
+        HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
+    );
+  });
+
+  it("首轮 sessionPreamble 因预算不足返回 null 时仍占住首轮开场窗口并在 dropBatch 时可回退", () => {
+    let calls = 0;
+    const { store } = makeMemoryStore({ personaRevision: 1 });
+    const driver = new DummyDriver({
+      store,
+      prepareLaunch: dummyLaunchFiles,
+      sessionPreamble: () => {
+        calls += 1;
+        return calls === 1 ? null : "【不该在第 2 轮中途补发】";
+      },
+    });
+
+    const st = driver.exposeState(1);
+    st.pending.push({ messageIds: [21], source: "user", text: "超长首轮消息", prefixes: [], resend: false });
+    const batch1 = driver.exposeTakeBatch(1)!;
+    expect(batch1.prefixes).toEqual([]);
+    expect(batch1.notes.preamble).not.toBeNull();
+    expect(batch1.notes.preamble?.note).toBeNull();
+    expect(st.preambleTaken).toBe(true);
+
+    // A pipelined Turn 2 must not re-fetch sessionPreamble while Turn 1 holds the opening window.
+    st.pending.push({ messageIds: [22], source: "user", text: "短二轮", prefixes: [], resend: false });
+    const batch2 = driver.exposeTakeBatch(1)!;
+    expect(batch2.prefixes).toEqual([]);
+    expect(calls).toBe(1);
+
+    // Dropping Turn 1 (e.g. startup crash) restores preambleTaken so a retry can request it again.
+    driver.exposeDropBatch(1, batch1);
+    expect(st.preambleTaken).toBe(false);
   });
 
   it("停止与未取走批次结算：用户消息标 message.cancelled，系统消息标 message.requeued 并从 written 移除", () => {

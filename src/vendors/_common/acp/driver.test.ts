@@ -1680,3 +1680,90 @@ it.each(["deepseek", "cursor", "kimi", "opencode"] as const)("keeps the in-fligh
   expect([...h.of("turn.ended").filter((e) => e.shutdown), ...h.of("session.exited").filter((e) => e.reason === "shutdown")]
     .flatMap((e) => e.messageIds)).toContain(1);
 });
+
+it("ACP writeBatch allows a 70 KiB user message plus 50 KiB handover preamble and reserves systemPrompt bytes on cold-start first_message", async () => {
+  let seenReserved: number | undefined;
+  const userText = "u".repeat(70 * 1024);
+  const preambleText = "p".repeat(50 * 1024);
+  const h = track(
+    makeAcpHarness({
+      config: { vendor: "cursor" },
+      driverOptions: {
+        sessionPreamble: (_id, opts) => {
+          seenReserved = opts?.reservedBytes;
+          return preambleText;
+        },
+      },
+      script: { turns: [{ textChunks: ["ok"] }] },
+    }),
+  );
+  const row = h.addSession({ vendor: "cursor" });
+  const result = await h.driver.send(row.id, { messageIds: [501 as never], source: "user", text: userText });
+  expect(result.kind).toBe("written");
+  await h.waitFor("turn.ended");
+  expect(h.of("driver.error")).toEqual([]);
+  // Cold-start cursor reserves both the 70 KiB user text and ACP_FIRST_TURN_SYSTEM_PROMPT_RESERVE_BYTES.
+  expect(seenReserved).toBeGreaterThanOrEqual(70 * 1024 + 24 * 1024);
+});
+
+it("ACP writeBatch refits Turn 1 preamble instead of rejecting invalid_input when deliverySuffix exceeds 2 KiB after handshake", async () => {
+  const userText = `${"u".repeat(60 * 1024)}TAIL_USER_SURVIVES`;
+  const bigAgendaSuffix = `【清单 v1 · 04:00】\n${Array.from({ length: 20 }, (_, i) => `- 图 #${i + 1}「活跃任务图标题」${"详".repeat(60)}`).join("\n")}`;
+  expect(Buffer.byteLength(bigAgendaSuffix, "utf8")).toBeGreaterThan(2 * 1024);
+
+  const cap = 160 * 1024;
+  const h = track(
+    makeAcpHarness({
+      config: { vendor: "deepseek", session: { systemPromptInjection: "never" } },
+      driverOptions: {
+        sessionPreamble: (_id, opts) => {
+          const budget = Math.max(0, cap - (opts?.reservedBytes ?? 0));
+          return budget < 512 ? null : "p".repeat(budget);
+        },
+        deliverySuffix: () => ({ text: bigAgendaSuffix }),
+      },
+      script: { turns: [{ textChunks: ["ok"] }] },
+    }),
+  );
+  const row = h.addSession({ vendor: "deepseek" });
+  const result = await h.driver.send(row.id, { messageIds: [502 as never], source: "user", text: userText });
+  expect(result.kind).toBe("written");
+  await h.waitFor("turn.ended");
+  expect(h.of("driver.error")).toEqual([]);
+  const promptEvent = h.logs().find((e) => e.event === "session/prompt");
+  expect(promptEvent).toBeDefined();
+  const blocks = promptEvent!.blocks as string[];
+  const totalBytes = blocks.reduce((sum, text) => sum + Buffer.byteLength(text, "utf8"), 0);
+  expect(totalBytes).toBeLessThanOrEqual(cap);
+  expect(blocks.join("\n")).toContain("TAIL_USER_SURVIVES");
+});
+
+it("ACP cold-start first_message with a 32 KiB persona system prompt keeps total promptBlocks within the 160 KiB vendor ceiling", async () => {
+  const cap = 160 * 1024;
+  const bigPrompt = `${"规".repeat(5_000)}\n${"性".repeat(10_900)}`; // ~47.7 KiB wrapped
+  const userText = `${"u".repeat(60 * 1024)}COLD_TAIL_MARKER`;
+  const h = track(
+    makeAcpHarness({
+      config: { vendor: "cursor" },
+      driverOptions: {
+        sessionPreamble: (_id, opts) => {
+          const budget = Math.max(0, cap - (opts?.reservedBytes ?? 0));
+          return budget < 512 ? null : "p".repeat(budget);
+        },
+      },
+      script: { turns: [{ textChunks: ["ok"] }] },
+    }),
+  );
+  writeFileSync(h.promptFile, bigPrompt, "utf8");
+  const row = h.addSession({ vendor: "cursor" });
+  const result = await h.driver.send(row.id, { messageIds: [503 as never], source: "user", text: userText });
+  expect(result.kind).toBe("written");
+  await h.waitFor("turn.ended");
+  expect(h.of("driver.error")).toEqual([]);
+  const promptEvent = h.logs().find((e) => e.event === "session/prompt");
+  expect(promptEvent).toBeDefined();
+  const blocks = promptEvent!.blocks as string[];
+  const totalBytes = blocks.reduce((sum, text) => sum + Buffer.byteLength(text, "utf8"), 0);
+  expect(totalBytes).toBeLessThanOrEqual(cap);
+  expect(blocks.join("\n")).toContain("COLD_TAIL_MARKER");
+});

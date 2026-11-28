@@ -16,11 +16,12 @@ import {
   AUTO_RENEW_IDLE_MS,
   AUTO_RENEW_MAX_ATTEMPTS,
   AUTO_RENEW_RETRY_BACKOFF_MS,
+  DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES,
   HANDOVER_POST_CUT_MAX_CHARS,
   HANDOVER_READY_MAX_MS,
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
-  VENDOR_SWITCH_CONTEXT_MAX_CHARS,
+  VENDOR_SWITCH_CONTEXT_MAX_BYTES,
 } from "../../shared/limits.ts";
 import { AGENT_VENDORS, vendorSpec } from "../../shared/vendors.ts";
 import { enqueueAction, listActions, setActionStatus } from "../actions/index.ts";
@@ -460,10 +461,10 @@ describe("复制好了、写完了（handoverForked / handoverWritten）", () =>
     expect(messages().filter((m) => !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["早先的问题", "早先的回答", "交接：暗号是 蓝鲸"]);
 
     const row = rows()[0]!;
-    expect(row).toMatchObject({ status: "switched", to_session_id: g2!.id, text: "交接：暗号是 蓝鲸", usage: JSON.stringify(USAGE) });
+    expect(row).toMatchObject({ status: "switched", to_session_id: g2!.id, text: "交接：暗号是 蓝鲸", preamble: null, usage: JSON.stringify(USAGE) });
     const preamble = ledger.sessionPreamble(g2!.id)!;
-    // 存下来的开场说明是换代时定稿的；对话里实时的部分（在等用户的提问卡、未完结的任务图）读的时候才从账本拼在后面
-    expect(preamble).toBe(`${row.preamble}${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的卡。`);
+    // 开场说明在首轮投递时按预算动态组装，并附带账本实时的提问卡与待办
+    expect(preamble).toContain(`${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的卡。`);
     expect(preamble).toMatch(/^【系统】这是新会话/);
     for (const part of [
       "系统自动给你换了这个新会话",
@@ -604,6 +605,30 @@ describe("开场说明：只给到新会话读到为止", () => {
     db.run("UPDATE messages SET meta = ? WHERE id = ?", JSON.stringify(meta), line.id);
     const preamble = ledger.sessionPreamble(g2)!;
     expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n老交接`);
+  });
+
+  it("首轮因 reservedBytes 超预算省略开场说明后，非命令首轮一旦处理或结束即消费开场状态，第 2 轮不再中途补发或重复抄送第 1 轮", () => {
+    const firstTurnMsg = post("前期对话");
+    turn(firstSession, [firstTurnMsg], ["好的"]);
+    ledger.editPersona(pmId, { vendor: "agy" }, { kind: "user" });
+    const agySid = sessions().at(-1)!.id;
+    db.run("UPDATE handovers SET skills_section = ? WHERE to_session_id = ?", "## 技能索引", agySid);
+
+    const hugeText = `TURN1_UNIQUE_120KB_PAYLOAD_${"长".repeat(40_000)}`;
+    const turn1Id = post(hugeText);
+    const pTurn1 = ledger.sessionPreamble(agySid, { reservedBytes: 120 * 1024 });
+    expect(pTurn1).toBeNull();
+
+    // Even if message.processing arrives without preamble: true (because Turn 1 omitted preamble),
+    // processing a non-command message consumes the opening window and clears handover blobs.
+    ledger.applyDriverEvent(agySid, { type: "message.delivered", at: now, messageIds: [turn1Id] });
+    ledger.applyDriverEvent(agySid, { type: "message.processing", at: now, messageIds: [turn1Id] });
+    ledger.applyDriverEvent(agySid, { type: "agent.text", at: now, uuid: "turn1-reply", text: "TURN1_AGENT_REPLY" });
+    ledger.applyDriverEvent(agySid, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [turn1Id], durationMs: 1 });
+
+    expect(ledger.sessionPreamble(agySid, { reservedBytes: 2_100 })).toBeNull();
+    expect(db.get("SELECT 1 AS x FROM session_preamble_seen WHERE session_id = ?", agySid)).toBeDefined();
+    expect(db.get<{ skills_section: string | null }>("SELECT skills_section FROM handovers WHERE to_session_id = ?", agySid)!.skills_section).toBeNull();
   });
 });
 
@@ -1149,7 +1174,7 @@ describe("给已有项目经理换厂商", () => {
 
     // 在第二代聊了超过 HANDOVER_POST_CUT_MAX_CHARS 的原话（切换厂商不因 post_cut 作废），并收到完整八栏 Worker 汇报
     const longChat = post("长对话");
-    turn(g2, [longChat], ["甲".repeat(HANDOVER_POST_CUT_MAX_CHARS + 100)]);
+    turn(g2, [longChat], ["a".repeat(HANDOVER_POST_CUT_MAX_CHARS + 100)]);
     const fullWorkerReport = [
       "【Worker #42（重构缓存层）的汇报】",
       "",
@@ -1267,12 +1292,12 @@ describe("给已有项目经理换厂商", () => {
     expect(messages().filter((m) => systemEventOf(m)?.event === "session.renewed")).toHaveLength(0);
   });
 
-  it("超长本代窗口保底截断与 400K 自动换代切点推进：超过 VENDOR_SWITCH_CONTEXT_MAX_CHARS 安全保留最新 24 万字，后续满 400K 正常开启新代", () => {
+  it("超长本代窗口保底截断与 400K 自动换代切点推进：超过 VENDOR_SWITCH_CONTEXT_MAX_BYTES 安全保留最新尾部，后续满 400K 正常开启新代", () => {
     const { g2 } = renewNow("第一代摘要底座");
     const earlyInGen2 = post("第二代早期将被保底截掉的消息");
     turn(g2, [earlyInGen2], ["早期回复"]);
     const huge = post("超长输入");
-    const emojiFiller = "😀中".repeat(Math.ceil(VENDOR_SWITCH_CONTEXT_MAX_CHARS / 3) + 500);
+    const emojiFiller = "😀中".repeat(Math.ceil(VENDOR_SWITCH_CONTEXT_MAX_BYTES / 7) + 500);
     turn(g2, [huge], [`${emojiFiller}尾部锚点文字`]);
 
     ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
@@ -1558,7 +1583,7 @@ describe("给已有项目经理换厂商", () => {
     expect(preamble).toContain("本代新对话 0");
     expect(preamble).toContain("本代新对话 119");
     expect(preamble).not.toContain("第一代历史消息");
-    expect(preamble.length).toBeLessThanOrEqual(VENDOR_SWITCH_CONTEXT_MAX_CHARS + 4_000);
+    expect(Buffer.byteLength(preamble, "utf8")).toBeLessThanOrEqual(DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES);
 
     // 首轮 message.processing 后第 2 轮起 O(1) 返回 null
     const mNext = post("切后首轮消息");

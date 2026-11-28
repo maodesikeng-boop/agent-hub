@@ -1,6 +1,6 @@
 import { VENDOR_LIST, type AgentVendor } from "../vendors/registry.ts";
 import type { FailureKind, VendorSpec } from "../vendors/types.ts";
-import { HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
+import { DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
 
 export type { AgentVendor } from "../vendors/registry.ts";
 export type { FailureKind, FetchedQuotaSpec, VendorSpec } from "../vendors/types.ts";
@@ -289,6 +289,10 @@ export function vendorLabel(vendor: string): string {
 
 export function handoverTokenThresholdOf(vendor: string): number {
   return (isAgentVendor(vendor) ? SPECS[vendor].handover?.tokenThreshold : undefined) ?? HANDOVER_TOKEN_THRESHOLD;
+}
+
+export function handoverMaxSingleMessageBytesOf(vendor: string): number {
+  return (isAgentVendor(vendor) ? SPECS[vendor].handover?.maxSingleMessageBytes : undefined) ?? DEFAULT_HANDOVER_MAX_SINGLE_MESSAGE_BYTES;
 }
 
 export const VENDOR_AVAILABILITIES = ["available", "not_installed", "signed_out", "unknown"] as const;

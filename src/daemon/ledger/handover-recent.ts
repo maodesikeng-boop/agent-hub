@@ -35,12 +35,12 @@ export function pickRecent(rows: Iterable<RecentMessage>, cut: MessageId, limit:
   return { picked: picked.reverse(), postCutChars };
 }
 
-export function recentText(picked: readonly RecentMessage[]): string {
+export function recentEntriesNewestFirst(picked: readonly RecentMessage[]): string[] {
   const parts: string[] = [];
   picked.forEach((row, i) => {
     const prev = picked[i - 1];
     if (prev !== undefined && prev.generation !== row.generation) parts.push(generationMark(prev.generation));
     parts.push(`${row.sender === "user" ? "用户" : "你"}：${row.text}`);
   });
-  return parts.join("\n\n");
+  return parts.reverse();
 }

@@ -1,5 +1,4 @@
 import { appendDeliverySuffix } from "../../shared/pm-agenda.ts";
-import { MACOS_NESTED_SANDBOX_MESSAGE, isNestedMacOsSandboxError } from "../../shared/errors.ts";
 import { withChecklistEnv } from "../../vendors/_common/checklist.ts";
 import { vendorSpec } from "../../shared/vendors.ts";
 // Shared session state machine for vendor drivers in src/vendors/<vendor>/driver.ts.
@@ -10,6 +9,7 @@ import {
   CAPABILITY_RELAUNCH_NOTE,
   CRASH_RECOVERY_NOTE,
   DriverError,
+  HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
   KILL_WAIT_MS,
@@ -38,6 +38,7 @@ import {
   type LaunchFiles,
   type MessageId,
   type SessionId,
+  type SessionPreambleOptions,
   type TokenUsage,
   type Unsubscribe,
 } from "../../shared/index.ts";
@@ -57,6 +58,7 @@ import {
   waitForExit,
 } from "./process.ts";
 import { buildChildEnv } from "./protocol.ts";
+import { measureTurnReservedBytes } from "../ledger/handover-budget.ts";
 import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
@@ -84,6 +86,7 @@ export {
   entryParts,
   errorMessage,
   flatEntryText,
+  formatStartupExitDetail,
   launchChanged,
   takePendingBatch,
   within,
@@ -456,13 +459,40 @@ export abstract class BaseSessionDriver<
 
   protected takeNotesPrefixes(
     st: TState,
-    options?: { takePersona?: boolean; fromRowOnFirstPersonaCheck?: boolean },
+    options?: {
+      takePersona?: boolean;
+      fromRowOnFirstPersonaCheck?: boolean;
+      turnBody?: { text: string; prefixes: readonly string[] };
+      systemPrompt?: string | null;
+      includeDeliverySuffix?: boolean;
+      extraReserveBytes?: number;
+    },
   ): { notes: BatchNotes; prefixes: string[] } {
-    const preamble = this.takeSessionPreamble(st);
     const persona =
       options?.takePersona === false
         ? null
         : this.takePersonaNote(st, options?.fromRowOnFirstPersonaCheck ?? true);
+    const otherPrefixes = [
+      st.recoveryNote ? RESTART_RECOVERY_NOTE : null,
+      st.crashNote ? CRASH_RECOVERY_NOTE : null,
+      st.relaunchNote,
+      st.killedNote,
+      persona?.note ?? null,
+    ].filter((p): p is string => p !== null);
+    const preambleOptions: SessionPreambleOptions | undefined =
+      options?.turnBody === undefined || !this.opts.sessionPreamble || st.preambleTaken
+        ? undefined
+        : {
+            reservedBytes: measureTurnReservedBytes({
+              text: options.turnBody.text,
+              prefixes: [...otherPrefixes, ...options.turnBody.prefixes],
+              ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+              extraReserveBytes:
+                (options.includeDeliverySuffix !== false ? HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES : 0) +
+                (options.extraReserveBytes ?? 0),
+            }),
+          };
+    const preamble = this.takeSessionPreamble(st, preambleOptions);
     const notes: BatchNotes = {
       recovery: st.recoveryNote,
       crash: st.crashNote,
@@ -471,14 +501,7 @@ export abstract class BaseSessionDriver<
       persona,
       preamble,
     };
-    const prefixes = [
-      preamble?.note ?? null,
-      notes.recovery ? RESTART_RECOVERY_NOTE : null,
-      notes.crash ? CRASH_RECOVERY_NOTE : null,
-      notes.relaunch,
-      notes.killed,
-      persona?.note ?? null,
-    ].filter((p): p is string => p !== null);
+    const prefixes = preamble === null || preamble.note === null ? otherPrefixes : [preamble.note, ...otherPrefixes];
     st.recoveryNote = false;
     st.crashNote = false;
     st.relaunchNote = null;
@@ -505,9 +528,13 @@ export abstract class BaseSessionDriver<
     batch.notes.preamble?.restore();
   }
 
-  protected takeSessionPreamble(st: TState): PreambleTaken | null {
-    return takeSessionPreamble(this.opts.sessionPreamble, st.id, st, (error) =>
-      this.internalError(st.id, `sessionPreamble failed, writing without it: ${errorMessage(error)}`),
+  protected takeSessionPreamble(st: TState, options?: SessionPreambleOptions): PreambleTaken | null {
+    return takeSessionPreamble(
+      this.opts.sessionPreamble,
+      st.id,
+      st,
+      (error) => this.internalError(st.id, `sessionPreamble failed, writing without it: ${errorMessage(error)}`),
+      options,
     );
   }
 
@@ -649,7 +676,7 @@ export abstract class BaseSessionDriver<
   protected takeDeliverySuffix(st: TState, batch: TBatch): string {
     const messageId = batch.messageIds.at(-1);
     if (messageId === undefined) return "";
-    const suffix = this.opts.deliverySuffix?.(st.id, batch.messageIds, batch.notes.preamble?.note);
+    const suffix = this.opts.deliverySuffix?.(st.id, batch.messageIds, batch.notes.preamble?.note ?? undefined);
     if (suffix?.agenda === undefined) delete batch.agenda;
     else batch.agenda = { messageId, footer: suffix.agenda };
     return suffix?.text ?? "";
@@ -1160,29 +1187,4 @@ export abstract class BaseSessionDriver<
       throw new DriverError("session_ended", `session ${st.id} has been ended`);
     }
   }
-}
-
-export interface StartupExitDetailInput {
-  vendorLabel: string;
-  phase: string;
-  exitCode: number | null;
-  signal: string | null;
-  stderr: string;
-  errorMessage?: string;
-}
-
-/**
- * Formats a child process startup exit detail across all drivers.
- * Postcondition: returns MACOS_NESTED_SANDBOX_MESSAGE when exitCode and stderr indicate a macOS nested
- * sandbox-exec failure; otherwise returns a concise diagnostic including phase, exit status, and stderr/error detail.
- */
-export function formatStartupExitDetail(input: StartupExitDetailInput): string {
-  const stderr = input.stderr.trim();
-  const errMsg = input.errorMessage?.trim() ?? "";
-  if (isNestedMacOsSandboxError(stderr, input.exitCode) || isNestedMacOsSandboxError(errMsg, input.exitCode)) {
-    return MACOS_NESTED_SANDBOX_MESSAGE;
-  }
-  const detail = errMsg || stderr;
-  const how = input.signal ? `signal ${input.signal}` : `exit code ${input.exitCode}`;
-  return `${input.vendorLabel} exited before ${input.phase} (${how})${detail ? `: ${detail}` : ""}`;
 }

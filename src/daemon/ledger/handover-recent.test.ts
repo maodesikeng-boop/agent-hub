@@ -1,7 +1,7 @@
 // 原话截取（handover-recent.ts，docs/background-handover-design.md 第 3 节）：切点之后的全带，切点之前从新往旧取到字数上限，
 // 边界那条留后半截，跨代插一行说明；够数就不再往下取（游标停下）。
 import { describe, expect, it } from "vitest";
-import { OMITTED_MARK, generationMark, pickRecent, recentText } from "./handover-recent.ts";
+import { OMITTED_MARK, generationMark, pickRecent, recentEntriesNewestFirst } from "./handover-recent.ts";
 import type { RecentMessage } from "./handover-recent.ts";
 
 const m = (id: number, sender: "user" | "agent", text: string, generation = 1): RecentMessage => ({ id, sender, text, generation });
@@ -54,17 +54,17 @@ describe("pickRecent", () => {
   });
 });
 
-describe("recentText", () => {
-  it("每条前面标“用户：”“你：”，空一行隔开", () => {
-    expect(recentText([m(1, "user", "问"), m(2, "agent", "答")])).toBe("用户：问\n\n你：答");
+describe("recentEntriesNewestFirst", () => {
+  it("每条前面标“用户：”“你：”，按从新到旧返回", () => {
+    expect(recentEntriesNewestFirst([m(1, "user", "问"), m(2, "agent", "答")])).toEqual(["你：答", "用户：问"]);
   });
 
   it("跨代的地方插一行“（这之前是第 N 个会话）”，两代、三代都标", () => {
-    const text = recentText([m(1, "user", "一代", 1), m(2, "agent", "二代", 2), m(3, "user", "还是二代", 2), m(4, "agent", "三代", 3)]);
-    expect(text).toBe(`用户：一代\n\n${generationMark(1)}\n\n你：二代\n\n用户：还是二代\n\n${generationMark(2)}\n\n你：三代`);
+    const entries = recentEntriesNewestFirst([m(1, "user", "一代", 1), m(2, "agent", "二代", 2), m(3, "user", "还是二代", 2), m(4, "agent", "三代", 3)]);
+    expect([...entries].reverse().join("\n\n")).toBe(`用户：一代\n\n${generationMark(1)}\n\n你：二代\n\n用户：还是二代\n\n${generationMark(2)}\n\n你：三代`);
   });
 
-  it("没有：空字符串", () => {
-    expect(recentText([])).toBe("");
+  it("没有：空数组", () => {
+    expect(recentEntriesNewestFirst([])).toEqual([]);
   });
 });

@@ -30,6 +30,7 @@ export function realpathOrSelf(p: string): string {
 
 export interface AcpBatch extends BaseBatch {
   userBlocks: Array<{ type: "text"; text: string }>;
+  hasPreambleBlock?: true;
 }
 
 export interface AcpProc extends BaseProc<StartupOutcome> {

@@ -117,6 +117,7 @@ export interface VendorSpec<Id extends string = string> {
   handover?: {
     tokenThreshold?: number;
     transcriptPortable?: boolean;
+    maxSingleMessageBytes?: number;
   };
   // Names are merged across vendors, so one name must map to one action everywhere.
   tools?: { actions: Readonly<Record<string, ToolAction>> };

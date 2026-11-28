@@ -1,15 +1,11 @@
 import { PM_AGENDA_PREAMBLE_HEADING } from "../../shared/pm-agenda.ts";
-// 换代时带上加载过的技能（loaded-skills.ts，docs/skill-carryover-design.md）：加载那一刻记进 loaded_skills；换代（普通、手动、切换厂商）
-// 时从磁盘读正文放进新会话的开场说明，按最近加载排，单个截断、合计放不下的只列名字；带过去的算新一代加载过，一代代往下传；
-// 文件没了跳过并注明；删项目经理时清掉。模型读技能按工具的返回原文认（agent.tool_result 的 outputs）。
-// 技能文件放在临时目录里，按会话的工作目录、用户目录去找（daemon/skill-files.ts）。
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import { PM_ARCHIVE_RETENTION_MS, SKILL_CARRYOVER_RECORDS_MAX, SKILL_CARRYOVER_SKILL_MAX_CHARS, SKILL_CARRYOVER_TOTAL_MAX_CHARS } from "../../shared/limits.ts";
+import { PM_ARCHIVE_RETENTION_MS, SKILL_CARRYOVER_INDEX_MAX_BYTES, SKILL_CARRYOVER_LIST_MAX, SKILL_CARRYOVER_RECORDS_MAX } from "../../shared/limits.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -234,21 +230,24 @@ describe("记：认不出、不该认的不打断这一轮", () => {
   });
 });
 
-describe("带：换代时放进新会话的开场说明", () => {
-  it("正文从磁盘读最新的、去掉 frontmatter，按最近加载排；放在说明头后面、交接前面", () => {
+describe("带：换代时放进新会话的开场说明（轻量索引）", () => {
+  it("只带路径与最新单行简介、不贴正文；用户调用排在模型加载前面；放在说明头后面、交接前面", () => {
     const older = skill("older", "旧的正文");
-    skill("newer", "新的正文");
+    const newer = skill("newer", "新的正文");
     read(firstSession, older);
     userTurn(firstSession, "/newer");
-    writeFileSync(older, "---\nname: older\n---\n\n改过的旧正文");
+    writeFileSync(older, "---\nname: older\ndescription: 改过的简介\n---\n\n改过的旧正文");
     const { preamble } = renew();
     const section = sectionOf(preamble);
-    expect(section).toContain("改过的旧正文");
-    expect(section).not.toContain("旧的正文");
-    expect(section).not.toContain("description: 测试技能");
-    expect(section.indexOf('name="newer"')).toBeLessThan(section.indexOf('name="older"'));
-    expect(section).toContain('loaded-by="user"');
-    expect(section).toContain('loaded-by="model"');
+    expect(section).toContain("改过的简介");
+    expect(section).toContain(older);
+    expect(section).toContain(newer);
+    expect(section).not.toContain("改过的旧正文");
+    expect(section).not.toContain("新的正文");
+    expect(section).not.toContain("<skill ");
+    expect(section.indexOf("`newer`")).toBeLessThan(section.indexOf("`older`"));
+    expect(section).toContain("用户调用");
+    expect(section).toContain("模型加载");
     expect(preamble.indexOf("【系统】")).toBeLessThan(preamble.indexOf(SECTION));
     expect(preamble.indexOf(SECTION)).toBeLessThan(preamble.indexOf("## 交接"));
   });
@@ -258,26 +257,30 @@ describe("带：换代时放进新会话的开场说明", () => {
     expect(renew().preamble).not.toContain(SECTION);
   });
 
-  it("单个超过上限从前往后截，末尾写全文路径", () => {
-    const path = skill("big", `${"甲".repeat(SKILL_CARRYOVER_SKILL_MAX_CHARS)}尾巴`);
+  it("单个超大正文技能只列路径与简介、整节不超过 SKILL_CARRYOVER_INDEX_MAX_BYTES", () => {
+    const path = skill("big", `${"甲".repeat(30_000)}尾巴`);
     read(firstSession, path);
     const section = sectionOf(renew().preamble);
     expect(section).not.toContain("尾巴");
-    expect(section).toContain("后面省略");
+    expect(section).not.toContain("甲甲甲");
     expect(section).toContain(path);
+    expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(SKILL_CARRYOVER_INDEX_MAX_BYTES);
   });
 
-  it("合计放不下的那个和之后的只列名字、留在旧一代；带上的改成新一代", () => {
-    const each = Math.floor(SKILL_CARRYOVER_TOTAL_MAX_CHARS / 3) + 1;
-    for (const name of ["d", "c", "b", "a"]) read(firstSession, skill(name, `${name.repeat(name === "d" ? 10 : each)}`));
-    // 最近的是 a：a、b 放得下，c 放不下，d 虽小也排在 c 后面，只列名字
+  it("超多技能按列表和字节上限收敛并注明省略数量，用户调用技能优先保留并推进代数", () => {
+    userTurn(firstSession, (() => {
+      skill("pinned", "用户调用的正文");
+      return "/pinned";
+    })());
+    for (let i = 0; i < SKILL_CARRYOVER_LIST_MAX + 5; i++) {
+      read(firstSession, skill(`m-${i}`, `正文 ${i}`));
+    }
     const section = sectionOf(renew().preamble);
-    expect(section).toContain('name="a"');
-    expect(section).toContain('name="b"');
-    expect(section).not.toContain('name="c"');
-    expect(section).not.toContain('name="d"');
-    expect(section).toMatch(/没带正文[^\n]*c（[^\n]*d（/);
-    expect(Object.fromEntries(rows().map((r) => [r.name, r.generation]))).toEqual({ a: 2, b: 2, c: 1, d: 1 });
+    expect(section).toContain("`pinned`");
+    expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(SKILL_CARRYOVER_INDEX_MAX_BYTES);
+    expect(section).toContain("已省略");
+    expect(rows().find((r) => r.name === "pinned")?.generation).toBe(2);
+    expect(rows().find((r) => r.name === "m-0")?.generation).toBe(1);
   });
 
   it("文件没了：跳过、注明，不往下传", () => {
@@ -298,56 +301,89 @@ describe("带：换代时放进新会话的开场说明", () => {
     read(firstSession, skill("swapped", "合法的正文"));
     const outside = join(root, "outside");
     mkdirSync(join(outside, rest, ".."), { recursive: true });
-    writeFileSync(join(outside, rest), "---\nname: swapped\ndescription: x\n---\n\nOUTSIDE_SWAPPED_CONTENT\n");
+    writeFileSync(join(outside, rest), "---\nname: swapped\ndescription: OUTSIDE_SECRET_DESC\n---\n\nOUTSIDE_SWAPPED_CONTENT\n");
     rmSync(at(), { recursive: true });
     symlinkSync(outside, at());
     const section = sectionOf(renew().preamble);
     expect(section).not.toContain("OUTSIDE_SWAPPED_CONTENT");
+    expect(section).not.toContain("OUTSIDE_SECRET_DESC");
     expect(section).toContain("读不到了（文件没了或不在技能目录里）");
     expect(section).toContain("swapped");
   });
 
-  it("原路径没了、按名字在新会话的技能目录里找得到：读找到的那个", () => {
+  it("原路径没了、按名字在新会话的技能目录里找得到：索引指向新路径", () => {
     const path = skill("moved", "原来的");
-    read(firstSession, path);
+    userTurn(firstSession, "/moved");
     rmSync(path);
-    skill("moved", "挪到用户目录的", join(userHome, ".agents", "skills"));
+    const movedPath = skill("moved", "挪到用户目录的", join(userHome, ".agents", "skills"));
     const section = sectionOf(renew().preamble);
-    expect(section).toContain("挪到用户目录的");
+    expect(section).toContain(movedPath);
     expect(rows()).toMatchObject([{ name: "moved", generation: 2 }]);
   });
   it("同名的两个技能，新的那个没了、按名字找回旧的那个：开场里只放一份", () => {
-    skill("dup", "全局的", join(userHome, ".agents", "skills"));
+    const globalPath = skill("dup", "全局的", join(userHome, ".agents", "skills"));
     tool(firstSession, "Skill", { skill: "dup" });
     const project = skill("dup", "项目的");
     read(firstSession, project);
     rmSync(project);
     const section = sectionOf(renew().preamble);
-    expect(section.split('name="dup"')).toHaveLength(2);
-    expect(section).toContain("全局的");
-    expect(rows()).toMatchObject([{ name: "dup", generation: 2 }]);
+    expect(section.split("`dup`")).toHaveLength(2);
+    expect(section).toContain(globalPath);
   });
 });
 
 describe("传下去", () => {
-  it("第 1 代加载、第 2 代没再加载，第 3 代开场里还在", () => {
-    read(firstSession, skill("keep", "一直要用的规矩"));
+  it("用户调用的技能跨代保留，模型加载的技能仅跨 1 跳后衰减", () => {
+    skill("keep", "一直要用的规矩");
+    userTurn(firstSession, "/keep");
+    read(firstSession, skill("ephemeral", "只用一次的技能"));
     const g2 = renew();
-    expect(sectionOf(g2.preamble)).toContain("一直要用的规矩");
+    expect(sectionOf(g2.preamble)).toContain("`keep`");
+    expect(sectionOf(g2.preamble)).toContain("`ephemeral`");
     userTurn(g2.next, "接着干");
     const g3 = renew();
-    expect(sectionOf(g3.preamble)).toContain("一直要用的规矩");
-    expect(rows()).toMatchObject([{ name: "keep", generation: 3 }]);
+    expect(sectionOf(g3.preamble)).toContain("`keep`");
+    expect(sectionOf(g3.preamble)).not.toContain("`ephemeral`");
+    expect(rows().find((r) => r.name === "keep")).toMatchObject({ generation: 3 });
   });
 
-  it("新一代里又加载一次：只更新时间和来源，排到最前", () => {
+  it("新一代里用户又调用一次：更新来源为 user 并推进到下一代", () => {
     read(firstSession, skill("x", "x 正文"));
-    read(firstSession, skill("y", "y 正文"));
+    skill("y", "y 正文");
+    userTurn(firstSession, "/y");
     const g2 = renew();
     userTurn(g2.next, "/x");
     const section = sectionOf(renew().preamble);
-    expect(section.indexOf('name="x"')).toBeLessThan(section.indexOf('name="y"'));
+    expect(section.indexOf("`x`")).toBeLessThan(section.indexOf("`y`"));
     expect(rows().find((r) => r.name === "x")).toMatchObject({ source: "user", generation: 3 });
+  });
+
+  it("用户调用的技能在同轮或跨代被模型读取 SKILL.md 时保持 user 来源粘性，不降级且跨 4 代不丢失", () => {
+    const userSkillPath = skill("carry-user", "用户技能正文");
+    userTurn(firstSession, "/carry-user 开始");
+    // Same-turn model read (e.g. read_file vendors or model opening SKILL.md) must not downgrade source to model.
+    read(firstSession, userSkillPath);
+    for (let i = 0; i < SKILL_CARRYOVER_LIST_MAX + 5; i++) {
+      read(firstSession, skill(`noise-${i}`, `噪声 ${i}`));
+    }
+    expect(rows().find((r) => r.name === "carry-user")).toMatchObject({ source: "user", generation: 1 });
+
+    const g2 = renew();
+    expect(sectionOf(g2.preamble)).toContain("`carry-user`（用户调用");
+    // Cross-generation on-demand read following the index must also keep source='user'.
+    read(g2.next, userSkillPath);
+    userTurn(g2.next, "按索引读完继续");
+    expect(rows().find((r) => r.name === "carry-user")).toMatchObject({ source: "user", generation: 2 });
+
+    const g3 = renew();
+    expect(sectionOf(g3.preamble)).toContain("`carry-user`（用户调用");
+    userTurn(g3.next, "好");
+
+    // Generation 4 after deleting the file still reports missing carry-user (matches test/smoke/skill-carryover.ts).
+    rmSync(userSkillPath);
+    const g4 = renew();
+    expect(sectionOf(g4.preamble)).toContain("读不到了（文件没了或不在技能目录里）");
+    expect(sectionOf(g4.preamble)).toContain("carry-user");
   });
 });
 
@@ -361,25 +397,33 @@ describe("三条换代的路都带", () => {
       autoRenew: { contextTokens: 1 },
     });
     ledger = fresh;
-    read(firstSession, skill("auto", "自动换代也带"));
+    const autoPath = skill("auto", "自动换代也带");
+    read(firstSession, autoPath);
     createSessionStore(db).update(firstSession, { usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 10 } });
     userTurn(firstSession, "你好");
     const job = ledger.claimHandover()!;
     ledger.handoverForked(job.handoverId, { kind: "native", ref: { forker: "claude", handle: { forkId: "auto" } } });
     ledger.handoverWritten(job.handoverId, { text: "交接", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 } });
-    expect(sectionOf(ledger.sessionPreamble(currentSession())!)).toContain("自动换代也带");
+    const section = sectionOf(ledger.sessionPreamble(currentSession())!);
+    expect(section).toContain("`auto`");
+    expect(section).toContain(autoPath);
+    expect(section).not.toContain("自动换代也带");
   });
 
-  it("切换厂商：开场说明（本代原样回放）同样带，放在说明头后面、本代对话前面", () => {
-    read(firstSession, skill("switch", "切厂商也带"));
+  it("切换厂商：开场说明（本代原样回放）同样带索引且同代模型技能保留代数", () => {
+    const switchPath = skill("switch", "切厂商也带");
+    read(firstSession, switchPath);
     userTurn(firstSession, "你好");
     ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
     const next = currentSession();
     expect(next).not.toBe(firstSession);
     const preamble = ledger.sessionPreamble(next)!;
-    expect(sectionOf(preamble)).toContain("切厂商也带");
+    expect(sectionOf(preamble)).toContain("`switch`");
+    expect(sectionOf(preamble)).toContain(switchPath);
+    expect(sectionOf(preamble)).not.toContain("切厂商也带");
     expect(preamble.indexOf(SECTION)).toBeLessThan(preamble.indexOf("## 本代完整对话"));
-    expect(db.get<{ skills_section: string | null }>("SELECT skills_section FROM handovers ORDER BY id DESC LIMIT 1")!.skills_section).toContain("切厂商也带");
+    expect(db.get<{ skills_section: string | null }>("SELECT skills_section FROM handovers ORDER BY id DESC LIMIT 1")!.skills_section).toContain("`switch`");
+    expect(rows().find((r) => r.name === "switch")?.generation).toBe(2);
   });
 });
 
@@ -408,17 +452,19 @@ describe("和提问卡交付物、提醒卡交汇（#333、#336）", () => {
     return folder;
   }
 
-  it("上一代挂了带文件的提问卡（hub ask --file）又加载了技能：开场里技能在交接前、卡在实时提问卡一节，卡的交付物不动，技能算新一代的", async () => {
+  it("上一代挂了带文件的提问卡（hub ask --file）又加载了技能：开场里技能在交接前、卡在实时提问卡一节，卡的交付物不动，用户技能算新一代的", async () => {
     const folder = withProject();
     writeFileSync(join(folder, "plan.md"), "方案");
-    read(firstSession, skill("with-ask", "提问卡旁边的技能"));
+    const askSkillPath = skill("with-ask", "提问卡旁边的技能");
+    userTurn(firstSession, "/with-ask");
     const files = [{ label: "方案", path: join(folder, "plan.md") }];
     ledger.hubCall(firstSession, "ask", { text: "方案好了，请验收", options: ["通过", "打回"], files }, { sharedFiles: await ledger.shareHubFiles(firstSession, files) });
     const deliverables = db.all("SELECT * FROM router_item_deliverables");
     expect(deliverables).toHaveLength(1);
 
     const { next, preamble } = renew();
-    expect(sectionOf(preamble)).toContain("提问卡旁边的技能");
+    expect(sectionOf(preamble)).toContain("`with-ask`");
+    expect(sectionOf(preamble)).toContain(askSkillPath);
     const asks = preamble.indexOf("## 在等用户的提问卡");
     expect(preamble.indexOf(SECTION)).toBeLessThan(preamble.indexOf("## 交接"));
     expect(preamble.indexOf("## 交接")).toBeLessThan(asks);
@@ -430,7 +476,8 @@ describe("和提问卡交付物、提醒卡交汇（#333、#336）", () => {
 
   it("上一代对话里有厂商没登录的提醒卡又加载了技能：换代后技能带上、卡还挂在这个对话、等用户的步骤进实时任务图一节", () => {
     withProject((vendor) => (vendor === "agy" ? "signed_out" : "available"));
-    read(firstSession, skill("with-blocker", "提醒卡旁边的技能"));
+    const blockerSkillPath = skill("with-blocker", "提醒卡旁边的技能");
+    read(firstSession, blockerSkillPath);
     const graph = ledger.hubCall(firstSession, "graph.create", {
       specJson: JSON.stringify({ title: "交汇验收", steps: [{ key: "verify", title: "验收", brief: "跑一遍", vendor: "agy" }] }),
     }).data.graph;
@@ -439,7 +486,8 @@ describe("和提问卡交付物、提醒卡交汇（#333、#336）", () => {
     expect(before).toHaveLength(1);
 
     const { preamble } = renew();
-    expect(sectionOf(preamble)).toContain("提醒卡旁边的技能");
+    expect(sectionOf(preamble)).toContain("`with-blocker`");
+    expect(sectionOf(preamble)).toContain(blockerSkillPath);
     expect(cards()).toEqual(before);
     expect(db.get<{ status: string }>("SELECT status FROM user_blockers")!.status).toBe("open");
     const graphs = preamble.indexOf(PM_AGENDA_PREAMBLE_HEADING);

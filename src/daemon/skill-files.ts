@@ -3,7 +3,6 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { LRUCache } from "lru-cache";
 import type { AgentSessionRow } from "../shared/domain.ts";
 import {
-  SKILL_CARRYOVER_SKILL_MAX_CHARS,
   SKILL_CATALOG_CACHE_MAX,
   SKILL_CATALOG_MAX_SKILLS,
   SKILL_CATALOG_TTL_MS,
@@ -15,18 +14,16 @@ import { isSkillName } from "../shared/skill-names.ts";
 import { AGENT_VENDORS, isAgentVendor } from "../shared/vendors.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import type { VendorSyncContext } from "../vendors/daemon-types.ts";
+import { extractSkillDescription } from "./ledger/handover-budget.ts";
 import { productSkillsDir } from "./task-graph-skill.ts";
 
 export type SkillSession = Pick<AgentSessionRow, "id" | "vendor" | "cwd" | "addDirs">;
 
 export interface SkillFiles {
   catalog(session: SkillSession, options?: { fresh?: boolean }): SkillCatalog;
-  read(skill: KnownSkill): string | null;
 }
 
 const AGENTS_SKILLS = join(".agents", "skills");
-
-const SKILL_READ_MAX_BYTES = SKILL_CARRYOVER_SKILL_MAX_CHARS * 4;
 
 function readStart(path: string, bytes: number): string | null {
   let fd: number | null = null;
@@ -66,14 +63,6 @@ function skillFileIn(path: string, trustedRoots: ReadonlySet<string>): string | 
     const dir = dirname(real);
     if (basename(real) !== "SKILL.md" || !isSkillName(basename(dir)) || !trustedRoots.has(dirname(dir))) return null;
     return statSync(real).isFile() ? real : null;
-  } catch {
-    return null;
-  }
-}
-
-function realpathOf(path: string): string | null {
-  try {
-    return realpathSync(path);
   } catch {
     return null;
   }
@@ -147,7 +136,7 @@ export function createSkillFiles(options: { launchDir?: string; userHome: string
         const head = readStart(key, SKILL_HEAD_READ_BYTES);
         if (fileId === null || head === null) continue;
         seen.add(`${name}\0${key}`);
-        skills.push({ name, path, key, fileId, heads: skillHeads(head) });
+        skills.push({ name, path, key, fileId, heads: skillHeads(head), description: extractSkillDescription(head) });
       }
     }
     return createSkillCatalog(skills, (path) => fileIdOf(resolve(cwd, expandHome(path))));
@@ -163,9 +152,6 @@ export function createSkillFiles(options: { launchDir?: string; userHome: string
       const catalog = build(roots, session.cwd);
       cache.set(key, { stamp, catalog });
       return catalog;
-    },
-    read(skill) {
-      return realpathOf(skill.path) === skill.key ? readStart(skill.key, SKILL_READ_MAX_BYTES) : null;
     },
   };
 }

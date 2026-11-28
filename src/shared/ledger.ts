@@ -20,7 +20,7 @@ import type {
 } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
 import type { FeishuMessageOrigin } from "./feishu.ts";
-import type { DeliverySuffix, DriverEvent } from "./driver.ts";
+import type { DeliverySuffix, DriverEvent, SessionPreambleOptions } from "./driver.ts";
 import type { AnyActionRow, ReviewVerifyParams } from "./actions.ts";
 import type {
   AgentRole,
@@ -307,7 +307,7 @@ export interface Ledger extends LedgerHandoverWork {
   retryMessage(messageId: MessageId): { messageId: MessageId };
   renewSession(pmId: PmId): { handoverId: HandoverId };
   runAutoRenew(): void;
-  sessionPreamble(sessionId: SessionId): string | null;
+  sessionPreamble(sessionId: SessionId, options?: SessionPreambleOptions): string | null;
   waitsForHandover(messageId: MessageId): boolean;
 
   hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>, context?: HubCallContext): HubResult<C>;

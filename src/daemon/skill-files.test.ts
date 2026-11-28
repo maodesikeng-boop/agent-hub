@@ -223,12 +223,11 @@ describe("软链边界：软链位置 × 指向", () => {
     const s = { ...session, vendor: row.vendor ?? session.vendor };
     const skillFiles = files();
     const catalog = skillFiles.catalog(s);
-    const leaked = catalog.skills.filter((k) => skillFiles.read(k)?.includes(MARK));
     if (target === "另一个可信根") {
       expect(catalog.atPath(through)?.name).toBe("probe");
-      expect(skillFiles.read(catalog.atPath(through)!)).toContain(MARK);
+      expect(catalog.atPath(through)?.description).toBe("测试");
     } else {
-      expect(leaked.map((k) => k.key)).toEqual([]);
+      expect(catalog.skills.filter((k) => k.name === "probe")).toEqual([]);
       expect(catalog.atPath(through)).toBeNull();
     }
   });
@@ -243,7 +242,7 @@ describe("软链边界：软链位置 × 指向", () => {
     const skillFiles = files();
     const catalog = skillFiles.catalog({ ...session, cwd: linked });
     expect(catalog.atPath(join(linked, ".agents", "skills", "anchored", "SKILL.md"))?.name).toBe("anchored");
-    expect(catalog.skills.filter((k) => skillFiles.read(k)?.includes(MARK))).toEqual([]);
+    expect(catalog.skills.map((k) => k.name)).toEqual(["anchored"]);
     expect(catalog.atPath(join(linked, "SKILL.md"))).toBeNull();
     expect(catalog.atPath(join(linked, "docs", "nested", "SKILL.md"))).toBeNull();
   });
@@ -255,14 +254,13 @@ describe("软链边界：软链位置 × 指向", () => {
     expect(catalog.named("pi-env")?.path).toBe(join(piDir, "skills", "pi-env", "SKILL.md"));
   });
 
-  it("建完名单后整个技能目录掉包成指到外面的软链：换代现枚举不收，旧的那个也不读", () => {
+  it("建完名单后整个技能目录掉包成指到外面的软链：换代现枚举不收", () => {
     skill(project(), "swapped");
     const skillFiles = files();
-    const before = skillFiles.catalog(session).named("swapped")!;
+    expect(skillFiles.catalog(session).named("swapped")?.name).toBe("swapped");
     rmSync(project(), { recursive: true });
     symlinkSync(plant(join(root, "outside", "swapped-root"), "swapped/SKILL.md"), project());
     expect(skillFiles.catalog(session, { fresh: true }).named("swapped")).toBeNull();
-    expect(skillFiles.read(before)).toBeNull();
   });
 });
 
@@ -277,7 +275,7 @@ describe("atPath：工具参数里的路径", () => {
 });
 
 describe("atPath：硬链也认（agy 的任务图手册硬链进 agy-rules/.agents/skills，agy 不跟软链）", () => {
-  it("硬链到名单里的文件：认；读正文还是读名单里的路径", () => {
+  it("硬链到名单里的文件：认；名单里保留启动目录路径", () => {
     const product = skill(join(launchDir, "7", "skills"), "fusa-task-graph");
     const rules = join(launchDir, "7", "agy-rules", ".agents", "skills", "fusa-task-graph");
     mkdirSync(rules, { recursive: true });
@@ -287,24 +285,12 @@ describe("atPath：硬链也认（agy 的任务图手册硬链进 agy-rules/.age
   });
 });
 
-describe("read：换代时读正文", () => {
-  it("读名单里的文件，读的是现在磁盘上的", () => {
-    const path = skill(project(), "body");
+describe("description：现枚举提取 frontmatter 单行简介", () => {
+  it("改写磁盘上的 description 后 fresh 枚举立刻反映最新简介", () => {
+    const path = skill(project(), "meta");
     const skillFiles = files();
-    const found = skillFiles.catalog(session).named("body")!;
-    writeFileSync(path, text("body", "改过的"));
-    expect(skillFiles.read(found)).toContain("改过的");
-  });
-
-  it("建完名单后被换成指到外面的软链、或删了：不读", () => {
-    const path = skill(project(), "swap");
-    const outside = join(root, "secret.txt");
-    writeFileSync(outside, "RAW_SECRET");
-    const skillFiles = files();
-    const found = skillFiles.catalog(session).named("swap")!;
-    rmSync(path);
-    expect(skillFiles.read(found)).toBeNull();
-    symlinkSync(outside, path);
-    expect(skillFiles.read(found)).toBeNull();
+    expect(skillFiles.catalog(session).named("meta")?.description).toBe("测试");
+    writeFileSync(path, "---\nname: meta\ndescription: 更新后的简介\n---\n\n正文\n");
+    expect(skillFiles.catalog(session, { fresh: true }).named("meta")?.description).toBe("更新后的简介");
   });
 });
