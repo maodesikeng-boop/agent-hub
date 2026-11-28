@@ -42,4 +42,4 @@ pnpm verify         # real daemon plus headless Chromium smoke check
 
 ## Project layout
 
-See the "Directory layout" section of `AGENTS.md` and the index in [docs/README.md](docs/README.md).
+See the "Directory layout" section of `AGENTS.md`, the full testing, review, and merge rules in [docs/review-and-merge.md](docs/review-and-merge.md), and the documentation index in [docs/README.md](docs/README.md).

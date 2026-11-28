@@ -28,13 +28,13 @@ sudo scripts/linux-sandbox-setup.sh
 
 ## 2. Install and sign in to agent CLIs
 
-You can install and authenticate any supported CLI from **Settings** under **Providers** in the web UI (including headless device-code and loopback callback paste flows), or run `scripts/provision-linux.sh` or manual commands as the daemon's OS user:
+You can install and authenticate any supported CLI from **Settings → Providers** in the web UI (including headless device-code and loopback callback paste flows), or run `scripts/provision-linux.sh` or manual commands as the daemon's OS user:
 
 | Vendor | Install on Linux | Headless sign-in |
 | --- | --- | --- |
 | Claude Code (`claude`) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` |
 | Codex (`codex`) | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `codex login --device-auth` |
-| Antigravity (`agy`) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | Run `agy` (paste auth code) or set `GEMINI_API_KEY` |
+| Antigravity (`agy`) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | Run `agy` (paste auth code), or save a Gemini key in **Settings → Providers → Antigravity → API key** (writes `"modelProvider": "gemini"` automatically). If configuring manually, set `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json` and pass `GEMINI_API_KEY` to the Bellwood daemon via `Environment=` or `EnvironmentFile=` in the `systemd --user` unit file (exporting it in a shell after the service starts will not reach the daemon) |
 | Pi (`pi`) | `curl -fsSL https://pi.dev/install.sh \| sh` | Run `pi`, then `/login` |
 | DeepSeek Harness (`dsh`) | `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` | Write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env` |
 | Cursor (`cursor-agent`) | `curl https://cursor.com/install -fsS \| bash` | `cursor-agent login` |
@@ -72,17 +72,20 @@ loginctl enable-linger "$USER"
 journalctl --user -u agent-hub -f
 ```
 
-Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
+Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. If you run more than one Bellwood instance on the same Linux host, give each service its own `AGENT_HUB_HOME` (each daemon acquires an exclusive lock at `<AGENT_HUB_HOME>/state/lock` and exits with `DaemonAlreadyRunningError` if two services share a data directory) along with distinct `AGENT_HUB_PORT` (`4317` by default) and `FUSA_MESH_PORT` (`4320` by default; `0` asks the OS for a free port) values in each unit file. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
 
 ## 4. Connect from your laptop or phone
 
-- **Account mesh (recommended)**: Run `node src/mesh/main.ts login` on the server, sign in to the same GitHub account on your Mac or Windows desktop, and confirm the six-digit verification code.
-- **Feishu**: Run `node src/feishu/main.ts connect` and scan the QR code in Feishu on your phone.
+- **Account mesh (recommended)**: Run `node src/mesh/main.ts login` on the server, sign in to the same GitHub account on your Mac or Windows desktop, and confirm the six-digit verification code. For a non-default or multi-instance service, pass that instance's `AGENT_HUB_HOME`:
+  ```sh
+  AGENT_HUB_HOME=<dir> node src/mesh/main.ts login
+  ```
+- **Feishu**: Run `node src/feishu/main.ts connect` (or `AGENT_HUB_HOME=<dir> node src/feishu/main.ts connect` for a non-default instance) and scan the QR code in Feishu on your phone. Omitting `AGENT_HUB_HOME` makes both `mesh` and `feishu` CLIs access the default `~/.agent-hub/run/admin.sock` and `~/.agent-hub/state/ui-token`.
 - **Direct SSH port forward (standalone web access)**:
   ```sh
   ssh -N -L 4317:127.0.0.1:4317 <user>@<server>
   ```
-  Use the **same local port** (`4317`) as `AGENT_HUB_PORT` on the server so `Host` and `Origin` port validation succeeds, then open the login link from `journalctl --user -u agent-hub` (token stored in `~/.agent-hub/state/ui-token`).
+  Use the **same local port** as that instance's `AGENT_HUB_PORT` (`4317` by default; for additional instances use `-L <port>:127.0.0.1:<port>`) so `Host` and `Origin` port validation succeeds, then open the login link from that instance's `systemd` unit log (`journalctl --user -u <unit>`, e.g. `agent-hub` for the default service; the token is stored in `<AGENT_HUB_HOME>/state/ui-token`, defaulting to `~/.agent-hub/state/ui-token`).
 
 ## 5. Platform differences summary
 
