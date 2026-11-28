@@ -430,6 +430,20 @@ export const HUB_CLI_REGISTRY: readonly HubCliEntry[] = [
     positionalHint: "<编号>",
   }),
   cmdEntry({
+    id: "schedule.edit",
+    category: "schedule",
+    group: "schedule",
+    action: "edit",
+    cli: "schedule edit",
+    summary: "原地修改定时任务名称、频率或说明",
+    usage: `  ${hub} schedule edit <编号> [--name <名>] [--daily HH:MM | --every 30m|2h] [--stdin]
+                                                          原地修改已有定时任务（保持原编号、历史记录和暂停状态不变）；至少给一项要改的字段`,
+    allowedFlags: ["name", "daily", "every", "stdin"],
+    minPositionals: 1,
+    maxPositionals: 1,
+    positionalHint: "<编号>",
+  }),
+  cmdEntry({
     id: "schedule.pause",
     category: "schedule",
     group: "schedule",

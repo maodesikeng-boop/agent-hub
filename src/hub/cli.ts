@@ -4,6 +4,7 @@ import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, SELF_RELOAD_AGENT_PATH, hubPath 
 import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS } from "../shared/limits.ts";
 import { ROUTER_DISPATCH_AGENT_PATH } from "../shared/router.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
+import { validateSchedulePrompt } from "../shared/schedule.ts";
 import { taskGraphSkillBody } from "../shared/task-graph-skill.ts";
 import { UsageError, type Parsed } from "./args.ts";
 import { renderHelpIndex, renderScopedHelp, resolveHelpTarget } from "./registry.ts";
@@ -106,6 +107,11 @@ export async function runHub(io: HubIo): Promise<number> {
       return usage(parsed.textSource.kind === "stdin" ? "标准输入读到的正文是空的" : `--${parsed.textField} 的正文是空的`);
     }
     if (text.trim() !== "") body[parsed.textField] = parsed.textPrefix !== undefined ? `${parsed.textPrefix}\n${text}` : text;
+  }
+
+  if (parsed.command === "schedule.edit" && typeof body.prompt === "string") {
+    const checkedPrompt = validateSchedulePrompt(body.prompt);
+    if (!checkedPrompt.ok) return usage(checkedPrompt.error);
   }
 
   const routePath =

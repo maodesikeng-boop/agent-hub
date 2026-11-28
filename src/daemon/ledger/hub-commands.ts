@@ -26,6 +26,7 @@ import { askListIn, askShowIn } from "./pending-asks.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
+import { scheduleEditIn } from "./schedule-edit.ts";
 import { scheduleShowIn } from "./schedule-runs.ts";
 import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerPmWatches } from "./pm-watch-commands.ts";
@@ -380,18 +381,13 @@ export function createLedgerHubCommands(
         return askListIn(db, caller, now());
       case "ask.show":
         return askShowIn(db, caller, args as HubArgs<"ask.show">, now());
-      case "schedule.add":
-        return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
-      case "schedule.list":
-        return schedules.list(caller);
-      case "schedule.show":
-        return scheduleShowIn(db, caller, args as HubArgs<"schedule.show">, now());
-      case "schedule.pause":
-        return schedules.pauseIn(p, caller, args as HubArgs<"schedule.pause">);
-      case "schedule.resume":
-        return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
-      case "schedule.remove":
-        return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
+      case "schedule.add": return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
+      case "schedule.list": return schedules.list(caller);
+      case "schedule.show": return scheduleShowIn(db, caller, args as HubArgs<"schedule.show">, now());
+      case "schedule.edit": return scheduleEditIn({ db, now, assertPmNotArchived }, p, caller, args as HubArgs<"schedule.edit">);
+      case "schedule.pause": return schedules.pauseIn(p, caller, args as HubArgs<"schedule.pause">);
+      case "schedule.resume": return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
+      case "schedule.remove": return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
       case "watch.add": case "watch.list": case "watch.close": return watches.hubIn(p, caller, command, args);
       case "router.report": {
         const { files: rawFiles, ...rest } = args as HubArgs<"router.report">;

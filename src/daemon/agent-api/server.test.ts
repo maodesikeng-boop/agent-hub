@@ -68,6 +68,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "schedule.add": { name: "每日汇报", prompt: "汇报昨天的进展", daily: "09:00" },
   "schedule.list": {},
   "schedule.show": { scheduleId: 3 },
+  "schedule.edit": { scheduleId: 3, name: "升级汇报", everyMinutes: 30 },
   "schedule.pause": { scheduleId: 3 },
   "schedule.resume": { scheduleId: 3 },
   "schedule.remove": { scheduleId: 3 },
