@@ -1,6 +1,6 @@
-// Invariant: pre-upgrade rollback backups survive repeated failed migration restarts, backup count stays bounded under crash loops, and rotation only evicts old versions after a migration or rebuild finishes.
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { MAX_DB_BACKUPS } from "../../shared/limits.ts";
 
 export interface MigrationBackupAnchor {
   readonly fromVersion: number;
@@ -14,7 +14,6 @@ export type MigrationBackupPlan =
   | { readonly action: "create"; readonly replaceSameVersionBackup?: string };
 
 interface ParsedBackupEntry {
-  readonly name: string;
   readonly fullPath: string;
   readonly version: number;
   readonly timestamp: string;
@@ -34,7 +33,6 @@ function parseBackupEntry(dbFile: string, name: string): ParsedBackupEntry | nul
   const seq = match[3] === undefined ? 1 : Number(match[3]);
   if (!Number.isSafeInteger(version) || !Number.isSafeInteger(seq)) return null;
   return {
-    name,
     fullPath: join(dirname(dbFile), name),
     version,
     timestamp: match[2]!,
@@ -64,8 +62,9 @@ function validateBackupPathInDbDir(dbFile: string, candidate: string): ParsedBac
   const entry = parseBackupEntry(dbFile, basename(resolvedCandidate));
   if (entry === null) return null;
   try {
-    if (lstatSync(entry.fullPath).isSymbolicLink()) return null;
+    if (!lstatSync(entry.fullPath).isFile()) return null;
   } catch {
+    return null;
   }
   return entry;
 }
@@ -176,7 +175,7 @@ export function planMigrationBackup(
 ): MigrationBackupPlan {
   if (anchor === null) return { action: "create" };
   const entry = validateBackupPathInDbDir(dbFile, anchor.backupFile);
-  if (entry === null || !existsSync(entry.fullPath)) return { action: "create" };
+  if (entry === null || entry.version !== anchor.fromVersion) return { action: "create" };
   const matchesCommittedProgress =
     fromVersion === anchor.lastVersion ||
     (anchor.pendingVersion !== undefined && fromVersion === anchor.pendingVersion);
@@ -231,47 +230,65 @@ export function pruneSameVersionBackups(dbFile: string, version: number, keep?: 
   }
 }
 
-/**
- * Precondition: dbFile is the path to the main SQLite database file and maxBackups is a positive integer.
- * Postcondition: prunes recognized `<dbName>.bak-<version>-<timestamp>[-<n>]` files in dirname(dbFile) down to at most maxBackups files, never deleting keep or unrecognized files, and evicting older duplicate backups of the same source version before evicting older distinct versions.
- */
-export function pruneDatabaseBackups(dbFile: string, keep: string | undefined, maxBackups: number): void {
-  const dir = dirname(dbFile);
-  const backups: ParsedBackupEntry[] = [];
-  for (const name of readdirSync(dir)) {
+function listBackups(dbFile: string): ParsedBackupEntry[] {
+  return readdirSync(dirname(dbFile)).flatMap((name) => {
     const entry = parseBackupEntry(dbFile, name);
-    if (entry !== null) backups.push(entry);
+    return entry === null ? [] : [entry];
+  }).sort(compareBackupAge);
+}
+
+function backupRemovalOrder(backups: readonly ParsedBackupEntry[], keep: ReadonlySet<string>): ParsedBackupEntry[] {
+  const retainedVersions = new Set(backups.filter((entry) => keep.has(entry.fullPath)).map((entry) => entry.version));
+  const duplicates: ParsedBackupEntry[] = [];
+  const distinct: ParsedBackupEntry[] = [];
+  for (const entry of [...backups].reverse()) {
+    if (keep.has(entry.fullPath)) continue;
+    if (retainedVersions.has(entry.version)) duplicates.push(entry);
+    else distinct.push(entry);
+    retainedVersions.add(entry.version);
   }
+  return [...duplicates.reverse(), ...distinct.reverse()];
+}
+
+export function prepareBackupPublication(dbFile: string, version: number, replaceAnchored?: string): string | undefined {
+  rmSync(backupStagingPath(dbFile), { force: true });
+  const backups = listBackups(dbFile);
+  const anchor = readMigrationAnchor(dbFile);
+  const keep = new Set(anchor === null ? [] : [anchor.backupFile]);
+  const sameVersion = backups.findLast((entry) =>
+    entry.version === version && !keep.has(entry.fullPath) && validateBackupPathInDbDir(dbFile, entry.fullPath) !== null,
+  );
+  const excess = backups.length - MAX_DB_BACKUPS;
+  let replacement = sameVersion?.fullPath;
+  if (excess > 0) {
+    const olderVersions = new Set(backups
+      .filter((entry) => entry.version < version && validateBackupPathInDbDir(dbFile, entry.fullPath) !== null)
+      .map((entry) => entry.version));
+    // An interrupted publish can leave an extra unanchored snapshot alongside two historical rollbacks.
+    const retireInterrupted = olderVersions.size >= MAX_DB_BACKUPS;
+    if (!retireInterrupted && replacement !== undefined && anchor?.fromVersion !== version) keep.add(replacement);
+    const order = backupRemovalOrder(backups, keep);
+    const candidates = retireInterrupted
+      ? [...order.filter((entry) => entry.version === version), ...order.filter((entry) => entry.version !== version)]
+      : order;
+    for (const entry of candidates.slice(0, excess)) {
+      rmSync(entry.fullPath, { force: true });
+      if (entry.fullPath === replacement) replacement = undefined;
+    }
+  }
+  if (anchor !== null && anchor.backupFile === replaceAnchored && anchor.fromVersion === version) return anchor.backupFile;
+  return replacement;
+}
+
+export function pruneDatabaseBackups(dbFile: string, keep: string | undefined, maxBackups: number): void {
+  const backups = listBackups(dbFile);
   const excess = backups.length - maxBackups;
   if (excess <= 0) return;
-
-  backups.sort(compareBackupAge);
-  const keepCanonical = keep !== undefined ? canonicalFilePath(keep) : undefined;
-  const byVersion = new Map<number, ParsedBackupEntry[]>();
-  for (const entry of backups) {
-    const group = byVersion.get(entry.version);
-    if (group === undefined) byVersion.set(entry.version, [entry]);
-    else group.push(entry);
-  }
-
-  const versionSurvivors = new Set<string>();
-  for (const group of byVersion.values()) {
-    const keptInGroup = group.find((item) => keepCanonical !== undefined && canonicalFilePath(item.fullPath) === keepCanonical);
-    const survivor = keptInGroup ?? group[group.length - 1]!;
-    versionSurvivors.add(canonicalFilePath(survivor.fullPath));
-  }
-
-  const duplicates: ParsedBackupEntry[] = [];
-  const distinctOld: ParsedBackupEntry[] = [];
-  for (const entry of backups) {
-    const canonical = canonicalFilePath(entry.fullPath);
-    if (keepCanonical !== undefined && canonical === keepCanonical) continue;
-    if (versionSurvivors.has(canonical)) distinctOld.push(entry);
-    else duplicates.push(entry);
-  }
-
-  const toDelete = [...duplicates, ...distinctOld].slice(0, excess);
-  for (const entry of toDelete) {
+  const keptEntry = keep === undefined ? null : validateBackupPathInDbDir(dbFile, keep);
+  const protectedPaths = new Set(keptEntry === null ? [] : [keptEntry.fullPath]);
+  const anchor = readMigrationAnchor(dbFile);
+  if (anchor !== null) protectedPaths.add(anchor.backupFile);
+  for (const entry of backupRemovalOrder(backups, protectedPaths).slice(0, excess)) {
     try {
       rmSync(entry.fullPath, { force: true });
     } catch {

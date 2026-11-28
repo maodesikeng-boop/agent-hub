@@ -9,6 +9,7 @@ import {
   clearBackupStaging,
   clearMigrationAnchor,
   planMigrationBackup,
+  prepareBackupPublication,
   pruneDatabaseBackups,
   pruneSameVersionBackups,
   readMigrationAnchor,
@@ -139,23 +140,20 @@ export function backupDatabase(
   const file = mainDbFile(db);
   if (file === null) return undefined;
   const staging = backupStagingPath(file);
-  clearBackupStaging(file);
+  let target = prepareBackupPublication(file, from, options.replaceAnchored);
+  if (target === undefined) {
+    const base = `${file}.bak-${from}-${backupStamp(now())}`;
+    target = base;
+    for (let n = 2; existsSync(target); n++) target = `${base}-${n}`;
+  }
   try {
     db.run("VACUUM INTO ?", staging);
-  } catch (error) {
-    clearBackupStaging(file);
-    throw error;
-  }
-  // Staging holds a complete snapshot, so dropping superseded same-version copies before publishing prevents unbounded growth across repeated crashes without leaving zero backups during VACUUM INTO.
-  pruneSameVersionBackups(file, from, undefined, options.replaceAnchored);
-  let target = `${file}.bak-${from}-${backupStamp(now())}`;
-  for (let n = 2; existsSync(target); n++) target = `${file}.bak-${from}-${backupStamp(now())}-${n}`;
-  try {
     renameSync(staging, target);
   } catch (error) {
     clearBackupStaging(file);
     throw error;
   }
+  pruneSameVersionBackups(file, from, target);
   return target;
 }
 
@@ -220,6 +218,9 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
       if (backupFile !== undefined) {
         anchorFromVersion = from;
         writeMigrationAnchor(dbFile, { fromVersion: from, lastVersion: from, backupFile });
+        if (existingAnchor?.fromVersion === from && existingAnchor.backupFile !== backupFile) {
+          pruneSameVersionBackups(dbFile, from, backupFile);
+        }
       }
     }
   }

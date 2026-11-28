@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, cpSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import { readMigrationAnchor } from "./backup-rotation.ts";
@@ -223,8 +222,8 @@ describe("pre-upgrade backup preservation across repeated migration failures", (
     writeMigration(migV4, "0003_step3.sql", "CREATE TABLE step3 (id INTEGER PRIMARY KEY);");
     writeMigration(migV4, "0004_step4.sql", "CREATE TABLE step4 (id INTEGER PRIMARY KEY);");
 
-    const dbModuleUrl = pathToFileURL(join(import.meta.dirname, "db.ts")).href;
-    const migrateModuleUrl = pathToFileURL(join(import.meta.dirname, "migrate.ts")).href;
+    const dbModuleUrl = new URL("./db.ts", import.meta.url).href;
+    const migrateModuleUrl = new URL("./migrate.ts", import.meta.url).href;
     const crashScript = [
       `const { openDatabase } = await import(${JSON.stringify(dbModuleUrl)});`,
       `const { migrate } = await import(${JSON.stringify(migrateModuleUrl)});`,
@@ -339,8 +338,8 @@ describe("pre-upgrade backup preservation across repeated migration failures", (
     writeMigration(migV4, "0003_step3.sql", "CREATE TABLE step3 (id INTEGER PRIMARY KEY);");
     writeMigration(migV4, "0004_step4.sql", "CREATE TABLE step4 (id INTEGER PRIMARY KEY);");
 
-    const dbModuleUrl = pathToFileURL(join(import.meta.dirname, "db.ts")).href;
-    const migrateModuleUrl = pathToFileURL(join(import.meta.dirname, "migrate.ts")).href;
+    const dbModuleUrl = new URL("./db.ts", import.meta.url).href;
+    const migrateModuleUrl = new URL("./migrate.ts", import.meta.url).href;
     const crashScript = [
       `const { openDatabase } = await import(${JSON.stringify(dbModuleUrl)});`,
       `const { migrate } = await import(${JSON.stringify(migrateModuleUrl)});`,

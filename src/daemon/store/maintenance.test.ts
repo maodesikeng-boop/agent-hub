@@ -4,7 +4,6 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import { openDatabase } from "./db.ts";
@@ -190,8 +189,8 @@ describe("auto_vacuum 模式", () => {
     olderRaw.exec("PRAGMA user_version = 2");
     olderRaw.close();
 
-    const dbModuleUrl = pathToFileURL(join(import.meta.dirname, "db.ts")).href;
-    const maintenanceModuleUrl = pathToFileURL(join(import.meta.dirname, "maintenance.ts")).href;
+    const dbModuleUrl = new URL("./db.ts", import.meta.url).href;
+    const maintenanceModuleUrl = new URL("./maintenance.ts", import.meta.url).href;
     const crashScript = [
       `const { openDatabase } = await import(${JSON.stringify(dbModuleUrl)});`,
       `const { ensureIncrementalVacuum } = await import(${JSON.stringify(maintenanceModuleUrl)});`,
