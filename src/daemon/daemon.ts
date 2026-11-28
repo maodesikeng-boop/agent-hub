@@ -81,7 +81,7 @@ import {
 } from "./driver/index.ts";
 import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveBranchTip, resolveCommit, syncWorktreeBranch } from "./git/index.ts";
 import { createWorktreeBranchProbe } from "./git/worktree-branch.ts";
-import { createObservedQuotaStore, observeDriverQuota } from "./quota/observed-quota.ts";
+import { createObservedQuotaStore, loadPersistedSessionRateLimits, observeDriverQuota } from "./quota/observed-quota.ts";
 import { createProviderQuota } from "./quota/provider-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
@@ -381,6 +381,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const dynamicExecutablePaths = Object.fromEntries(
       AGENT_VENDORS.map((vendor) => [vendor, () => vendorRuntime.resolveExecutablePath(vendor)]),
     ) as Record<AgentVendor, () => string>;
+    const observedQuota = createObservedQuotaStore({ db });
+    observedQuota.hydrateFromRateLimits(loadPersistedSessionRateLimits(db));
     const models = createModelCatalogs({
       sources: createVendorCatalogSources(
         Object.fromEntries(
@@ -396,11 +398,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           ]),
         ) as Record<AgentVendor, VendorCatalogSourceOptions>,
       ),
+      onInputsChanged: (vendor) => observedQuota.clearVendor(vendor),
       log,
     });
     parts.models = models;
-    const quota = createProviderQuota(vendorRuntime);
-    const observedQuota = createObservedQuotaStore();
+    const quota = createProviderQuota(vendorRuntime, { onFetched: (v, res, probedAt) => observedQuota.reconcileFetched(v, res, probedAt), onScopeChanged: (v) => observedQuota.clearVendor(v) });
     parts.quota = quota;
     const providerManager = createProviderManager({
       runtime: vendorRuntime,
@@ -455,7 +457,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       runDir: paths.runDir,
       hubSock: paths.hubSock,
       log,
-      models, quota: { observed: observedQuota, get: quota.get },
+      models, quota: { observed: observedQuota, get: quota.get, getSnapshot: quota.getSnapshot },
       refreshVendor: (vendor) => models.ensureUsable(vendor),
       capabilityInventory,
       sandboxGuard,

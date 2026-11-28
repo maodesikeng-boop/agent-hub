@@ -169,6 +169,13 @@ function stampToolStep(prev: LiveSession, next: LiveSession, hadHold: boolean, n
   return holdsTool && !hasOpenTools;
 }
 
+function hasRateLimitRejection(info: RateLimitInfo | null | undefined): boolean {
+  if (info === null || info === undefined) return false;
+  if (isQuotaExhausted(info)) return true;
+  if (typeof info.windows !== "object" || info.windows === null || Array.isArray(info.windows)) return false;
+  return Object.values(info.windows).some((w) => w != null && w.status === "rejected");
+}
+
 export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: SessionId) => void, activeTurnIdOf?: (id: SessionId) => TurnId | null) {
   const { db, now, write, emitChange, enqueue, pushed } = ctx;
   const live = new Map<SessionId, LiveSession>();
@@ -284,8 +291,8 @@ export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: Session
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
     const l = liveOf(sessionId);
-    const rowExhausted = row.rateLimit !== null && isQuotaExhausted(row.rateLimit);
-    const liveExhausted = l.rateLimit !== undefined && l.rateLimit !== null && isQuotaExhausted(l.rateLimit);
+    const rowExhausted = hasRateLimitRejection(row.rateLimit);
+    const liveExhausted = l.rateLimit !== undefined && hasRateLimitRejection(l.rateLimit);
     if (!rowExhausted && !liveExhausted) return;
     const info = l.rateLimit !== undefined ? l.rateLimit : row.rateLimit;
     const cleared = info === null ? null : clearRateLimitRejection(info);

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sandboxAllowsPs } from "../../../test/sandbox-probes.ts";
+import { OBSERVED_QUOTA_FALLBACK_TTL_MS } from "../../shared/limits.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
 import type { HubPaths } from "../../shared/paths.ts";
 import {
@@ -302,6 +303,178 @@ describe("SessionStore", () => {
       const id = insertTestSession(db);
       expect(() => store.update(id, { status: "weird" as never })).toThrow();
       expect(store.get(id)?.status).toBe("idle");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves unexpired rejected windows omitted from a partial rateLimit update while honoring explicit updates and null", () => {
+    const db = openTestDb();
+    try {
+      let t = Date.parse("2026-11-25T09:00:00Z");
+      const FIVE_HOUR = Date.parse("2026-11-25T11:00:00Z") / 1000;
+      const SEVEN_DAY = Date.parse("2026-11-29T09:00:00Z") / 1000;
+      const store = createSessionStore(db, { now: () => t });
+      const id = insertTestSession(db, { createdAt: t });
+
+      store.update(id, {
+        rateLimit: {
+          status: "rejected",
+          resetsAt: SEVEN_DAY,
+          windows: {
+            five_hour: { utilization: 1, resetsAt: FIVE_HOUR, status: "rejected" },
+            seven_day: { utilization: 1, resetsAt: SEVEN_DAY, status: "rejected" },
+          },
+        },
+      });
+
+      t += 5_000;
+      const afterPartial5h = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: FIVE_HOUR,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FIVE_HOUR, status: "allowed" },
+          },
+        },
+      });
+      expect(afterPartial5h.rateLimit).toEqual({
+        status: "rejected",
+        resetsAt: SEVEN_DAY,
+        windows: {
+          five_hour: { utilization: 0, resetsAt: FIVE_HOUR, status: "allowed" },
+          seven_day: { utilization: 1, resetsAt: SEVEN_DAY, status: "rejected" },
+        },
+      });
+
+      // Explicit report for seven_day replaces the carried-over rejection.
+      t += 5_000;
+      const after7hAllowed = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: SEVEN_DAY,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FIVE_HOUR, status: "allowed" },
+            seven_day: { utilization: 0, resetsAt: SEVEN_DAY, status: "allowed" },
+          },
+        },
+      });
+      expect(after7hAllowed.rateLimit?.status).toBe("allowed");
+      expect(after7hAllowed.rateLimit?.windows.seven_day?.status).toBe("allowed");
+
+      // Expired omitted rejected windows are not carried over.
+      store.update(id, {
+        rateLimit: {
+          status: "rejected",
+          resetsAt: SEVEN_DAY,
+          windows: {
+            five_hour: { utilization: 1, resetsAt: FIVE_HOUR, status: "rejected" },
+            seven_day: { utilization: 1, resetsAt: SEVEN_DAY, status: "rejected" },
+          },
+        },
+      });
+      t = SEVEN_DAY * 1000 + 1_000;
+      const afterExpiry = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: null,
+          windows: {},
+        },
+      });
+      expect(afterExpiry.rateLimit).toEqual({ status: "allowed", resetsAt: null, windows: {} });
+
+      // Explicit null still clears rate_limit.
+      expect(store.update(id, { rateLimit: null }).rateLimit).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not leak an allowed partial update's resetsAt or extend fallback TTL for carried timestamp-less rejected windows", () => {
+    const db = openTestDb();
+    try {
+      const t0 = Date.parse("2026-11-25T09:00:00Z");
+      const FUTURE_5H = Date.parse("2026-11-25T14:00:00Z") / 1000;
+      let t = t0;
+      const store = createSessionStore(db, { now: () => t });
+      const id = insertTestSession(db, { createdAt: t0 });
+
+      store.update(id, {
+        rateLimit: {
+          status: "rejected",
+          resetsAt: null,
+          windows: {
+            five_hour: { utilization: 1, resetsAt: 0, status: "rejected" },
+            seven_day: { utilization: 1, resetsAt: 0, status: "rejected" },
+          },
+        },
+      });
+
+      // Partial allowed 5h update at t0 + 10m carries timestamp-less 7d without leaking 5h's future resetsAt.
+      t = t0 + 10 * 60_000;
+      const afterPartial = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: FUTURE_5H,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FUTURE_5H, status: "allowed" },
+          },
+        },
+      });
+      expect(afterPartial.rateLimit?.status).toBe("rejected");
+      expect(afterPartial.rateLimit?.resetsAt).toBeNull();
+      expect(afterPartial.rateLimit?.windows.seven_day).toMatchObject({
+        utilization: 1,
+        resetsAt: 0,
+        status: "rejected",
+        observedAt: t0,
+      });
+
+      // Another partial update past original 15m TTL (even though < 15m after t1) must drop the expired 7d window.
+      t = t0 + OBSERVED_QUOTA_FALLBACK_TTL_MS + 1_000;
+      const afterOriginalTtl = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: FUTURE_5H,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FUTURE_5H, status: "allowed" },
+          },
+        },
+      });
+      expect(afterOriginalTtl.rateLimit).toEqual({
+        status: "allowed",
+        resetsAt: FUTURE_5H,
+        windows: {
+          five_hour: { utilization: 0, resetsAt: FUTURE_5H, status: "allowed" },
+        },
+      });
+
+      // When prev.resetsAt belonged to an overwritten 5h window, carrying a timestamp-less 7d window must not keep 5h's resetsAt.
+      const t2 = t0 + 30 * 60_000;
+      t = t2;
+      store.update(id, {
+        rateLimit: {
+          status: "rejected",
+          resetsAt: FUTURE_5H,
+          windows: {
+            five_hour: { utilization: 1, resetsAt: FUTURE_5H, status: "rejected" },
+            seven_day: { utilization: 1, resetsAt: 0, status: "rejected" },
+          },
+        },
+      });
+      t = t2 + 60_000;
+      const after5hCleared = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: FUTURE_5H,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FUTURE_5H, status: "allowed" },
+          },
+        },
+      });
+      expect(after5hCleared.rateLimit?.status).toBe("rejected");
+      expect(after5hCleared.rateLimit?.resetsAt).toBeNull();
+      expect(after5hCleared.rateLimit?.windows.seven_day).toMatchObject({ status: "rejected", observedAt: t2 });
     } finally {
       db.close();
     }

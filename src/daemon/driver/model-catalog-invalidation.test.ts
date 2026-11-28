@@ -201,3 +201,61 @@ it.each(["empty", "failed"])("retries after a %s refresh even when the last good
   expect(query).toHaveBeenCalledTimes(3);
   expect((await catalogs.list({ vendor: "codex" }))[0]?.defaultModelId).toBe("recovered");
 });
+
+it("preserves a live catalog across probeState-only changes when the re-probe degrades or fails", async () => {
+  const source = catalogFile("codex");
+  const stateFile = join(source.cwd, ".codex/models_cache.json");
+  writeFileSync(source.file, "config-v1");
+  writeFileSync(stateFile, "cache-v1");
+  let now = 1_000_000;
+  const inputsChanged: AgentVendor[] = [];
+  const answers: Array<{ id: string; degraded: boolean } | Error> = [
+    { id: "gpt-6.2-sol", degraded: false },
+    { id: "gpt-6.1-sol", degraded: true },
+    new Error("transient timeout"),
+    { id: "gpt-6.2-astra", degraded: false },
+  ];
+  const query = vi.fn(async () => {
+    const next = answers.shift()!;
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  const catalogs = createModelCatalogs({
+    sources: {
+      codex: {
+        ...source,
+        query,
+        parse: (raw) => {
+          const r = raw as { id?: string } | null;
+          return typeof r?.id === "string" ? { ...bundledModelCatalog("codex"), source: "vendor", defaultModelId: r.id } : null;
+        },
+        isDegraded: (raw) => (raw as { degraded?: boolean } | null)?.degraded === true,
+      },
+    },
+    now: () => now,
+    onInputsChanged: (vendor) => inputsChanged.push(vendor),
+  });
+  onTestFinished(() => catalogs.close());
+
+  expect((await catalogs.list({ vendor: "codex" }))[0]?.defaultModelId).toBe("gpt-6.2-sol");
+  expect(query).toHaveBeenCalledTimes(1);
+
+  // Only probeState changes (models_cache.json rewritten by another process); degraded re-probe must preserve the live catalog.
+  writeFileSync(stateFile, "cache-v2-external-touch");
+  now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+  expect((await catalogs.list({ vendor: "codex" }))[0]?.defaultModelId).toBe("gpt-6.2-sol");
+  expect(query).toHaveBeenCalledTimes(2);
+  expect(inputsChanged).toEqual([]);
+
+  // Explicit refresh after another probeState change that fails must also preserve the live catalog.
+  writeFileSync(stateFile, "cache-v3-external-touch");
+  expect((await catalogs.list({ vendor: "codex", refresh: true }))[0]?.defaultModelId).toBe("gpt-6.2-sol");
+  expect(query).toHaveBeenCalledTimes(3);
+  expect(inputsChanged).toEqual([]);
+
+  // A subsequent live retry upgrades cleanly.
+  now += 30_000;
+  await catalogs.list({ vendor: "codex" });
+  await expect.poll(() => catalogs.current("codex")?.defaultModelId).toBe("gpt-6.2-astra");
+  expect(query).toHaveBeenCalledTimes(4);
+});

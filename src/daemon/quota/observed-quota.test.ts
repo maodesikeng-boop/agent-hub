@@ -3,7 +3,8 @@ import type { QuotaResponse } from "../../shared/api.ts";
 import { MAX_QUOTA_REASON_CHARS, OBSERVED_QUOTA_FALLBACK_TTL_MS } from "../../shared/limits.ts";
 import { AGENT_VENDORS } from "../../shared/vendors.ts";
 import { workerOpsFixture } from "../ledger/test-helpers.ts";
-import { createObservedQuotaStore, formatVendorQuotaStatus, mergeVendorQuota, observeDriverQuota, parseQuotaResetAt } from "./observed-quota.ts";
+import { createSessionStore } from "../store/session-store.ts";
+import { createObservedQuotaStore, formatVendorQuotaStatus, loadPersistedSessionRateLimits, mergeVendorQuota, observeDriverQuota, parseQuotaResetAt } from "./observed-quota.ts";
 
 const NOW = Date.parse("2026-11-25T09:00:00Z");
 const CHINA_RESET = Date.parse("2026-11-25T11:10:00Z") / 1000;
@@ -59,7 +60,7 @@ describe("bounded observed quota", () => {
     observeDriverQuota(usage, "claude", { type: "turn.ended", messageIds: [], at: NOW, ok: true, interrupted: false, durationMs: 1 });
     expect(usage.getActive("claude")).toBeNull();
     usage.observeRateLimit("claude", reject);
-    usage.observeRateLimit("claude", { ...reject, status: "allowed" });
+    usage.observeRateLimit("claude", { ...reject, status: "allowed" }, NOW + 1);
     expect(usage.getActive("claude")).toBeNull();
     usage.observeRateLimit("claude", reject);
     usage.clearVendor("claude");
@@ -119,5 +120,479 @@ describe("hub models quota inventory", () => {
     expect((await models()).text).toContain("限额已用完");
     observed.observeTurnSuccess("claude");
     expect((await models()).text).toContain("状态: 可用");
+  });
+
+  it("loads persisted session rate limits from SQLite, skips malformed rows, and hydrates unexpired limits on restart", () => {
+    const valid = JSON.stringify({ status: "rejected", resetsAt: CHINA_RESET, windows: {} });
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", valid, NOW - 10_000, f.pm.sessionId);
+    f.db.run(
+      `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, rate_limit, created_at, updated_at)
+       VALUES ('worker', 'codex', '', ?, '[]', 1, 'ended', '{bad-json', ?, ?)`,
+      f.folder, NOW - 5_000, NOW - 5_000,
+    );
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({ vendor: "claude", updatedAt: NOW - 10_000 });
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(1);
+    expect(store.getActive("claude", NOW)).toMatchObject({ vendor: "claude", resetsAt: CHINA_RESET, observedAt: NOW - 10_000 });
+  });
+
+  it("does not re-judge a session cleared by dropRateLimitRejection as exhausted after restart", () => {
+    const rejected = {
+      status: "rejected",
+      resetsAt: CHINA_RESET,
+      windows: { five_hour: { utilization: 1, resetsAt: CHINA_RESET, status: "rejected" } },
+    };
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", JSON.stringify(rejected), NOW - 10_000, f.pm.sessionId);
+    f.ledger.applyDriverEvent(f.pm.sessionId, { type: "rate_limit", info: rejected, at: NOW - 10_000 });
+    f.ledger.postUserMessage({ conversationId: f.pm.conversation.id, clientId: "clear-rl-1", text: "continue" });
+
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(0);
+    expect(store.getActive("claude", NOW)).toBeNull();
+  });
+
+  it("clears window-level rejected status in dropRateLimitRejection even when top-level status is allowed", () => {
+    const partialRejected = {
+      status: "allowed",
+      resetsAt: CHINA_RESET,
+      windows: { five_hour: { utilization: 1, resetsAt: CHINA_RESET, status: "rejected" } },
+    };
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", JSON.stringify(partialRejected), NOW - 10_000, f.pm.sessionId);
+    f.ledger.applyDriverEvent(f.pm.sessionId, { type: "rate_limit", info: partialRejected, at: NOW - 10_000 });
+    f.ledger.postUserMessage({ conversationId: f.pm.conversation.id, clientId: "clear-rl-2", text: "continue" });
+
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(0);
+    expect(store.getActive("claude", NOW)).toBeNull();
+  });
+
+  it("filters null and malformed entries inside persisted rate_limit.windows without throwing on startup", () => {
+    const dirtyWithValid = JSON.stringify({
+      status: "allowed",
+      resetsAt: null,
+      windows: {
+        five_hour: null,
+        corrupt: "bad",
+        nan_window: { utilization: "1", resetsAt: CHINA_RESET, status: "rejected" },
+        seven_day: { utilization: 1, resetsAt: CHINA_RESET, status: "rejected" },
+      },
+    });
+    const arrayWindows = JSON.stringify({
+      status: "allowed",
+      resetsAt: null,
+      windows: [null, "bad"],
+    });
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", dirtyWithValid, NOW - 10_000, f.pm.sessionId);
+    f.db.run(
+      `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, rate_limit, created_at, updated_at)
+       VALUES ('worker', 'codex', '', ?, '[]', 1, 'ended', ?, ?, ?)`,
+      f.folder, arrayWindows, NOW - 5_000, NOW - 5_000,
+    );
+
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(() => store.hydrateFromRateLimits(loaded, NOW)).not.toThrow();
+    expect(store.getActive("claude", NOW)).toMatchObject({ vendor: "claude", resetsAt: CHINA_RESET });
+    expect(store.getActive("codex", NOW)).toBeNull();
+  });
+
+  it("clears legacy dirty rate_limit with status rejected and windows null without throwing TypeError", () => {
+    const dirtyNullWindows = JSON.stringify({
+      status: "rejected",
+      resetsAt: CHINA_RESET,
+      windows: null,
+    });
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", dirtyNullWindows, NOW - 10_000, f.pm.sessionId);
+    expect(() =>
+      f.ledger.postUserMessage({ conversationId: f.pm.conversation.id, clientId: "clear-dirty-null-windows", text: "continue" }),
+    ).not.toThrow();
+    const row = f.db.get<{ rate_limit: string | null }>("SELECT rate_limit FROM agent_sessions WHERE id = ?", f.pm.sessionId);
+    expect(row?.rate_limit).toBeNull();
+  });
+
+  it("retains an active 7d rejection across restart when the same session later receives a 5h-only allowed update", () => {
+    const FIVE_HOUR_RESET = Date.parse("2026-11-25T11:00:00Z") / 1000;
+    const SEVEN_DAY_RESET = Date.parse("2026-11-29T09:00:00Z") / 1000;
+    let t = NOW;
+    const sessions = createSessionStore(f.db, { now: () => t });
+    const sessionId = Number(
+      f.db.run(
+        `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+         VALUES ('worker', 'codex', '', ?, '[]', 1, 'idle', ?, ?)`,
+        f.folder, t, t,
+      ).lastInsertRowid,
+    );
+
+    sessions.update(sessionId, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: SEVEN_DAY_RESET,
+        windows: {
+          five_hour: { utilization: 1, resetsAt: FIVE_HOUR_RESET, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" },
+        },
+      },
+    });
+
+    t += 5_000;
+    sessions.update(sessionId, {
+      rateLimit: {
+        status: "allowed",
+        resetsAt: FIVE_HOUR_RESET,
+        windows: {
+          five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" },
+        },
+      },
+    });
+
+    // Simulate daemon restart and reload from SQLite.
+    const restarted = createObservedQuotaStore({ now: () => t + 1_000, db: f.db });
+    expect(restarted.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 1_000)).toBe(1);
+    expect(restarted.getActive("codex", t + 1_000)).toMatchObject({
+      vendor: "codex",
+      resetsAt: SEVEN_DAY_RESET,
+      rejectedWindows: ["seven_day"],
+    });
+  });
+
+  it("persists confirmed upstream quota recovery so restarting with an empty probe does not resurrect cleared rejections", () => {
+    const FIVE_HOUR_RESET = Date.parse("2026-11-25T11:00:00Z") / 1000;
+    const SEVEN_DAY_RESET = Date.parse("2026-11-29T09:00:00Z") / 1000;
+    let t = NOW;
+    const sessions = createSessionStore(f.db, { now: () => t });
+
+    // Seed 6 rejected codex sessions (exceeding the rn <= 4 load window) including an unscoped rejection.
+    const sessionIds: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const id = Number(
+        f.db.run(
+          `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+           VALUES ('worker', 'codex', ?, ?, '[]', 1, 'idle', ?, ?)`,
+          `codex-reconcile-persist-${i}`, f.folder, t + i * 100, t + i * 100,
+        ).lastInsertRowid,
+      );
+      sessionIds.push(id);
+      t += 100;
+      sessions.update(id, {
+        rateLimit:
+          i === 0
+            ? { status: "rejected", resetsAt: SEVEN_DAY_RESET, windows: {} }
+            : {
+                status: "rejected",
+                resetsAt: SEVEN_DAY_RESET,
+                windows: {
+                  five_hour: { utilization: 1, resetsAt: FIVE_HOUR_RESET, status: "rejected" },
+                  seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" },
+                },
+              },
+      });
+    }
+
+    const store = createObservedQuotaStore({ now: () => t, db: f.db });
+    expect(store.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t)).toBe(1);
+    expect(store.getActive("codex", t)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Stale probe started before observation must NOT clear memory or SQLite.
+    const allAllowed: QuotaResponse = {
+      groups: [
+        {
+          vendor: "codex",
+          id: "codex",
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" },
+            seven_day: { utilization: 0, resetsAt: SEVEN_DAY_RESET, status: "allowed" },
+          },
+        },
+      ],
+    };
+    expect(store.reconcileFetched("codex", allAllowed, NOW, t + 1_000)).toBe("unchanged");
+    const afterStaleRestart = createObservedQuotaStore({ now: () => t + 1_500, db: f.db });
+    expect(afterStaleRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 1_500)).toBe(1);
+    expect(afterStaleRestart.getActive("codex", t + 1_500)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Partial probe confirming only 5h allowed clears 5h in SQLite while keeping 7d across restart.
+    const only5hAllowed: QuotaResponse = {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } } }],
+    };
+    expect(store.reconcileFetched("codex", only5hAllowed, t + 2_000, t + 2_500)).toBe("unchanged");
+    const afterPartialRestart = createObservedQuotaStore({ now: () => t + 3_000, db: f.db });
+    expect(afterPartialRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 3_000)).toBe(1);
+    expect(afterPartialRestart.getActive("codex", t + 3_000)).toMatchObject({
+      resetsAt: SEVEN_DAY_RESET,
+      rejectedWindows: ["seven_day"],
+    });
+
+    // Even if a session exits (bumping updated_at) while the recovery probe is in flight, confirmed recovery still persists cleanly.
+    const probeStartedAt = t + 4_000;
+    t += 4_500;
+    sessions.update(sessionIds[5]!, { pid: null, status: "ended" });
+    expect(store.reconcileFetched("codex", allAllowed, probeStartedAt, t + 500)).toBe("cleared");
+    expect(store.getActive("codex", t + 500)).toBeNull();
+
+    // Restart with empty startup probe must NOT resurrect the cleared rejection.
+    const restarted = createObservedQuotaStore({ now: () => t + 10_000, db: f.db });
+    expect(restarted.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 10_000)).toBe(0);
+    expect(restarted.getActive("codex", t + 10_000)).toBeNull();
+  });
+
+  it("persists clearVendor and observeTurnSuccess so credential switches or succeeding turns do not resurrect old rejections", () => {
+    const SEVEN_DAY_RESET = Date.parse("2026-11-29T09:00:00Z") / 1000;
+    let t = NOW;
+    const sessions = createSessionStore(f.db, { now: () => t });
+    sessions.update(f.pm.sessionId, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: SEVEN_DAY_RESET,
+        windows: { seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" } },
+      },
+    });
+    const store = createObservedQuotaStore({ now: () => t, db: f.db });
+    expect(store.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t)).toBe(1);
+    store.observeTurnSuccess("claude");
+    const afterSuccess = createObservedQuotaStore({ now: () => t + 1_000, db: f.db });
+    expect(afterSuccess.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 1_000)).toBe(0);
+
+    t += 2_000;
+    sessions.update(f.pm.sessionId, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: SEVEN_DAY_RESET,
+        windows: { seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" } },
+      },
+    });
+    afterSuccess.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t);
+    afterSuccess.clearVendor("claude");
+    const afterClearVendor = createObservedQuotaStore({ now: () => t + 1_000, db: f.db });
+    expect(afterClearVendor.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 1_000)).toBe(0);
+  });
+
+  it("preserves original fallback expiry across restart for carried timestamp-less rejections and does not leak allowed resetsAt", () => {
+    const FIVE_HOUR_RESET = Date.parse("2026-11-25T14:00:00Z") / 1000;
+    const t0 = NOW;
+    let t = t0;
+    const sessions = createSessionStore(f.db, { now: () => t });
+    const insertCodex = (tag: string, at: number) =>
+      Number(
+        f.db.run(
+          `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+           VALUES ('worker', 'codex', ?, ?, '[]', 1, 'idle', ?, ?)`,
+          tag, f.folder, at, at,
+        ).lastInsertRowid,
+      );
+
+    // Case 1: partial 5h allowed update at t0 + 10m carries timestamp-less 7d window.
+    const s1 = insertCodex("codex-notimestamp-carry", t0);
+    sessions.update(s1, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: null,
+        windows: {
+          five_hour: { utilization: 1, resetsAt: 0, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: 0, status: "rejected" },
+        },
+      },
+    });
+    t = t0 + 10 * 60_000;
+    sessions.update(s1, {
+      rateLimit: {
+        status: "allowed",
+        resetsAt: FIVE_HOUR_RESET,
+        windows: {
+          five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" },
+        },
+      },
+    });
+
+    // Restart before original 15m TTL keeps 7d active with resetsAt: null and original deadline t0 + 15m.
+    const beforeOriginalExpiry = t + 1_000;
+    const restartedEarly = createObservedQuotaStore({ now: () => beforeOriginalExpiry, db: f.db });
+    expect(restartedEarly.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), beforeOriginalExpiry)).toBe(1);
+    expect(restartedEarly.getActive("codex", beforeOriginalExpiry)).toMatchObject({
+      vendor: "codex",
+      resetsAt: null,
+      observedAt: t0,
+      expiresAt: t0 + OBSERVED_QUOTA_FALLBACK_TTL_MS,
+      rejectedWindows: ["seven_day"],
+    });
+
+    // Restart after original 15m TTL (still < t1 + 15m and < FIVE_HOUR_RESET) must NOT resurrect 7d.
+    const afterOriginalExpiry = t0 + OBSERVED_QUOTA_FALLBACK_TTL_MS + 1_000;
+    const restartedLate = createObservedQuotaStore({ now: () => afterOriginalExpiry, db: f.db });
+    expect(restartedLate.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
+    expect(restartedLate.getActive("codex", afterOriginalExpiry)).toBeNull();
+
+    // Case 2: non-rateLimit row update (e.g. session exit) at t0 + 10m must NOT extend fallback TTL either.
+    const s2 = insertCodex("codex-notimestamp-exit", t0);
+    t = t0;
+    sessions.update(s2, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: null,
+        windows: { seven_day: { utilization: 1, resetsAt: 0, status: "rejected" } },
+      },
+    });
+    t = t0 + 10 * 60_000;
+    sessions.update(s2, { pid: null, status: "ended" });
+    const afterExitRestart = createObservedQuotaStore({ now: () => afterOriginalExpiry, db: f.db });
+    expect(afterExitRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
+    expect(afterExitRestart.getActive("codex", afterOriginalExpiry)).toBeNull();
+
+    // Case 3: legacy SQLite row without window.observedAt still preserves prevUpdatedAt (t0) on carry-over.
+    const s3 = insertCodex("codex-legacy-row", t0);
+    f.db.run(
+      "UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify({
+        status: "rejected",
+        resetsAt: null,
+        windows: {
+          five_hour: { utilization: 1, resetsAt: 0, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: 0, status: "rejected" },
+        },
+      }),
+      t0,
+      s3,
+    );
+    t = t0 + 10 * 60_000;
+    sessions.update(s3, {
+      rateLimit: {
+        status: "allowed",
+        resetsAt: FIVE_HOUR_RESET,
+        windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } },
+      },
+    });
+    const afterLegacyRestart = createObservedQuotaStore({ now: () => afterOriginalExpiry, db: f.db });
+    expect(afterLegacyRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
+    expect(afterLegacyRestart.getActive("codex", afterOriginalExpiry)).toBeNull();
+  });
+
+  it("does not borrow a rejected 5h window's reset to revive an expired 7d rejection on restart", () => {
+    const expiry = NOW + OBSERVED_QUOTA_FALLBACK_TTL_MS;
+    let at = NOW;
+    const sessions = createSessionStore(f.db, { now: () => at });
+    sessions.update(f.pm.sessionId, { rateLimit: {
+      status: "rejected", resetsAt: null,
+      windows: { seven_day: { status: "rejected", utilization: 1, resetsAt: 0 } },
+    } });
+    at += 10 * 60_000;
+    const row = sessions.update(f.pm.sessionId, { rateLimit: {
+      status: "rejected", resetsAt: CHINA_RESET,
+      windows: { five_hour: { status: "rejected", utilization: 1, resetsAt: CHINA_RESET } },
+    } });
+    expect(row.rateLimit).toMatchObject({ resetsAt: CHINA_RESET, windows: { seven_day: { observedAt: NOW } } });
+
+    const restarted = createObservedQuotaStore({ db: f.db, now: () => at });
+    at = expiry;
+    expect(restarted.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db))).toBe(1);
+    expect(restarted.getActive("claude")).toMatchObject({ rejectedWindows: ["five_hour"], resetsAt: CHINA_RESET });
+
+    const live = createObservedQuotaStore();
+    live.observeRateLimit("claude", row.rateLimit!, NOW);
+    expect(live.getActive("claude", expiry - 1)?.rejectedWindows).toEqual(["five_hour", "seven_day"]);
+    expect(live.getActive("claude", expiry)?.rejectedWindows).toEqual(["five_hour"]);
+
+    const partial = sessions.update(f.pm.sessionId, { rateLimit: { status: "allowed", resetsAt: null, windows: {} } });
+    expect(Object.keys(partial.rateLimit!.windows)).toEqual(["five_hour"]);
+
+    const fetched: QuotaResponse = { groups: [{ vendor: "claude", id: "claude", windows: {
+      five_hour: { status: "allowed", utilization: 0, resetsAt: CHINA_RESET },
+    } }] };
+    expect(restarted.reconcileFetched("claude", fetched, at)).toBe("cleared");
+    expect(restarted.getActive("claude")).toBeNull();
+  });
+
+  it("does not restart the TTL of a windowless rejection when the session exits", () => {
+    const expiry = NOW + OBSERVED_QUOTA_FALLBACK_TTL_MS;
+    let at = NOW;
+    const sessions = createSessionStore(f.db, { now: () => at });
+    sessions.update(f.pm.sessionId, { rateLimit: { status: "rejected", resetsAt: null, windows: {} } });
+    at += 10 * 60_000;
+    const ended = sessions.update(f.pm.sessionId, { pid: null, status: "ended" });
+    expect(ended.updatedAt).toBe(at);
+
+    const persisted = loadPersistedSessionRateLimits(f.db);
+    at = expiry;
+    const restartedLate = createObservedQuotaStore({ db: f.db, now: () => at });
+    expect(restartedLate.hydrateFromRateLimits(persisted)).toBe(0);
+    expect(restartedLate.getActive("claude")).toBeNull();
+
+    at = expiry - 1;
+    const restartedEarly = createObservedQuotaStore({ db: f.db, now: () => at });
+    expect(restartedEarly.hydrateFromRateLimits(persisted)).toBe(1);
+    expect(restartedEarly.getActive("claude")).toMatchObject({ observedAt: NOW, expiresAt: expiry, resetsAt: null });
+    expect(ended.rateLimit?.observedAt).toBe(NOW);
+  });
+});
+
+describe("multi-window rate-limit preservation", () => {
+  const FIVE_HOUR_RESET = Date.parse("2026-11-25T11:00:00Z") / 1000;
+  const SEVEN_DAY_RESET = Date.parse("2026-11-29T09:00:00Z") / 1000;
+
+  it("keeps 7d rejected independently when 5h expires first, recovers first, or a probe only reports 5h allowed or empty", () => {
+    const store = createObservedQuotaStore({ now: () => NOW });
+    store.observeRateLimit("codex", {
+      status: "rejected",
+      resetsAt: SEVEN_DAY_RESET,
+      windows: {
+        five_hour: { utilization: 1, resetsAt: FIVE_HOUR_RESET, status: "rejected" },
+        seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" },
+      },
+    }, NOW);
+
+    // Empty probe must not clear 7d.
+    expect(store.reconcileFetched("codex", { groups: [] }, NOW + 1_000, NOW + 1_000)).toBe("unchanged");
+    expect(store.getActive("codex", NOW + 1_000)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Windowless allowed rate_limit must not clear specific rejected windows.
+    store.observeRateLimit("codex", { status: "allowed", resetsAt: null, windows: {} }, NOW + 2_000);
+    expect(store.getActive("codex", NOW + 2_000)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Fetched probe reporting ONLY 5h allowed (omitting 7d) must NOT clear 7d, and mergeVendorQuota must stay limited.
+    const only5hAllowed: QuotaResponse = {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } } }],
+    };
+    expect(store.reconcileFetched("codex", only5hAllowed, NOW + 3_000, NOW + 3_000)).toBe("unchanged");
+    const activeAfter5h = store.getActive("codex", NOW + 3_000);
+    expect(activeAfter5h).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+    expect(mergeVendorQuota("codex", activeAfter5h, only5hAllowed, NOW + 3_500, NOW + 3_000)).toMatchObject({ status: "limited", resetsAt: SEVEN_DAY_RESET });
+
+    // 5h allowed rate_limit event must NOT clear 7d.
+    store.observeRateLimit("codex", {
+      status: "allowed",
+      resetsAt: FIVE_HOUR_RESET,
+      windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } },
+    }, NOW + 4_000);
+    expect(store.getActive("codex", NOW + 4_000)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Even after 5h expires by wall clock, 7d stays active until SEVEN_DAY_RESET.
+    const after5hExpired = FIVE_HOUR_RESET * 1000 + 1_000;
+    expect(store.getActive("codex", after5hExpired)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Only once 7d itself is confirmed allowed does the vendor clear.
+    const sevenDayAllowed: QuotaResponse = {
+      groups: [{ vendor: "codex", id: "codex", windows: { seven_day: { utilization: 0, resetsAt: SEVEN_DAY_RESET, status: "allowed" } } }],
+    };
+    expect(store.reconcileFetched("codex", sevenDayAllowed, after5hExpired + 1_000, after5hExpired + 1_000)).toBe("cleared");
+    expect(store.getActive("codex", after5hExpired + 1_000)).toBeNull();
+  });
+
+  it("keeps 7d active when 5h expires first after reconcileFetched recorded both exhausted windows", () => {
+    const store = createObservedQuotaStore({ now: () => NOW });
+    const bothExhausted: QuotaResponse = {
+      groups: [{
+        vendor: "claude",
+        id: "claude",
+        windows: {
+          five_hour: { utilization: 1, resetsAt: FIVE_HOUR_RESET, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" },
+        },
+      }],
+    };
+    expect(store.reconcileFetched("claude", bothExhausted, NOW, NOW)).toBe("recorded");
+    const after5hExpired = FIVE_HOUR_RESET * 1000 + 1_000;
+    expect(store.getActive("claude", after5hExpired)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
   });
 });
