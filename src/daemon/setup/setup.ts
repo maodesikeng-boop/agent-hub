@@ -353,6 +353,8 @@ export interface SetupJob {
 export interface SetupRunner {
   start(job: SetupJob): boolean;
   cancel(sessionId: SessionId): void;
+  /** True while a setup command process is still active for sessionId. */
+  isRunning?(sessionId: SessionId): boolean;
   /** Shutdown kills setups without calling onDone so they rerun after restart. */
   shutdown(): Promise<void>;
 }
@@ -425,6 +427,10 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
     },
     cancel(sessionId) {
       for (const entry of running.values()) if (entry.sessionId === sessionId) entry.controller.abort();
+    },
+    isRunning(sessionId) {
+      for (const entry of running.values()) if (entry.sessionId === sessionId) return true;
+      return false;
     },
     async shutdown() {
       closed = true;

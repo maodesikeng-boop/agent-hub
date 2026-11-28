@@ -35,6 +35,7 @@ interface DriverEventDrainOptions {
   textMetaFor(sessionId: SessionId, event: OrdinaryEvent, links: LocalLink[], signal: AbortSignal): Promise<AgentTextMeta | null>;
   onOverflow(sessionId: SessionId): void;
   onSessionDrained?(sessionId: SessionId): void;
+  onQueueEmpty?(sessionId: SessionId): void;
 }
 
 const HANDOVER_TRIGGER_EVENTS = new Set<DriverEvent["type"]>([
@@ -149,6 +150,11 @@ export function createDriverEventDrain(options: DriverEventDrainOptions) {
     }
     if (queues.get(sessionId) === queue) queues.delete(sessionId);
     queue.finish();
+    try {
+      options.onQueueEmpty?.(sessionId);
+    } catch (error) {
+      console.error(`${LOG_PREFIX} driver event queue empty callback (session ${sessionId}):`, error);
+    }
     if (!lastWasTrigger) {
       try {
         options.onSessionDrained?.(sessionId);

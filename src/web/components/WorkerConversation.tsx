@@ -25,7 +25,7 @@ import { FileDropZone } from "./FileDropZone.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageList } from "./MessageList.tsx";
 import { AgentHead, CopyButton, displayText, type AgentIdentity, type MessageActions } from "./Messages.tsx";
-import { useStop } from "../useStop.ts";
+import { useStop, type StopRequestResult } from "../useStop.ts";
 import { actionStartedAt, useAgentStatusNode } from "./AgentStatus.tsx";
 
 const NO_OUTCOMES: readonly WorkerOutcome[] = [];
@@ -145,7 +145,7 @@ export const WorkerConversation = memo(function WorkerConversation({
   notices: React.ReactNode;
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
-  onStop: (conversationId: ConversationId) => Promise<void>;
+  onStop: (conversationId: ConversationId) => Promise<StopRequestResult>;
   onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;

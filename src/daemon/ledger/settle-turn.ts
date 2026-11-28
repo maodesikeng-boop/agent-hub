@@ -28,7 +28,7 @@ export function createTurnReceiptSettlement(db: Db, deps: SettlementDeps): TurnC
     const settled = turns.settle(p, session, receipt.event, previousRun, facts);
     if (settled === null) {
       if (previousRun) workers.backgroundWaits.recoverSessionIn(p, session.id);
-      if (receipt.event.messageIds.length === 0 && turns.runningTurnOf(session.id) === null) {
+      if (turns.runningTurnOf(session.id) === null) {
         messages.settleTurn(p, session);
         handover.afterDriverEvent(p, session, receipt.event);
         projectCatalog.afterDriverEvent(p, session, receipt.event);

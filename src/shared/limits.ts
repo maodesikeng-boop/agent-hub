@@ -156,6 +156,7 @@ export const SETUP_OUTPUT_TAIL_BYTES = 4 * 1024;
 export const SETUP_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 export const INTERRUPT_GRACE_MS = 5_000;
+export const INTERRUPT_POST_ACK_GRACE_MS = 30_000;
 export const START_TIMEOUT_MS = 60_000;
 export const IDLE_CLOSE_MS = 10 * 60_000;
 export const BACKGROUND_TASKS_HOLD_MAX_MS = 4 * 60 * 60_000;
