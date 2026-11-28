@@ -130,7 +130,7 @@ describe("Feishu guest security boundary (new and changed behavior)", () => {
     }
   });
 
-  it("S1: new PM Feishu chat bindings default to observer and do not allow guest wakeups", () => {
+  it("S1: new PM Feishu chat bindings default to observer with zero active guest permissions and do not allow guest wakeups", () => {
     const db = freshDb();
     const pmId = insertPm(db, "Alpha");
     const store = createFeishuStore(db);
@@ -139,6 +139,9 @@ describe("Feishu guest security boundary (new and changed behavior)", () => {
       100,
     );
     expect(created.guestTier).toBe("observer");
+    expect(
+      (["talk", "answer_card", "stop", "send_files"] as const).map((action) => feishuGuestMay(created.guestTier, action)),
+    ).toEqual([false, false, false, false]);
 
     const route = routeFeishuMessage(makeInboundMsg(), makeRoutingCtx({ guestTier: created.guestTier }));
     expect(route).toEqual({

@@ -24,16 +24,14 @@ Before implementation begins, check three criteria:
 
 ### Decisions needed
 
-Both changes alter user-visible defaults or failure behavior and require owner confirmation before implementation starts.
+#### Decision 1 (Settled): Default Feishu guest tier and existing `chat_only` groups on upgrade
 
-#### Decision 1: Default Feishu guest tier and existing `chat_only` groups on upgrade
+The user settled the default policy: `"飞书默认改为无权限，只读就行"`. New Feishu project groups default to `observer` (`只读`), granting zero active permissions (`talk`, `answer_card`, `stop`, and `send_files` are all denied) so guests cannot trigger or execute unsandboxed PM turns.
 
-New Feishu project groups will default to `observer` (`只读`) instead of `chat_only` (`仅对话`) so guests cannot wake an unsandboxed PM without explicit owner opt-in. The open choice is how to handle existing `feishu_chats` rows that currently store `guest_tier = 'chat_only'`, because earlier versions wrote `'chat_only'` automatically without recording whether the owner chose it.
+- **Settled rollout (Option A, Recommended):** Migration `0061_feishu_guest_tier_default.sql` changes the `feishu_chats.guest_tier` column default to `'observer'` and downgrades legacy auto-defaulted `'chat_only'` rows to `'observer'`, while keeping `'collaborator'` rows unchanged because `'collaborator'` required an explicit owner click. Owners who trust a specific group's members click **仅对话** on the `/群设置` card (or run `node src/feishu/main.ts policy <pmId> --guest chat_only`) after seeing the host-privilege warning.
+- **Alternative (Option B, only if Project Manager prefers preserving legacy rows):** Default only newly created groups to `'observer'` and leave existing `'chat_only'` rows unchanged. Existing groups avoid disruption, but users who already added teammates without opening `/群设置` stay silently exposed to guest-triggered host shell execution.
 
-- **Option A (Recommended): Tighten new and existing `chat_only` groups to `observer` on migration.** Migration `0061_feishu_guest_tier_default.sql` changes the column default to `'observer'` and downgrades existing `'chat_only'` rows to `'observer'`, while keeping `'collaborator'` rows unchanged because `'collaborator'` required an explicit owner click. Owners who trust a specific group's members click **仅对话** on the `/群设置` card (or run `node src/feishu/main.ts policy <pmId> --guest chat_only`) after seeing the host-privilege warning.
-- **Option B: Default only newly created groups to `observer` and leave existing `'chat_only'` groups unchanged.** Existing groups avoid disruption, but users who already added teammates to a group without opening `/群设置` remain silently exposed to guest-triggered host shell execution.
-
-Concrete example of what the owner sees in the Feishu `/群设置` card under Option A:
+Concrete example of what the owner sees in the Feishu `/群设置` card under the settled `observer` default:
 
 ```text
 群成员权限 · 访客能做什么
@@ -65,8 +63,10 @@ Concrete example of what the user and PM see under Option A when starting a non-
 ## 1. User goal
 
 > User request: "安全边界与平台降级：飞书默认「仅聊天」访客可触发以宿主本机权限运行的 PM（应用级拦截约束不了 PM 的 shell，尽管 SECURITY.md 已诚实披露）；Windows 缺 MXC 时只读 Worker 降级、无法在 OS 层强制全盘只读（write-scope.ts）。……这几个问题解决就行……以及后面说的bug都开始解决，解决完成就ok了"
+>
+> User follow-up ruling: "飞书默认改为无权限，只读就行"
 
-Harden both security boundaries so neither defaults to an unsafe or silently degraded state. Feishu project groups must default to `observer` so guests cannot trigger an unsandboxed host-privilege PM without explicit owner opt-in and risk disclosure, and Windows read-only isolation must enforce OS-level full-disk read-only through MXC or fail closed instead of silently degrading to tool-layer checks.
+Harden both security boundaries so neither defaults to an unsafe or silently degraded state. Feishu project groups must default to `observer` (zero guest execution or PM-trigger permissions, read-only passive context only) with explicit owner opt-in and risk disclosure for higher tiers, and Windows read-only isolation must enforce OS-level full-disk read-only through MXC or fail closed instead of silently degrading to tool-layer checks.
 
 ## 2. Current state and history
 
@@ -245,11 +245,11 @@ The implementation PR must delete every superseded fallback path, constant, CLI 
 
 Every quoted user sentence and settled rule maps to concrete scenarios below.
 
-#### S1. New Feishu project group defaults to `observer` and blocks guest PM wakeups (maps to user quote on Feishu default `chat_only`)
+#### S1. New Feishu project group defaults to `observer` with zero guest action permissions and blocks guest PM wakeups (maps to user quotes on Feishu default `chat_only` and "飞书默认改为无权限，只读就行")
 
 - **First:** A PM has a newly created Feishu project group with no policy overrides. A guest joins the group.
-- **Next:** The guest sends `@bot run git status` in the group chat.
-- **Expected:** The stored `guestTier` is `"observer"`. `routeFeishuMessage` returns `{ kind: "context", ... }` instead of `{ kind: "deliver", ... }`, no PM turn is started, and the guest's message stays buffered only as passive context for the owner's next turn.
+- **Next:** Check all four `FeishuGuestAction` capabilities (`talk`, `answer_card`, `stop`, `send_files`) for the group's default tier, and have the guest send `@bot run git status` in the group chat.
+- **Expected:** The stored `guestTier` is `"observer"`, all four guest actions return `false` (no execution or PM-trigger permissions, read-only only), `routeFeishuMessage` returns `{ kind: "context", ... }` instead of `{ kind: "deliver", ... }`, no PM turn is started, and the guest's message stays buffered only as passive context for the owner's next turn.
 
 #### S2. Policy card and CLI show safest tier first with explicit host-privilege warning
 
