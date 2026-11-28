@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { COMPOSER_MAX_HEIGHT_PX } from "../src/web/limits.ts";
-import type { VerifyStepContext } from "./verify-diagnostics.ts";
+import { withVerifyTimeout, type VerifyStepContext } from "./verify-diagnostics.ts";
 
 const CHAT_COMPOSER_FRAME_SELECTOR = "#chat .composer-frame";
 const CHAT_COMPOSER_SELECTOR = '#chat .composer-frame textarea[aria-label="Message"]';
@@ -156,20 +156,22 @@ export async function verifyTouchSoftWrap(
   steps?: VerifyStepContext,
 ): Promise<void> {
   const inStep = <T>(name: string, fn: () => Promise<T>): Promise<T> => (steps ? steps.step(name, fn) : fn());
-  const { coarse, bodyFontSize } = await page.evaluate(async (uiScale) => {
-    const browser = globalThis as unknown as {
-      document: { documentElement: { dataset: { uiScale: string } }; body: unknown };
-      requestAnimationFrame(callback: () => void): void;
-      matchMedia(query: string): { matches: boolean };
-      getComputedStyle(el: unknown): { fontSize: string };
-    };
-    browser.document.documentElement.dataset.uiScale = uiScale;
-    await new Promise<void>((resolve) => browser.requestAnimationFrame(() => browser.requestAnimationFrame(resolve)));
-    return {
-      coarse: browser.matchMedia("(pointer: coarse)").matches,
-      bodyFontSize: Number.parseFloat(browser.getComputedStyle(browser.document.body).fontSize),
-    };
-  }, scale);
+  const { coarse, bodyFontSize } = await inStep("settle touch scale", () =>
+    withVerifyTimeout("Waiting for two animation frames after setting the touch scale", page.evaluate(async (uiScale) => {
+      const browser = globalThis as unknown as {
+        document: { documentElement: { dataset: { uiScale: string } }; body: unknown };
+        requestAnimationFrame(callback: () => void): void;
+        matchMedia(query: string): { matches: boolean };
+        getComputedStyle(el: unknown): { fontSize: string };
+      };
+      browser.document.documentElement.dataset.uiScale = uiScale;
+      await new Promise<void>((resolve) => browser.requestAnimationFrame(() => browser.requestAnimationFrame(resolve)));
+      return {
+        coarse: browser.matchMedia("(pointer: coarse)").matches,
+        bodyFontSize: Number.parseFloat(browser.getComputedStyle(browser.document.body).fontSize),
+      };
+    }, scale)),
+  );
   assert(coarse && bodyFontSize < 16, "Composer touch check requires a coarse pointer and body text under 16px");
   const box = page.locator(CHAT_COMPOSER_SELECTOR);
   await box.fill("One short line", ACTION_TIMEOUT);

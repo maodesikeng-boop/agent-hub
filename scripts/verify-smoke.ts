@@ -8,7 +8,7 @@ import { parseArgs } from "node:util";
 import { chromium, type Browser, type Page } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
 import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
-import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
+import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
@@ -48,6 +48,17 @@ interface RunResult {
 }
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
+
+class DaemonExitError extends Error {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+
+  constructor(when: string, { code, signal }: Exit) {
+    super(`${when}（${signal ? `信号 ${signal}` : `退出码 ${code}`}）`);
+    this.code = code;
+    this.signal = signal;
+  }
+}
 
 // macOS limits Unix socket paths to 104 bytes.
 function shortTmp(): string {
@@ -114,24 +125,32 @@ interface LaunchedDaemon {
 
 async function launchDaemon(home: string, scratch: string): Promise<LaunchedDaemon> {
   const child = spawn(process.execPath, [DAEMON_MAIN], { cwd: REPO_ROOT, env: daemonEnv(home, scratch), stdio: ["ignore", "pipe", "pipe"] });
-  const exited = new Promise<Exit>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  const exited = new Promise<Exit>((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
   let out = "";
+  let loginFound = false;
   let err = "";
-  child.stdout!.setEncoding("utf8").on("data", (c: string) => (out += c));
-  child.stderr!.setEncoding("utf8").on("data", (c: string) => (err += c));
-  const login = await withTimeout(
-    "等守护进程给出登录网址",
-    new Promise<RegExpExecArray>((resolve, reject) => {
-      child.stdout!.on("data", () => {
-        const m = LOGIN_URL.exec(out);
-        if (m) resolve(m);
-      });
-      void exited.then(({ code }) => reject(new Error(`守护进程提前退出（退出码 ${code}）：${err}`)));
-    }),
-  ).catch(async (error: unknown) => {
-    child.kill("SIGKILL");
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    err = (err + chunk).slice(-VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS);
+  });
+  const ready = new Promise<RegExpExecArray>((resolve, reject) => {
+    child.on("error", reject);
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      if (loginFound) return;
+      const match = LOGIN_URL.exec(out + chunk);
+      if (match) {
+        loginFound = true;
+        out = "";
+        resolve(match);
+      } else {
+        out = (out + chunk).slice(-VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS);
+      }
+    });
+    void exited.then((exit) => reject(new DaemonExitError("守护进程给出登录网址前退出", exit)));
+  });
+  const login = await withTimeout("等守护进程给出登录网址", ready).catch(async (error: unknown) => {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await exited;
-    throw error;
+    throw error instanceof Error ? Object.assign(error, { daemonStderr: err }) : error;
   });
   const origin = `http://127.0.0.1:${login[1]}`;
   const uiToken = login[2]!;
@@ -156,7 +175,7 @@ async function fetchState(daemon: LaunchedDaemon, cookie: string): Promise<State
 async function stopDaemon(daemon: LaunchedDaemon, home: string): Promise<void> {
   requestShutdown(daemon.child, home, daemon.uiToken);
   const exit = await withTimeout("等守护进程正常关机", daemon.exited);
-  if (exit.code !== 0) throw new Error(`守护进程关机退出码 ${exit.code}（信号 ${exit.signal}）：${daemon.stderr()}`);
+  if (exit.code !== 0) throw new DaemonExitError("守护进程关机异常", exit);
   const leftovers = readLedgerFile(resolveHubPaths({ [ENV_HOME]: home }, home).childProcessesFile).filter((e) => isAlive(e.pid));
   if (leftovers.length > 0) throw new Error(`关机后还有子进程没退出：${leftovers.map((e) => `${e.pid}（${e.purpose}）`).join("、")}`);
 }
@@ -328,7 +347,7 @@ export async function runBrowserVerifications<TBrowser extends SmokeBrowserHandl
     try {
       await browser.close();
     } catch (closeError) {
-      const detail = closeError instanceof Error ? closeError.message || closeError.name : String(closeError);
+      const detail = formatVerifyError(closeError).summary;
       options.tracker.note(`Chromium browser.close failed during teardown: ${detail}`);
       if (!primaryFailed) {
         hasCloseFailed = true;
@@ -387,6 +406,7 @@ async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResul
       return digest;
     });
 
+    lastDaemon = null;
     daemon = await tracker.runPhase("同一数据目录重启", () => launchDaemon(home, scratch));
     lastDaemon = daemon;
     const restartedDaemon = daemon;

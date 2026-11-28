@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { webkit, type Page } from "playwright";
 import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
-import type { VerifyStepContext } from "./verify-diagnostics.ts";
+import { formatVerifyError, readVerifyError, withVerifyTimeout, type VerifyStepContext } from "./verify-diagnostics.ts";
 import { verifyComposerInteractions, verifyTouchSoftWrap } from "./verify-composer-interactions.ts";
 
 export interface TimelineRecord {
@@ -44,27 +44,18 @@ export const COMPOSER_CHAT_TEXTAREA_SELECTOR = '#chat .composer-frame textarea[a
 
 type TimelineMethod = "Timeline.enable" | "Timeline.start" | "Timeline.stop" | "Timeline.disable";
 
-function rewriteTimelineError(error: unknown, method: TimelineMethod, describeState?: () => string): Error {
-  const obj = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : null;
-  const rawMessage = error instanceof Error ? error.message.trim() : "";
-  const protoType = typeof obj?.type === "string" && obj.type.trim() ? obj.type.trim() : undefined;
-  const protoMethod = typeof obj?.method === "string" && obj.method.trim() ? obj.method.trim() : method;
-  const protoLogs = typeof obj?.logs === "string" && obj.logs.trim() ? obj.logs.trim() : undefined;
-  const state = describeState?.().trim();
-
-  if (error instanceof Error && rawMessage && !protoType && !protoLogs) {
-    return error;
-  }
-
+function rewriteTimelineError(error: unknown, method: TimelineMethod, state?: string): unknown {
+  const { errorType, message, protocolType, method: protocolMethod = method, logs, code, signal } = readVerifyError(error);
+  if (message && !protocolType && !logs) return error;
   const parts = [
-    `WebKit ${protoMethod} failed`,
-    protoType ? `type=${protoType}` : undefined,
-    rawMessage || undefined,
+    `WebKit ${protocolMethod} failed`,
+    protocolType ? `type=${protocolType}` : undefined,
+    message,
     state ? `state=${state}` : undefined,
-    protoLogs ? `logs=${protoLogs}` : undefined,
-  ].filter((part): part is string => Boolean(part));
-
-  return new Error(parts.join("; "), { cause: error });
+  ].filter(Boolean);
+  return Object.assign(new Error(parts.join("; "), { cause: error }), {
+    name: errorType, type: protocolType, method: protocolMethod, code, signal,
+  });
 }
 
 async function sendTimelineCommand(
@@ -74,24 +65,21 @@ async function sendTimelineCommand(
   timeoutMs: number,
   describeState?: () => string,
 ): Promise<unknown> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const state = describeState?.().trim();
-      const suffix = state ? ` (${state})` : "";
-      reject(new Error(`WebKit ${method} timed out after ${(timeoutMs / 1000).toFixed(2)}s${suffix}`));
-    }, timeoutMs);
-  });
-
-  const command = (params === undefined ? session.send(method) : session.send(method, params)).catch((error: unknown) => {
-    throw rewriteTimelineError(error, method, describeState);
-  });
-
-  try {
-    return await Promise.race([command, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const state = (): string => {
+    try {
+      return describeState?.().trim() ?? "";
+    } catch (error) {
+      return `state unavailable (${formatVerifyError(error).summary})`;
+    }
+  };
+  const command = async (): Promise<unknown> => {
+    try {
+      return await (params === undefined ? session.send(method) : session.send(method, params));
+    } catch (error) {
+      throw rewriteTimelineError(error, method, state());
+    }
+  };
+  return withVerifyTimeout(`WebKit ${method}`, command(), timeoutMs, state);
 }
 
 export async function runWithWebKitTimeline<T>(
@@ -119,7 +107,7 @@ export async function runWithWebKitTimeline<T>(
     await inStep("Timeline.enable", () => sendTimelineCommand(session, "Timeline.enable", undefined, timeoutMs, describeState));
     enabled = true;
     await inStep("Timeline.start", () =>
-      sendTimelineCommand(session, "Timeline.start", { maxCallStackDepth: 0 }, timeoutMs, describeState),
+      sendTimelineCommand(session, "Timeline.start", { maxCallStackDepth: 1 }, timeoutMs, describeState),
     );
     started = true;
     result = await run();
@@ -131,7 +119,7 @@ export async function runWithWebKitTimeline<T>(
       if (typeof session.off === "function") session.off("Timeline.eventRecorded", onEvent);
       else if (typeof session.removeListener === "function") session.removeListener("Timeline.eventRecorded", onEvent);
     } catch (detachError) {
-      const detail = detachError instanceof Error ? detachError.message || detachError.name : String(detachError);
+      const detail = formatVerifyError(detachError).summary;
       steps?.note(`WebKit Timeline listener detach failed: ${detail}`);
     }
 
@@ -144,7 +132,7 @@ export async function runWithWebKitTimeline<T>(
         try {
           await sendTimelineCommand(session, "Timeline.stop", undefined, timeoutMs, describeState);
         } catch (stopError) {
-          const detail = stopError instanceof Error ? stopError.message || stopError.name : String(stopError);
+          const detail = formatVerifyError(stopError).summary;
           steps?.note(`WebKit Timeline.stop failed during teardown: ${detail}`);
           if (!hasPrimaryError && !hasTeardownError) {
             hasTeardownError = true;
@@ -156,7 +144,7 @@ export async function runWithWebKitTimeline<T>(
         try {
           await sendTimelineCommand(session, "Timeline.disable", undefined, timeoutMs, describeState);
         } catch (disableError) {
-          const detail = disableError instanceof Error ? disableError.message || disableError.name : String(disableError);
+          const detail = formatVerifyError(disableError).summary;
           steps?.note(`WebKit Timeline.disable failed during teardown: ${detail}`);
           if (!hasPrimaryError && !hasTeardownError) {
             hasTeardownError = true;
@@ -207,7 +195,7 @@ export async function openComposerPage(
   );
   await inStep("wait networkidle", () => page.waitForLoadState("networkidle", { timeout }));
   await inStep("wait fonts and settle", () =>
-    page.evaluate(async () => {
+    withVerifyTimeout("Waiting for fonts and two animation frames", page.evaluate(async () => {
       const browser = globalThis as unknown as {
         document: { fonts: { ready: Promise<unknown> } };
         requestAnimationFrame(callback: () => void): void;
@@ -216,7 +204,7 @@ export async function openComposerPage(
       await new Promise<void>((resolve) =>
         browser.requestAnimationFrame(() => browser.requestAnimationFrame(resolve)),
       );
-    }),
+    }), timeout),
   );
 }
 
@@ -267,11 +255,11 @@ function layoutHeight(record: TimelineRecord): number {
 }
 
 async function pressAndTrace(page: Page, index: number, key: string): Promise<void> {
-  await page.evaluate((id) => {
+  await withVerifyTimeout("Marking the start of the key trace", page.evaluate((id) => {
     (globalThis as unknown as FrameClock).console.timeStamp(`composer:start:${id}`);
-  }, index);
-  await page.keyboard.press(key);
-  await page.evaluate(
+  }, index));
+  await withVerifyTimeout(`Pressing ${key}`, page.keyboard.press(key));
+  await withVerifyTimeout("Waiting for two animation frames after the keypress", page.evaluate(
     (id) =>
       new Promise<void>((resolve) => {
         const clock = globalThis as unknown as FrameClock;
@@ -281,7 +269,7 @@ async function pressAndTrace(page: Page, index: number, key: string): Promise<vo
         }));
       }),
     index,
-  );
+  ));
 }
 
 async function recordKeys(page: Page, steps?: VerifyStepContext, describeState?: () => string): Promise<string[]> {
@@ -296,13 +284,15 @@ async function recordKeys(page: Page, steps?: VerifyStepContext, describeState?:
       for (const [caseIndex, scenario] of CASES.entries()) {
         await inStep(scenario.name, async () => {
           await box.fill(scenario.draft, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-          await box.evaluate((el, at) => {
-            (el as unknown as { setSelectionRange(start: number, end: number): void }).setSelectionRange(at, at);
-          }, scenario.cursor);
-          await page.evaluate(() => new Promise<void>((resolve) => {
-            const clock = globalThis as unknown as FrameClock;
-            clock.requestAnimationFrame(() => clock.requestAnimationFrame(resolve));
-          }));
+          await inStep("settle draft", async () => {
+            await withVerifyTimeout("Positioning the draft caret", box.evaluate((el, at) => {
+              (el as unknown as { setSelectionRange(start: number, end: number): void }).setSelectionRange(at, at);
+            }, scenario.cursor));
+            await withVerifyTimeout("Waiting for two animation frames after setting the draft", page.evaluate(() => {
+              const clock = globalThis as unknown as FrameClock;
+              return new Promise<void>((resolve) => clock.requestAnimationFrame(() => clock.requestAnimationFrame(resolve)));
+            }));
+          });
           if (caseIndex === 0) {
             const size = await box.boundingBox({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
             assert(size && size.height > 0, "Cannot measure the composer row");
@@ -311,7 +301,7 @@ async function recordKeys(page: Page, steps?: VerifyStepContext, describeState?:
           let text: string = scenario.draft;
           let cursor: number = scenario.cursor;
           for (const [index, key] of KEYS.entries()) {
-            await pressAndTrace(page, caseIndex * KEYS.length + index, key);
+            await inStep(`press ${key} (${index + 1})`, () => pressAndTrace(page, caseIndex * KEYS.length + index, key));
             if (key === "Backspace") {
               text = text.slice(0, cursor - 1) + text.slice(cursor);
               cursor--;
@@ -409,7 +399,7 @@ export async function verifyComposerLayout(
     try {
       await browser.close();
     } catch (closeError) {
-      const detail = closeError instanceof Error ? closeError.message || closeError.name : String(closeError);
+      const detail = formatVerifyError(closeError).summary;
       steps?.note(`WebKit browser.close failed during teardown: ${detail}`);
       if (!primaryFailed) {
         hasCloseFailed = true;

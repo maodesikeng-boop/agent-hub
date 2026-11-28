@@ -1,6 +1,9 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import type { VerifyStepContext, VerifyStepTracker } from "./verify-diagnostics.ts";
 import { runBrowserVerifications, type SmokeBrowserDeps, type SmokeBrowserHandle } from "./verify-smoke.ts";
 
@@ -113,5 +116,53 @@ describe("runBrowserVerifications", () => {
     expect(source).toContain("formatVerifyError");
     expect(source).toContain("formatVerifyRunReport");
     expect(source).toMatch(/await runBrowserVerifications\(/);
+  });
+});
+
+function runWithBrokenDaemon(mode: "missing" | "signal"): string {
+  const out = mkdtempSync(join(tmpdir(), "verify-daemon-test-"));
+  try {
+    const entry = join(import.meta.dirname, "verify-smoke.ts");
+    const harness = `
+      import childProcess from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      import { join } from "node:path";
+      const out = process.argv[3];
+      const mode = process.env.VERIFY_BROKEN_DAEMON;
+      const spawn = childProcess.spawn;
+      childProcess.spawnSync = () => ({ status: 0 });
+      childProcess.spawn = (command, _args, options) => mode === "missing"
+        ? spawn(join(out, "missing-daemon"), [], options)
+        : spawn(command, ["-e", "require('node:fs').writeSync(2, 'fatal before login'); process.kill(process.pid, 'SIGKILL');"], options);
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(harness)}`, entry, "--out", out], {
+      encoding: "utf8",
+      env: { ...process.env, VERIFY_BROKEN_DAEMON: mode },
+      timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    const report = readFileSync(join(out, "smoke-runs.txt"), "utf8");
+    expect(result.stdout).toContain("失败：[起守护进程]");
+    expect(report).toContain("失败：[起守护进程]");
+    expect(report).toContain("stack:");
+    return report;
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+}
+
+describe("verify-smoke daemon startup diagnostics", () => {
+  it("reports ENOENT from a real spawn error and writes the phase report", () => {
+    expect(runWithBrokenDaemon("missing")).toContain("code: ENOENT");
+  });
+
+  it.skipIf(process.platform === "win32")("reports SIGKILL and drained stderr when the daemon dies before login", () => {
+    const report = runWithBrokenDaemon("signal");
+    expect(report).toContain("signal: SIGKILL");
+    expect(report).toContain("daemonStderr:\n  fatal before login");
+    expect(report).not.toContain("退出码 null");
   });
 });

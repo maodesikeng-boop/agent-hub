@@ -1,16 +1,24 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Page } from "playwright";
+import { webkit, type Browser, type Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import {
   COMPOSER_CHAT_TEXTAREA_SELECTOR,
   openComposerPage,
   runWithWebKitTimeline,
+  verifyComposerLayout,
   type TimelineRecord,
   type WebKitTimelineSession,
 } from "./verify-composer-layout.ts";
-import type { VerifyStepContext } from "./verify-diagnostics.ts";
+import { verifyTouchSoftWrap } from "./verify-composer-interactions.ts";
+import {
+  createVerifyStepTracker,
+  formatVerifyError,
+  formatVerifyRunReport,
+  type VerifyStepContext,
+  type VerifyStepTracker,
+} from "./verify-diagnostics.ts";
 
 class FakeProtocolError extends Error {
   type: "closed" | "crashed" | "error";
@@ -80,6 +88,7 @@ function createRecordingSteps(): { steps: VerifyStepContext; entered: string[]; 
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("verify-composer-layout unchanged budget assertions regression", () => {
@@ -101,7 +110,7 @@ describe("verify-composer-layout unchanged budget assertions regression", () => 
 });
 
 describe("runWithWebKitTimeline", () => {
-  it("enables Timeline, starts with maxCallStackDepth 0, collects records, detaches listener, and stops and disables on success", async () => {
+  it("enables Timeline, starts with maxCallStackDepth 1, collects records, detaches listener, and stops and disables on success", async () => {
     const fake = createFakeTimelineSession();
     const { steps, entered } = createRecordingSteps();
 
@@ -118,7 +127,7 @@ describe("runWithWebKitTimeline", () => {
     expect(records).toHaveLength(1);
     expect(fake.calls).toEqual([
       { method: "Timeline.enable", params: undefined },
-      { method: "Timeline.start", params: { maxCallStackDepth: 0 } },
+      { method: "Timeline.start", params: { maxCallStackDepth: 1 } },
       { method: "Timeline.stop", params: undefined },
       { method: "Timeline.disable", params: undefined },
     ]);
@@ -267,5 +276,91 @@ describe("openComposerPage", () => {
 
     for (const listener of handlers.get("crash") ?? []) listener();
     expect(notes.some((n) => /crash/i.test(n))).toBe(true);
+  });
+});
+
+function failureReport(error: unknown, tracker: VerifyStepTracker): string {
+  const { activePath, activeDurationMs, notes, phases } = tracker.snapshot();
+  return formatVerifyRunReport(1, {
+    ok: false,
+    totalMs: activeDurationMs,
+    budgetMs: VERIFY_SMOKE_STEP_TIMEOUT_MS,
+    phases,
+    failure: formatVerifyError(error, { phasePath: activePath, phaseDurationMs: activeDurationMs, notes }),
+  });
+}
+
+describe("composer waits and reports", () => {
+  it.each([
+    [1, "openComposerPage > wait fonts and settle"],
+    [2, "recordKeys > single line > settle draft"],
+    [4, "recordKeys > single line > press x (1)"],
+  ] as const)("closes the browser and reports the stalled evaluation %i", async (evaluation, stepPath) => {
+    vi.useFakeTimers();
+    const timeline = createFakeTimelineSession();
+    const never = new Promise<void>(() => {});
+    let evaluations = 0;
+    const page = {
+      on() {},
+      setDefaultTimeout() {},
+      setDefaultNavigationTimeout() {},
+      goto: vi.fn(async () => {}),
+      waitForURL: vi.fn(async () => {}),
+      waitForLoadState: vi.fn(async () => {}),
+      locator: () => ({ waitFor() {}, fill() {}, evaluate() {}, boundingBox: () => ({ height: 20 }) }),
+      evaluate: async () => (++evaluations === evaluation ? never : undefined),
+      keyboard: { press: vi.fn(async () => {}) },
+      _connection: { toImpl: () => ({ delegate: { _session: timeline.session } }) },
+    };
+    const close = vi.fn(async () => {});
+    vi.spyOn(webkit, "launch").mockResolvedValue({ on() {}, newPage: async () => page, close } as unknown as Browser);
+    const tracker = createVerifyStepTracker();
+    const report = vi.fn();
+    void tracker.runPhase("WebKit composer layout", (steps) =>
+      verifyComposerLayout("http://127.0.0.1/auth", 7, ".", steps),
+    ).catch((error: unknown) => report(failureReport(error, tracker)));
+
+    await vi.advanceTimersByTimeAsync(VERIFY_SMOKE_STEP_TIMEOUT_MS);
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(timeline.listenerCount()).toBe(0);
+    if (evaluation > 1) expect(timeline.calls.map(({ method }) => method).slice(-2)).toEqual(["Timeline.stop", "Timeline.disable"]);
+    expect(report).toHaveBeenCalledWith(expect.stringContaining(`失败：[WebKit composer layout > ${stepPath}] TimeoutError`));
+    expect(report).toHaveBeenCalledWith(expect.stringContaining("stack:"));
+  });
+
+  it("bounds the touch scale frame wait and reports the scale step", async () => {
+    vi.useFakeTimers();
+    const page = { evaluate: () => new Promise(() => {}) } as unknown as Page;
+    const tracker = createVerifyStepTracker();
+    const report = vi.fn();
+    void tracker.runPhase("verifyTouchSoftWrap (sm)", (steps) => verifyTouchSoftWrap(page, "sm", ".", steps))
+      .catch((error: unknown) => report(failureReport(error, tracker)));
+
+    await vi.advanceTimersByTimeAsync(VERIFY_SMOKE_STEP_TIMEOUT_MS);
+
+    expect(report).toHaveBeenCalledWith(expect.stringContaining("失败：[verifyTouchSoftWrap (sm) > settle touch scale] TimeoutError"));
+  });
+
+  it("preserves the original protocol error type in the Timeline failure report", async () => {
+    const protocolError = new FakeProtocolError("crashed", "Timeline.start", "WebKitWebProcess crashed");
+    const timeline = createFakeTimelineSession({
+      async onSend(method) {
+        if (method === "Timeline.start") throw protocolError;
+      },
+    });
+    const tracker = createVerifyStepTracker();
+    const report = await tracker.runPhase("WebKit composer layout", (steps) =>
+      runWithWebKitTimeline(timeline.session, async () => {}, { steps, describeState: () => "pageCrashed=true" }),
+    ).catch((error: unknown) => failureReport(error, tracker));
+
+    expect(report).toContain("失败：[WebKit composer layout > Timeline.start] FakeProtocolError:");
+    expect(report).toContain("type: crashed");
+    expect(report).toContain("method: Timeline.start");
+    expect(report).toContain("WebKitWebProcess crashed");
+    expect(report).toContain("pageCrashed=true");
+    expect(report).toContain("stack:");
+    expect(report).toContain("verify-composer-layout.test.ts");
   });
 });

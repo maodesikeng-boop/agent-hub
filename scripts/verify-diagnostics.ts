@@ -1,6 +1,11 @@
 // Invariant: formatted verify failures always carry a non-empty summary and bound diagnostic detail and lifecycle notes.
-import { inspect } from "node:util";
-import { VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS, VERIFY_SMOKE_MAX_NOTES } from "../src/shared/limits.ts";
+import { inspect, types } from "node:util";
+import {
+  VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS,
+  VERIFY_SMOKE_MAX_NESTED_ERRORS,
+  VERIFY_SMOKE_MAX_NOTES,
+  VERIFY_SMOKE_STEP_TIMEOUT_MS,
+} from "../src/shared/limits.ts";
 
 export interface VerifyPhaseRecord {
   name: string;
@@ -70,7 +75,7 @@ function safeNonEmptyString(value: unknown): string | undefined {
 function safeInspect(value: unknown, maxChars: number): string {
   let rendered: string;
   try {
-    rendered = inspect(value, { depth: 3, maxArrayLength: 10, maxStringLength: maxChars, breakLength: Infinity });
+    rendered = inspect(value, { depth: 3, maxArrayLength: 10, maxStringLength: maxChars, breakLength: Infinity, customInspect: false });
   } catch {
     try {
       rendered = Object.prototype.toString.call(value);
@@ -105,36 +110,55 @@ function extractErrorType(error: unknown): string {
   return "Object";
 }
 
+interface ErrorArray {
+  array: object;
+  length: number;
+}
+
+function readErrorArray(value: unknown): ErrorArray | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+  } catch {
+    return undefined;
+  }
+  const length = safeGet(value, "length");
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length <= 0) return undefined;
+  return { array: value, length };
+}
+
 interface ExtractedFields {
   errorType: string;
   message?: string;
   protocolType?: string;
   method?: string;
   code?: string;
+  signal?: string;
+  daemonStderr?: string;
   logs?: string;
   stack?: string;
   cause?: unknown;
-  errors?: unknown[];
+  errors?: ErrorArray;
 }
 
-function extractFields(error: unknown): ExtractedFields {
+export function readVerifyError(error: unknown): ExtractedFields {
   const errorType = extractErrorType(error);
   if (typeof error !== "object" || error === null) {
     return { errorType };
   }
   const rawCode = safeGet(error, "code");
   const code = typeof rawCode === "string" || typeof rawCode === "number" ? String(rawCode).trim() || undefined : undefined;
-  const rawErrors = safeGet(error, "errors");
   return {
     errorType,
     message: safeNonEmptyString(safeGet(error, "message")),
     protocolType: safeNonEmptyString(safeGet(error, "type")),
     method: safeNonEmptyString(safeGet(error, "method")),
     code,
+    signal: safeNonEmptyString(safeGet(error, "signal")),
+    daemonStderr: safeNonEmptyString(safeGet(error, "daemonStderr")),
     logs: safeNonEmptyString(safeGet(error, "logs")),
     stack: safeNonEmptyString(safeGet(error, "stack")),
     cause: safeGet(error, "cause"),
-    errors: Array.isArray(rawErrors) ? rawErrors : undefined,
+    errors: readErrorArray(safeGet(error, "errors")),
   };
 }
 
@@ -142,16 +166,17 @@ function summarizeSingleError(error: unknown, seen: Set<object>, depth: number):
   if (error === null) return "null";
   if (error === undefined) return "undefined";
   if (typeof error === "string") return error.trim() || "(empty string)";
-  if (typeof error === "symbol") return error.toString();
+  if (typeof error === "function") return `function: ${safeInspect(error, 200)}`;
   if (typeof error !== "object") return String(error);
   if (seen.has(error)) return "[Circular]";
   seen.add(error);
 
-  const fields = extractFields(error);
+  const fields = readVerifyError(error);
   const metaParts: string[] = [];
   if (fields.protocolType) metaParts.push(`type=${fields.protocolType}`);
   if (fields.method) metaParts.push(`method=${fields.method}`);
   if (fields.code) metaParts.push(`code=${fields.code}`);
+  if (fields.signal) metaParts.push(`signal=${fields.signal}`);
 
   if (fields.message) {
     const missingMeta = metaParts.filter((part) => !fields.message!.includes(part.split("=", 2)[1]!));
@@ -160,7 +185,7 @@ function summarizeSingleError(error: unknown, seen: Set<object>, depth: number):
   }
 
   if (fields.errors && fields.errors.length > 0 && depth < MAX_TRAVERSAL_DEPTH) {
-    const first = summarizeSingleError(fields.errors[0], seen, depth + 1);
+    const first = summarizeSingleError(safeGet(fields.errors.array, "0"), seen, depth + 1);
     const extra = fields.errors.length > 1 ? ` (+${fields.errors.length - 1} more)` : "";
     return `${fields.errorType}: ${first}${extra}`;
   }
@@ -169,7 +194,7 @@ function summarizeSingleError(error: unknown, seen: Set<object>, depth: number):
     return `${fields.errorType}: ${metaParts.join(", ")}`;
   }
 
-  if (error instanceof Error) {
+  if (types.isNativeError(error)) {
     return `${fields.errorType}: (empty message)`;
   }
 
@@ -192,36 +217,56 @@ function clampText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars - suffix.length)}${suffix}`;
 }
 
-function appendNestedDetails(
-  error: unknown,
-  lines: string[],
-  seen: Set<object>,
-  depth: number,
-  perLogBudget: number,
-): void {
-  if (typeof error !== "object" || error === null || depth > MAX_TRAVERSAL_DEPTH) return;
-  const fields = extractFields(error);
+interface DetailTraversal {
+  lines: string[];
+  seen: Set<object>;
+  remaining: number;
+  perLogBudget: number;
+}
 
-  if (fields.errors && fields.errors.length > 0) {
-    lines.push("errors:");
-    for (const [index, inner] of fields.errors.entries()) {
-      lines.push(`  [${index}] ${summarizeSingleError(inner, new Set(seen), depth + 1)}`);
-    }
-  }
+function appendNestedError(label: string, error: unknown, depth: number, traversal: DetailTraversal): void {
+  const { lines, seen, perLogBudget } = traversal;
+  traversal.remaining--;
+  lines.push(`${label}: ${summarizeSingleError(error, new Set(seen), depth)}`);
+  if (typeof error !== "object" || error === null || seen.has(error)) return;
+  const fields = readVerifyError(error);
+  if (fields.stack) lines.push(`${label}.stack:\n${clampText(fields.stack, perLogBudget)}`);
+  if (fields.logs) lines.push(`${label}.logs:\n${trimTail(fields.logs, perLogBudget)}`);
+  seen.add(error);
+  appendNestedDetails(fields, label, depth, traversal);
+  seen.delete(error);
+}
 
-  if (fields.cause !== undefined && depth < MAX_TRAVERSAL_DEPTH) {
-    if (typeof fields.cause === "object" && fields.cause !== null && seen.has(fields.cause)) {
-      lines.push("cause: [Circular]");
-    } else {
-      const nextSeen = new Set(seen);
-      if (typeof fields.cause === "object" && fields.cause !== null) nextSeen.add(fields.cause);
-      lines.push(`cause: ${summarizeSingleError(fields.cause, new Set(seen), depth + 1)}`);
-      const causeFields = extractFields(fields.cause);
-      if (causeFields.logs) lines.push(`cause.logs:\n${trimTail(causeFields.logs, perLogBudget)}`);
-      if (causeFields.stack) lines.push(`cause.stack:\n${clampText(causeFields.stack, perLogBudget)}`);
-      appendNestedDetails(fields.cause, lines, nextSeen, depth + 1, perLogBudget);
-    }
+function appendNestedDetails(fields: ExtractedFields, prefix: string, depth: number, traversal: DetailTraversal): void {
+  if (depth >= MAX_TRAVERSAL_DEPTH) return;
+  const label = (field: string): string => prefix ? `${prefix}.${field}` : field;
+  if (fields.cause !== undefined && traversal.remaining > 0) {
+    appendNestedError(label("cause"), fields.cause, depth + 1, traversal);
   }
+  if (fields.errors) {
+    let index = 0;
+    for (; index < fields.errors.length && traversal.remaining > 0; index++) {
+      appendNestedError(label(`errors[${index}]`), safeGet(fields.errors.array, String(index)), depth + 1, traversal);
+    }
+    if (index < fields.errors.length) traversal.lines.push(`${label("errors")}: ${fields.errors.length - index} more`);
+  }
+}
+
+export function withVerifyTimeout<T>(
+  label: string,
+  operation: Promise<T>,
+  ms = VERIFY_SMOKE_STEP_TIMEOUT_MS,
+  describeState?: () => string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const state = describeState?.();
+      const message = `${label} timed out after ${(ms / 1000).toFixed(2)}s${state ? ` (${state})` : ""}`;
+      reject(Object.assign(new Error(message), { name: "TimeoutError" }));
+    }, ms);
+  });
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timer));
 }
 
 export function formatVerifyError(
@@ -238,7 +283,7 @@ export function formatVerifyError(
       ? Math.floor(context.maxDetailChars)
       : VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS;
 
-  const fields = extractFields(error);
+  const fields = readVerifyError(error);
   const headline = summarizeSingleError(error, new Set(), 0);
   const phasePrefix = phasePath.length > 0 ? `[${phasePath.join(" > ")}] ` : "";
   const rawSummary = `${phasePrefix}${headline}`.replace(/\s+/g, " ").trim();
@@ -246,7 +291,7 @@ export function formatVerifyError(
     ? rawSummary
     : `${rawSummary.slice(0, SUMMARY_MAX_CHARS - 3)}...`;
 
-  const perLogBudget = Math.max(256, Math.floor(maxDetailChars * 0.35));
+  const perLogBudget = Math.max(256, Math.floor(maxDetailChars / 4));
   const detailLines: string[] = [`errorType: ${fields.errorType}`];
   if (phasePath.length > 0) {
     const dur = phaseDurationMs > 0 ? ` (${(phaseDurationMs / 1000).toFixed(2)}s)` : "";
@@ -255,6 +300,7 @@ export function formatVerifyError(
   if (fields.protocolType) detailLines.push(`type: ${fields.protocolType}`);
   if (fields.method) detailLines.push(`method: ${fields.method}`);
   if (fields.code) detailLines.push(`code: ${fields.code}`);
+  if (fields.signal) detailLines.push(`signal: ${fields.signal}`);
   if (context.notes && context.notes.length > 0) {
     detailLines.push("notes:");
     for (const note of context.notes) detailLines.push(`  - ${note}`);
@@ -262,8 +308,6 @@ export function formatVerifyError(
 
   const seen = new Set<object>();
   if (typeof error === "object" && error !== null) seen.add(error);
-  appendNestedDetails(error, detailLines, seen, 0, perLogBudget);
-
   if (fields.stack) {
     detailLines.push(`stack:\n${clampText(fields.stack, perLogBudget)}`);
   } else if (typeof error === "object" && error !== null) {
@@ -272,10 +316,12 @@ export function formatVerifyError(
   if (fields.logs) {
     detailLines.push(`logs:\n${trimTail(fields.logs, perLogBudget)}`);
   }
-  const stderr = safeNonEmptyString(context.daemonStderr);
+  const stderr = fields.daemonStderr ?? safeNonEmptyString(context.daemonStderr);
   if (stderr) {
     detailLines.push(`daemonStderr:\n${trimTail(stderr, perLogBudget)}`);
   }
+
+  appendNestedDetails(fields, "", 0, { lines: detailLines, seen, remaining: VERIFY_SMOKE_MAX_NESTED_ERRORS, perLogBudget });
 
   return {
     phasePath,

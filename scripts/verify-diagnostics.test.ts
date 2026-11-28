@@ -101,6 +101,34 @@ describe("formatVerifyError", () => {
     expect(circularFailure.summary).toContain("EPIPE");
   });
 
+  it("keeps aggregate child stacks, nested causes, and the enclosing stack", () => {
+    const cause = new Error("deep cause");
+    cause.stack = "Error: deep cause\n    at deepCauseOrigin (daemon.ts:3:1)";
+    const child = new TypeError("child failed", { cause });
+    child.stack = "TypeError: child failed\n    at childOrigin (daemon.ts:2:1)";
+    const aggregate = new AggregateError([child], "outer");
+    aggregate.stack = "AggregateError: outer\n    at aggregateOrigin (daemon.ts:1:1)";
+
+    expect(formatVerifyError(aggregate).detail).toMatch(/aggregateOrigin/);
+    expect(formatVerifyError(aggregate).detail).toMatch(/childOrigin/);
+    expect(formatVerifyError(aggregate).detail).toMatch(/deepCauseOrigin/);
+  });
+
+  it("does not execute a thrown object's aggregate iterator or propagate proxy traps", () => {
+    const entries = [new Error("readable child")];
+    Object.defineProperty(entries, "entries", { value: () => { throw new Error("iterator trap"); } });
+    const hostile = { name: "BrokenAggregate", errors: entries };
+    expect(formatVerifyError(hostile).summary).toContain("BrokenAggregate");
+    expect(formatVerifyError(hostile).detail).toContain("readable child");
+
+    const revoked = Proxy.revocable([], {});
+    revoked.revoke();
+    expect(formatVerifyError({ name: "RevokedAggregate", errors: revoked.proxy }).summary).toContain("RevokedAggregate");
+    expect(formatVerifyError(revoked.proxy).summary).toBeTruthy();
+    const trapped = new Proxy({}, { getPrototypeOf: () => { throw new Error("prototype trap"); } });
+    expect(formatVerifyError(trapped).summary).toBeTruthy();
+  });
+
   it("bounds oversized diagnostic logs and daemon stderr to VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS", () => {
     const hugeLogs = "L".repeat(120_000);
     const hugeStderr = "D".repeat(120_000);
