@@ -136,4 +136,136 @@ describe("hub models quota inventory", () => {
     expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(1);
     expect(store.getActive("claude", NOW)).toMatchObject({ vendor: "claude", resetsAt: CHINA_RESET, observedAt: NOW - 10_000 });
   });
+
+  it("does not re-judge a session cleared by dropRateLimitRejection as exhausted after restart", () => {
+    const rejected = {
+      status: "rejected",
+      resetsAt: CHINA_RESET,
+      windows: { five_hour: { utilization: 1, resetsAt: CHINA_RESET, status: "rejected" } },
+    };
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", JSON.stringify(rejected), NOW - 10_000, f.pm.sessionId);
+    f.ledger.applyDriverEvent(f.pm.sessionId, { type: "rate_limit", info: rejected, at: NOW - 10_000 });
+    f.ledger.postUserMessage({ conversationId: f.pm.conversation.id, clientId: "clear-rl-1", text: "continue" });
+
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(0);
+    expect(store.getActive("claude", NOW)).toBeNull();
+  });
+
+  it("clears window-level rejected status in dropRateLimitRejection even when top-level status is allowed", () => {
+    const partialRejected = {
+      status: "allowed",
+      resetsAt: CHINA_RESET,
+      windows: { five_hour: { utilization: 1, resetsAt: CHINA_RESET, status: "rejected" } },
+    };
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", JSON.stringify(partialRejected), NOW - 10_000, f.pm.sessionId);
+    f.ledger.applyDriverEvent(f.pm.sessionId, { type: "rate_limit", info: partialRejected, at: NOW - 10_000 });
+    f.ledger.postUserMessage({ conversationId: f.pm.conversation.id, clientId: "clear-rl-2", text: "continue" });
+
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(0);
+    expect(store.getActive("claude", NOW)).toBeNull();
+  });
+
+  it("filters null and malformed entries inside persisted rate_limit.windows without throwing on startup", () => {
+    const dirtyWithValid = JSON.stringify({
+      status: "allowed",
+      resetsAt: null,
+      windows: {
+        five_hour: null,
+        corrupt: "bad",
+        nan_window: { utilization: "1", resetsAt: CHINA_RESET, status: "rejected" },
+        seven_day: { utilization: 1, resetsAt: CHINA_RESET, status: "rejected" },
+      },
+    });
+    const arrayWindows = JSON.stringify({
+      status: "allowed",
+      resetsAt: null,
+      windows: [null, "bad"],
+    });
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", dirtyWithValid, NOW - 10_000, f.pm.sessionId);
+    f.db.run(
+      `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, rate_limit, created_at, updated_at)
+       VALUES ('worker', 'codex', '', ?, '[]', 1, 'ended', ?, ?, ?)`,
+      f.folder, arrayWindows, NOW - 5_000, NOW - 5_000,
+    );
+
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(() => store.hydrateFromRateLimits(loaded, NOW)).not.toThrow();
+    expect(store.getActive("claude", NOW)).toMatchObject({ vendor: "claude", resetsAt: CHINA_RESET });
+    expect(store.getActive("codex", NOW)).toBeNull();
+  });
+});
+
+describe("multi-window rate-limit preservation", () => {
+  const FIVE_HOUR_RESET = Date.parse("2026-11-25T11:00:00Z") / 1000;
+  const SEVEN_DAY_RESET = Date.parse("2026-11-29T09:00:00Z") / 1000;
+
+  it("keeps 7d rejected independently when 5h expires first, recovers first, or a probe only reports 5h allowed or empty", () => {
+    const store = createObservedQuotaStore({ now: () => NOW });
+    store.observeRateLimit("codex", {
+      status: "rejected",
+      resetsAt: SEVEN_DAY_RESET,
+      windows: {
+        five_hour: { utilization: 1, resetsAt: FIVE_HOUR_RESET, status: "rejected" },
+        seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" },
+      },
+    }, NOW);
+
+    // Empty probe must not clear 7d.
+    expect(store.reconcileFetched("codex", { groups: [] }, NOW + 1_000, NOW + 1_000)).toBe("unchanged");
+    expect(store.getActive("codex", NOW + 1_000)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Windowless allowed rate_limit must not clear specific rejected windows.
+    store.observeRateLimit("codex", { status: "allowed", resetsAt: null, windows: {} }, NOW + 2_000);
+    expect(store.getActive("codex", NOW + 2_000)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Fetched probe reporting ONLY 5h allowed (omitting 7d) must NOT clear 7d, and mergeVendorQuota must stay limited.
+    const only5hAllowed: QuotaResponse = {
+      groups: [{ vendor: "codex", id: "codex", windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } } }],
+    };
+    expect(store.reconcileFetched("codex", only5hAllowed, NOW + 3_000, NOW + 3_000)).toBe("unchanged");
+    const activeAfter5h = store.getActive("codex", NOW + 3_000);
+    expect(activeAfter5h).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+    expect(mergeVendorQuota("codex", activeAfter5h, only5hAllowed, NOW + 3_500, NOW + 3_000)).toMatchObject({ status: "limited", resetsAt: SEVEN_DAY_RESET });
+
+    // 5h allowed rate_limit event must NOT clear 7d.
+    store.observeRateLimit("codex", {
+      status: "allowed",
+      resetsAt: FIVE_HOUR_RESET,
+      windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } },
+    }, NOW + 4_000);
+    expect(store.getActive("codex", NOW + 4_000)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Even after 5h expires by wall clock, 7d stays active until SEVEN_DAY_RESET.
+    const after5hExpired = FIVE_HOUR_RESET * 1000 + 1_000;
+    expect(store.getActive("codex", after5hExpired)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+
+    // Only once 7d itself is confirmed allowed does the vendor clear.
+    const sevenDayAllowed: QuotaResponse = {
+      groups: [{ vendor: "codex", id: "codex", windows: { seven_day: { utilization: 0, resetsAt: SEVEN_DAY_RESET, status: "allowed" } } }],
+    };
+    expect(store.reconcileFetched("codex", sevenDayAllowed, after5hExpired + 1_000, after5hExpired + 1_000)).toBe("cleared");
+    expect(store.getActive("codex", after5hExpired + 1_000)).toBeNull();
+  });
+
+  it("keeps 7d active when 5h expires first after reconcileFetched recorded both exhausted windows", () => {
+    const store = createObservedQuotaStore({ now: () => NOW });
+    const bothExhausted: QuotaResponse = {
+      groups: [{
+        vendor: "claude",
+        id: "claude",
+        windows: {
+          five_hour: { utilization: 1, resetsAt: FIVE_HOUR_RESET, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: SEVEN_DAY_RESET, status: "rejected" },
+        },
+      }],
+    };
+    expect(store.reconcileFetched("claude", bothExhausted, NOW, NOW)).toBe("recorded");
+    const after5hExpired = FIVE_HOUR_RESET * 1000 + 1_000;
+    expect(store.getActive("claude", after5hExpired)).toMatchObject({ resetsAt: SEVEN_DAY_RESET });
+  });
 });

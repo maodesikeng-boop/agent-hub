@@ -12,10 +12,13 @@ import {
   OBSERVED_QUOTA_CACHE_MAX,
 } from "../../shared/limits.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
-import { AGENT_VENDORS, vendorFailureOf, type AgentVendor } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, bundledModelCatalog, vendorFailureOf, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
+import { createModelCatalogs } from "../driver/model-catalog.ts";
 import { workerOpsFixture } from "../ledger/test-helpers.ts";
 import { removeTreeWithRetry } from "../platform/index.ts";
 import { createManagedProviderSecrets, createVendorRuntimeResolver } from "../provider-manager/index.ts";
+import { createUiServer } from "../ui-server/server.ts";
+import { testLogin } from "../ui-server/test-login.ts";
 import { createFetchedQuota } from "./fetched-quota.ts";
 import {
   createObservedQuotaStore,
@@ -343,6 +346,7 @@ process.exit(1);
         join(home, "codex"),
         `
 const rl = require("node:readline").createInterface({ input: process.stdin });
+rl.on("close", () => process.exit(0));
 rl.on("line", (line) => {
   const { id, method } = JSON.parse(line);
   if (method === "initialize") console.log(JSON.stringify({ id, result: {} }));
@@ -356,6 +360,7 @@ rl.on("line", (line) => {
         join(home, "claude"),
         `
 const rl = require("node:readline").createInterface({ input: process.stdin });
+rl.on("close", () => process.exit(0));
 rl.on("line", (line) => {
   const { request_id, request } = JSON.parse(line);
   const response = request.subtype === "get_usage"
@@ -375,6 +380,10 @@ setInterval(() => {}, 60000);
     };
 
     const fetchedVendors: AgentVendor[] = [];
+    let resolveFastSettled!: () => void;
+    const fastSettled = new Promise<void>((resolve) => {
+      resolveFastSettled = resolve;
+    });
     const paths = resolveHubPaths(env, home, { platform: process.platform });
     const runtime = createVendorRuntimeResolver({
       paths,
@@ -384,16 +393,35 @@ setInterval(() => {}, 60000);
     });
     const service = createProviderQuota(runtime, {
       now: () => NOW,
-      onFetched: (vendor) => fetchedVendors.push(vendor),
+      onFetched: (vendor) => {
+        fetchedVendors.push(vendor);
+        if (fetchedVendors.includes("claude") && fetchedVendors.includes("codex")) {
+          resolveFastSettled();
+        }
+      },
     });
     onTestFinished(() => service.close());
 
-    const snap = await service.getSnapshot({ timeoutMs: 2_000 });
-    expect(snap.response.groups.flatMap((g) => g.vendor ? [g.vendor] : []).toSorted((a, b) => a.localeCompare(b))).toEqual(["claude", "codex"]);
-    expect(snap.probedAt.codex).toBe(NOW);
-    expect(snap.probedAt.claude).toBe(NOW);
-    expect(snap.probedAt.agy).toBeUndefined();
-    expect(fetchedVendors.toSorted((a, b) => a.localeCompare(b))).toEqual(["claude", "codex"]);
+    // Gate the deadline with a controllable clock so slow CI CPU scheduling never races the 2s timeout.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let resolved = false;
+      const pending = service.getSnapshot({ timeoutMs: 2_000 }).then((snap) => {
+        resolved = true;
+        return snap;
+      });
+      await fastSettled;
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const snap = await pending;
+      expect(snap.response.groups.flatMap((g) => g.vendor ? [g.vendor] : []).toSorted((a, b) => a.localeCompare(b))).toEqual(["claude", "codex"]);
+      expect(snap.probedAt.codex).toBe(NOW);
+      expect(snap.probedAt.claude).toBe(NOW);
+      expect(snap.probedAt.agy).toBeUndefined();
+      expect(fetchedVendors.toSorted((a, b) => a.localeCompare(b))).toEqual(["claude", "codex"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -490,6 +518,120 @@ describe("hub models quota feedback and --refresh recovery (new behavior)", () =
     expect(byVendor.codex?.quota).toMatchObject({ status: "limited", source: "observed" });
     expect(byVendor.codex?.quota?.resetsAt).not.toBeNull();
     expect(byVendor.agy?.quota?.status).not.toBe("limited");
+  });
+
+  it("keeps hub models --refresh, GET /api/models?refresh=1, and GET /api/quota consistent on one shared daemon (S14)", async () => {
+    const observed = createObservedQuotaStore({ now: f.now });
+    let degraded = true;
+    const models = createModelCatalogs({
+      now: f.now,
+      sources: {
+        codex: {
+          query: async () => (degraded ? { id: "gpt-6.1-sol", degraded: true } : { id: "gpt-6.2-sol", degraded: false }),
+          isDegraded: (raw) => (raw as { degraded: boolean }).degraded,
+          parse: (raw): ModelCatalog => {
+            const r = raw as { id: string };
+            return r.id === "gpt-6.2-sol"
+              ? {
+                  ...bundledModelCatalog("codex"),
+                  source: "vendor",
+                  defaultModelId: "gpt-6.2-sol",
+                  defaultModel: "GPT-6.2-Sol",
+                  models: [
+                    { id: "gpt-6.2-sol", label: "GPT-6.2-Sol", description: null, efforts: ["low", "high"] },
+                    { id: "gpt-6.2-astra", label: "GPT-6.2-Astra", description: null, efforts: ["low", "high"] },
+                  ],
+                }
+              : {
+                  ...bundledModelCatalog("codex"),
+                  source: "vendor",
+                  defaultModelId: "gpt-6.1-sol",
+                  defaultModel: "GPT-6.1-Sol",
+                  models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", description: null, efforts: ["low", "high"] }],
+                };
+          },
+        },
+      },
+    });
+    onTestFinished(() => models.close());
+
+    let utilization = 1;
+    const codexQuota = createFetchedQuota({
+      now: f.now,
+      query: async () => allowedResponse("codex", Math.floor(f.now() / 1000) + 3600, utilization),
+      onFetched: (res, probedAt) => observed.reconcileFetched("codex", res, probedAt, f.now()),
+    });
+    onTestFinished(() => codexQuota.close());
+
+    const api = f.api({
+      models,
+      quota: {
+        observed,
+        now: f.now,
+        get: () => codexQuota.get(),
+        getSnapshot: async (opts) => {
+          if (opts?.refresh) codexQuota.invalidate();
+          const snap = await codexQuota.getSnapshot();
+          return { response: snap.response, probedAt: snap.probedAt === null ? {} : { codex: snap.probedAt } };
+        },
+      },
+    });
+
+    const token = "s14-test-token-0123456789";
+    const uiPort = 4099;
+    const login = testLogin(f.db, uiPort);
+    const ui = createUiServer({
+      db: f.db,
+      ledger: f.ledger,
+      token,
+      staticDir: f.root,
+      uploadsDir: join(f.root, "uploads"),
+      sentFilesDir: join(f.root, "sent"),
+      port: uiPort,
+      models,
+      quota: { get: () => codexQuota.get() },
+    });
+    onTestFinished(() => ui.close());
+    const headers = { host: `127.0.0.1:${uiPort}`, cookie: login.cookie() };
+
+    // Initial state: degraded catalog and exhausted Codex quota.
+    await models.list({ vendor: "codex" });
+    observeDriverQuota(observed, "codex", {
+      type: "turn.ended",
+      ok: false,
+      interrupted: false,
+      at: f.now(),
+      messageIds: [],
+      durationMs: 1,
+      error: { subtype: "failed", message: CODEX_LIMIT_ERROR },
+    });
+    expect(observed.getActive("codex")).not.toBeNull();
+
+    // Upstream recovers with gpt-6.2-sol / gpt-6.2-astra and 0% quota.
+    degraded = false;
+    utilization = 0;
+    f.advance(5_000);
+
+    const hubRes = (await api("models", { vendor: "codex", refresh: true })).json() as {
+      ok: true;
+      text: string;
+      data: { vendors: HubVendorModels[] };
+    };
+    expect(hubRes.text).toContain("gpt-6.2-sol");
+    expect(hubRes.text).toContain("gpt-6.2-astra");
+    expect(hubRes.text).toContain("状态: 可用");
+    expect(observed.getActive("codex")).toBeNull();
+
+    const uiModels = (await ui.inject({ method: "GET", url: "/api/models?refresh=1", headers })).json() as { catalogs: ModelCatalog[] };
+    const uiCodex = uiModels.catalogs.find((c) => c.vendor === "codex");
+    expect(uiCodex?.defaultModelId).toBe("gpt-6.2-sol");
+    expect(uiCodex?.models.map((m) => m.id)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra"]);
+
+    const uiQuota = (await ui.inject({ method: "GET", url: "/api/quota", headers })).json() as QuotaResponse;
+    expect(uiQuota.groups[0]).toMatchObject({
+      vendor: "codex",
+      windows: { seven_day: { utilization: 0, status: "allowed" } },
+    });
   });
 });
 
