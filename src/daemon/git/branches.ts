@@ -13,6 +13,7 @@ import {
   type GitOptions,
   type LocalBranchInfo,
 } from "./git.ts";
+import { verifyRelayCarriesChanges } from "./relay-carry.ts";
 
 const PROTECTED_BRANCH_NAMES = new Set(["main", "master", "HEAD"]);
 
@@ -94,7 +95,7 @@ type ContentProbe = {
 type ContentVerdict = "merged" | "not_merged" | "target_behind";
 
 /** files lists what commit changed since its merge-base with the target, when that comparison was made. */
-type ContentResult = { verdict: ContentVerdict; files: ReadonlySet<string> | null };
+type ContentResult = { verdict: ContentVerdict; mergeBase: string | null; files: ReadonlySet<string> | null };
 
 type TouchingCommit = { sha: string; sameFiles: boolean };
 
@@ -236,13 +237,13 @@ async function squashFound(probe: ContentProbe, mergeBase: string, commit: strin
 
 /** Whether everything commit changed since its merge-base with targetCommit already sits in targetCommit or in one commit on its history. */
 async function contentInTarget(probe: ContentProbe, commit: string, targetCommit: string): Promise<ContentResult> {
-  if (commit === targetCommit) return { verdict: "merged", files: null };
+  if (commit === targetCommit) return { verdict: "merged", mergeBase: commit, files: null };
   const { repoFolder, timeoutMs } = probe;
   const mbRun = await runGit(repoFolder, [...GIT_READONLY_ARGS, "merge-base", targetCommit, commit], timeoutMs, PROBE_ENV);
   const mergeBase = mbRun.code === 0 ? mbRun.stdout.trim() : "";
-  if (mergeBase === "") return { verdict: "not_merged", files: null };
-  if (mergeBase === commit) return { verdict: "merged", files: null };
-  if (mergeBase === targetCommit) return { verdict: "target_behind", files: null };
+  if (mergeBase === "") return { verdict: "not_merged", mergeBase: null, files: null };
+  if (mergeBase === commit) return { verdict: "merged", mergeBase, files: null };
+  if (mergeBase === targetCommit) return { verdict: "target_behind", mergeBase, files: null };
 
   const filesRun = await runGit(
     repoFolder,
@@ -252,8 +253,8 @@ async function contentInTarget(probe: ContentProbe, commit: string, targetCommit
   );
   if (filesRun.code !== 0) throw failedGit("git diff-tree", filesRun);
   const files = new Set(filesRun.stdout.split("\n").filter((l) => l !== ""));
-  if (files.size === 0) return { verdict: "merged", files };
-  return { verdict: (await squashFound(probe, mergeBase, commit, targetCommit, files)) ? "merged" : "not_merged", files };
+  if (files.size === 0) return { verdict: "merged", mergeBase, files };
+  return { verdict: (await squashFound(probe, mergeBase, commit, targetCommit, files)) ? "merged" : "not_merged", mergeBase, files };
 }
 
 /** Other branches and remote-tracking refs that contain commit, such as the PR head that later relay Workers pushed on top of it. */
@@ -294,16 +295,9 @@ async function builtOnFirstParent(probe: ContentProbe, tip: string, commit: stri
   return lines[lines.length - 1]?.trim().split(" ")[1] === commit;
 }
 
-/** A containing ref vouches only when its own reached content still changes every file the branch changed, so a later revert of the branch's work never counts. */
-function carriesEveryFile(own: ContentResult, containing: ContentResult): boolean {
-  if (containing.verdict !== "merged" || own.files === null || own.files.size === 0 || containing.files === null) return false;
-  const theirs = containing.files;
-  return [...own.files].every((file) => theirs.has(file));
-}
-
 /**
  * Precondition: repoFolder is a git repository and branch names a local branch under refs/heads/.
- * Postcondition: returns true when the branch's changes since its merge-base with a main/master target ref already sit in that target or in one commit on its history (merging the branch there changes nothing), or when a branch or remote-tracking ref built on the branch along its first-parent line passes the same test while its own net changes still touch every file the branch changed; any conflict, leftover change, or doubt counts as not merged. Uses merge-tree only while git config defines no custom merge driver and every path it could merge uses git's text or binary merge, so no configured command ever runs; otherwise, or when git lacks merge-tree --write-tree, falls back to comparing git patch-ids. Never writes an object or ref into the repository.
+ * Postcondition: returns true when the branch's changes since its merge-base with a main/master target ref already sit in that target or in one commit on its history (merging the branch there changes nothing), or when a branch or remote-tracking ref built on the branch along its first-parent line passes the same test while retaining or refining every file and hunk the branch changed; any conflict, reverted hunk, leftover change, or doubt counts as not merged. Uses merge-tree only while git config defines no custom merge driver and every path it could merge uses git's text or binary merge, so no configured command ever runs; otherwise, or when git lacks merge-tree --write-tree, falls back to comparing git patch-ids. Never writes an object or ref into the repository.
  */
 export async function isBranchSquashMergedToMain(
   repoFolder: string,
@@ -332,8 +326,21 @@ export async function isBranchSquashMergedToMain(
     for (const containing of await refsContaining(probe, branchCommit, ownRef)) {
       if (!(await builtOnFirstParent(probe, containing, branchCommit))) continue;
       for (const [target, result] of own) {
-        if (result.files === null) continue;
-        if (carriesEveryFile(result, await contentInTarget(probe, containing, target))) return true;
+        if (result.mergeBase === null || result.files === null || result.files.size === 0) continue;
+        const containingResult = await contentInTarget(probe, containing, target);
+        if (containingResult.verdict !== "merged" || containingResult.mergeBase === null) continue;
+        if (
+          await verifyRelayCarriesChanges({
+            repoFolder,
+            timeoutMs,
+            ownMergeBase: result.mergeBase,
+            branchCommit,
+            containingMergeBase: containingResult.mergeBase,
+            containingCommit: containing,
+          })
+        ) {
+          return true;
+        }
       }
     }
     return false;

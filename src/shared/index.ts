@@ -18,6 +18,7 @@ export * from "./mesh.ts";
 export * from "./names.ts";
 export * from "./pm-capabilities.ts";
 export * from "./providers.ts";
+export * from "./router-digest.ts";
 export * from "./router-model.ts";
 export * from "./router.ts";
 export * from "./sandbox-approval.ts";

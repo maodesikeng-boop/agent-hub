@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ConversationId, PmId, ProjectId, WorkerId } from "../../shared/domain.ts";
 import { PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS, ROUTER_FLEET_DIGEST_MAX_BYTES } from "../../shared/limits.ts";
 import type { DeviceRouterDigest, PmDigestEntry } from "../../shared/router.ts";
+import { parseDeviceRouterDigest } from "../../shared/router-digest.ts";
 import { fitRouterDigest } from "./router-digest-fit.ts";
 
 const bytes = (d: DeviceRouterDigest) => Buffer.byteLength(JSON.stringify(d), "utf8");
@@ -71,5 +72,13 @@ describe("fitRouterDigest", () => {
     const ids = fitted.pms.map((p) => p.pmId as number);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
     for (const pm of fitted.pms) expect(pm.project!.catalog!.oneLiner.length).toBeLessThanOrEqual(PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS);
+  });
+
+  it("45 个字段写满的项目经理经 fitRouterDigest 裁剪后可直接通过 parseDeviceRouterDigest 边界校验", () => {
+    const digest: DeviceRouterDigest = { generatedAt: 1_700_000_000_000, pms: Array.from({ length: 45 }, (_, i) => fullEntry(i + 1)) };
+    const fitted = fitRouterDigest(digest);
+    expect(bytes(fitted)).toBeLessThanOrEqual(ROUTER_FLEET_DIGEST_MAX_BYTES);
+    const parsed = parseDeviceRouterDigest(JSON.parse(JSON.stringify(fitted)));
+    expect(parsed).toEqual({ ok: true, digest: fitted });
   });
 });

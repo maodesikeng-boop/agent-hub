@@ -1,9 +1,20 @@
 // Foreign keys can only be toggled outside a transaction, so each migration runs with them off and foreign_key_check runs before commit. That lets migrations rebuild referenced tables, and it is why this cannot run inside an outer transaction.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
+import {
+  backupStagingPath,
+  clearBackupStaging,
+  clearMigrationAnchor,
+  planMigrationBackup,
+  prepareBackupPublication,
+  pruneDatabaseBackups,
+  pruneSameVersionBackups,
+  readMigrationAnchor,
+  writeMigrationAnchor,
+} from "./backup-rotation.ts";
 import type { Db } from "./db.ts";
 
 export const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
@@ -116,45 +127,34 @@ export function mainDbFile(db: Db): string | null {
   return file ? file : null;
 }
 
-export function backupDatabase(db: Db, from: number, now: () => number): string | undefined {
+export interface BackupDatabaseOptions {
+  replaceAnchored?: string;
+}
+
+export function backupDatabase(
+  db: Db,
+  from: number,
+  now: () => number,
+  options: BackupDatabaseOptions = {},
+): string | undefined {
   const file = mainDbFile(db);
   if (file === null) return undefined;
-  let target = `${file}.bak-${from}-${backupStamp(now())}`;
-  for (let n = 2; existsSync(target); n++) target = `${file}.bak-${from}-${backupStamp(now())}-${n}`;
+  const staging = backupStagingPath(file);
+  let target = prepareBackupPublication(file, from, options.replaceAnchored);
+  if (target === undefined) {
+    const base = `${file}.bak-${from}-${backupStamp(now())}`;
+    target = base;
+    for (let n = 2; existsSync(target); n++) target = `${base}-${n}`;
+  }
   try {
-    db.run("VACUUM INTO ?", target);
+    db.run("VACUUM INTO ?", staging);
+    renameSync(staging, target);
   } catch (error) {
-    try {
-      rmSync(target, { force: true });
-    } catch {
-    }
+    clearBackupStaging(file);
     throw error;
   }
-  pruneBackups(file, target);
+  pruneSameVersionBackups(file, from, target);
   return target;
-}
-
-function backupSortKey(dbName: string, name: string): [string, number] | null {
-  if (!name.startsWith(`${dbName}.bak-`)) return null;
-  const match = /^\d+-(\d{8}T\d{6}Z)(?:-(\d+))?$/.exec(name.slice(dbName.length + 5));
-  return match === null ? null : [match[1]!, match[2] === undefined ? 1 : Number(match[2])];
-}
-
-function pruneBackups(dbFile: string, keep: string): void {
-  const dbName = basename(dbFile);
-  const dir = dirname(dbFile);
-  const backups: { name: string; key: [string, number] }[] = [];
-  for (const name of readdirSync(dir)) {
-    const key = backupSortKey(dbName, name);
-    if (key !== null && join(dir, name) !== keep) backups.push({ name, key });
-  }
-  backups.sort((a, b) => (a.key[0] < b.key[0] ? -1 : a.key[0] > b.key[0] ? 1 : a.key[1] - b.key[1]));
-  for (const { name } of backups.slice(0, Math.max(0, backups.length - (MAX_DB_BACKUPS - 1)))) {
-    try {
-      rmSync(join(dir, name), { force: true });
-    } catch {
-    }
-  }
 }
 
 function checkForeignKeys(db: Db): void {
@@ -187,15 +187,61 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
     throw new Error(`database user_version ${from} is newer than the latest migration ${latest}`);
   }
   const pending = migrations.filter((m) => m.version > from);
-  const backupFile = from > 0 && pending.length > 0 ? backupDatabase(db, from, options.now ?? Date.now) : undefined;
+  const dbFile = mainDbFile(db);
+  if (pending.length === 0) {
+    if (dbFile !== null) {
+      clearBackupStaging(dbFile);
+      const existingAnchor = readMigrationAnchor(dbFile);
+      clearMigrationAnchor(dbFile);
+      if (
+        existingAnchor !== null &&
+        from > existingAnchor.fromVersion &&
+        (from === existingAnchor.lastVersion || from === existingAnchor.pendingVersion)
+      ) {
+        pruneDatabaseBackups(dbFile, existingAnchor.backupFile, MAX_DB_BACKUPS);
+      }
+    }
+    return { from, to: from, applied: [] };
+  }
+  let backupFile: string | undefined;
+  let anchorFromVersion: number | undefined;
+  if (from > 0 && dbFile !== null) {
+    const existingAnchor = readMigrationAnchor(dbFile);
+    const plan = planMigrationBackup(dbFile, from, existingAnchor);
+    if (plan.action === "reuse") {
+      backupFile = plan.backupFile;
+      anchorFromVersion = existingAnchor!.fromVersion;
+    } else {
+      backupFile = backupDatabase(db, from, options.now ?? Date.now, {
+        ...(plan.replaceSameVersionBackup !== undefined ? { replaceAnchored: plan.replaceSameVersionBackup } : {}),
+      });
+      if (backupFile !== undefined) {
+        anchorFromVersion = from;
+        writeMigrationAnchor(dbFile, { fromVersion: from, lastVersion: from, backupFile });
+        if (existingAnchor?.fromVersion === from && existingAnchor.backupFile !== backupFile) {
+          pruneSameVersionBackups(dbFile, from, backupFile);
+        }
+      }
+    }
+  }
   const freeBefore =
-    pending.length > 0 && db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")?.auto_vacuum === AUTO_VACUUM_INCREMENTAL
+    db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")?.auto_vacuum === AUTO_VACUUM_INCREMENTAL
       ? freelistCount(db)
       : undefined;
   const applied: number[] = [];
   // A code-built trigger may read tables an older migration rebuilds, and SQLite refuses that rename while the trigger exists.
-  if (pending.length > 0) dropCodeTriggers(db);
+  dropCodeTriggers(db);
   for (const { version, file, sql } of pending) {
+    const lastCommitted = applied.at(-1) ?? from;
+    if (dbFile !== null && backupFile !== undefined && anchorFromVersion !== undefined) {
+      // Persist pendingVersion before COMMIT so a crash between COMMIT and post-commit anchor advance still reuses the pre-upgrade backup.
+      writeMigrationAnchor(dbFile, {
+        fromVersion: anchorFromVersion,
+        lastVersion: lastCommitted,
+        pendingVersion: version,
+        backupFile,
+      });
+    }
     const foreignKeys = db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys === 1;
     if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
     try {
@@ -205,11 +251,25 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
         db.exec(`PRAGMA user_version = ${version}`);
       });
     } catch (error) {
+      if (dbFile !== null && backupFile !== undefined && anchorFromVersion !== undefined) {
+        try {
+          writeMigrationAnchor(dbFile, { fromVersion: anchorFromVersion, lastVersion: lastCommitted, backupFile });
+        } catch {
+        }
+      }
       throw new Error(`migration ${file} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally {
       if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
     }
     applied.push(version);
+    if (dbFile !== null && backupFile !== undefined && anchorFromVersion !== undefined) {
+      writeMigrationAnchor(dbFile, { fromVersion: anchorFromVersion, lastVersion: version, backupFile });
+    }
+  }
+  if (dbFile !== null) {
+    clearBackupStaging(dbFile);
+    clearMigrationAnchor(dbFile);
+    if (backupFile !== undefined) pruneDatabaseBackups(dbFile, backupFile, MAX_DB_BACKUPS);
   }
   if (freeBefore !== undefined) {
     const addedFree = Math.min(freelistCount(db) - freeBefore, DB_INCREMENTAL_VACUUM_PAGES);

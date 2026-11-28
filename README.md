@@ -57,7 +57,7 @@ Both builds are unsigned previews, so the OS asks for confirmation on first laun
 
 ### 2. Connect an agent CLI
 
-Bellwood supports **Claude Code** (`claude`), **Antigravity** (`agy`), **Codex** (`codex`), **Pi** (`pi`), **DeepSeek Harness** (`dsh`), **Cursor** (`cursor-agent`), **OpenCode** (`opencode`), and **Kimi Code** (`kimi`).
+Bellwood supports **Claude Code** (`claude`), **Antigravity** (`agy`), **Codex** (`codex`), **Pi** (`pi`), **DeepSeek Harness** (`dsh`), **Cursor** (`cursor-agent`), **OpenCode** (`opencode`), and **Kimi Code** (`kimi`). See the commit-bound [verification matrix](docs/verification-matrix.md) for per-vendor, per-platform status separating live vendor service runs, real-CLI mock-LLM CI, offline tests, and unverified gaps.
 
 Launch **Bellwood** and open **Settings → Providers** (it opens automatically if no CLI is ready yet). Click **Install** beside any supported CLI, then click **Sign in...** to authenticate with browser OAuth, device code, loopback callback paste for headless servers, or an API key. When you create a PM or use Router **Auto** without naming a vendor, Bellwood selects the first usable CLI on that computer automatically.
 
@@ -89,7 +89,18 @@ Click `+` in the project list header to open **New project manager**, enter a **
 
 ### 4. Connect Feishu, Linux, or other computers (optional)
 
-- **Feishu bot and project groups.** While the daemon is running, run `node src/feishu/main.ts connect` and scan the QR code in Feishu. Run `node src/feishu/main.ts status` to inspect bindings.
+- **Feishu bot and project groups.** Feishu bot setup currently runs through the bundled CLI rather than an in-app Settings tab (open **Settings → Computers → Hub order** to see which paired computer hosts the bot). While the desktop app or daemon is running, run the command for your install and scan the QR code in Feishu (use `status` to inspect bindings):
+  - **macOS (`Bellwood.app`):**
+    ```sh
+    /Applications/Bellwood.app/Contents/Resources/runtime/node/bin/node /Applications/Bellwood.app/Contents/Resources/runtime/daemon/src/feishu/main.ts connect
+    /Applications/Bellwood.app/Contents/Resources/runtime/node/bin/node /Applications/Bellwood.app/Contents/Resources/runtime/daemon/src/feishu/main.ts status
+    ```
+  - **Windows (`Bellwood-windows-x64-setup.exe`, PowerShell):**
+    ```powershell
+    & "$env:LOCALAPPDATA\Bellwood\node\node.exe" "$env:LOCALAPPDATA\Bellwood\daemon\src\feishu\main.ts" connect
+    & "$env:LOCALAPPDATA\Bellwood\node\node.exe" "$env:LOCALAPPDATA\Bellwood\daemon\src\feishu\main.ts" status
+    ```
+  - **Linux or source checkout:** from the repository root, run `node src/feishu/main.ts connect` to scan and connect, or `node src/feishu/main.ts status` to inspect bindings.
 - **Multiple computers.** Bellwood includes an official public blind relay and GitHub Device Flow client ID. Open **Settings → Computers**, sign in with the same GitHub account on each computer, and compare the six-digit code on both screens to trust the device. To use a self-hosted relay, set `FUSA_RELAY_URL` and `FUSA_GITHUB_CLIENT_ID`.
 - **Always-on Linux daemon.** Run Bellwood as a `systemd --user` service and run `sudo scripts/linux-sandbox-setup.sh` once to enable `bubblewrap`. See the [Linux setup guide](docs/linux.md).
 
@@ -243,7 +254,7 @@ Connect **Feishu** (or **Lark**) over an outbound WebSocket with no public serve
 
 <br>
 
-- **One shared bot per account.** Run `node src/feishu/main.ts connect` and scan the QR code to create your bot. All devices on your account share that single bot in priority order, with automatic lease failover when a laptop sleeps or a server restarts and catch-up sync after brief disconnects.
+- **One shared bot per account.** Follow [Quick start step 4](#4-connect-feishu-linux-or-other-computers-optional) to run the bundled Feishu CLI (or `node src/feishu/main.ts connect` from a Linux or source checkout) and scan the QR code to create your bot. All devices on your account share that single bot in priority order, with automatic lease failover when a laptop sleeps or a server restarts and catch-up sync after brief disconnects.
 - **Direct chat for Router, dedicated groups for projects.** Message the bot 1-on-1 to talk to Router from your phone. Each project gets its own Feishu group with its pixel fruit slime avatar, live streaming replies with a **Stop** button, and inline screenshots, recordings, and decision cards synced with your desktop app.
 - **Automatic `@bot` mode in team groups.** When you are alone in a project group, every message goes straight to the PM. Once you add teammates, the group switches to `@bot` trigger mode: teammates discuss freely while Bellwood buffers recent messages in the background, and `@`-mentioning the bot hands the discussion context to the PM to implement and verify.
 - **Model switching from your phone.** Send `/settings` (or `/model`, `/policy`) in direct chat or a project group to switch vendor, model, and effort from an interactive card.

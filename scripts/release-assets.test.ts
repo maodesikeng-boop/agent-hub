@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { RELEASE_INSTALLER_FILES } from "../src/shared/update.ts";
 import { RELEASE_ASSETS, assertVersionSourcesMatch, composeReleaseNotes, isTagPushOf, prepareReleaseAssets } from "./release-assets.ts";
 import { REPO_ROOT, readDesktopAppVersion, sha256FileHex } from "./stage-runtime-common.ts";
+import { validateRenderedReleaseMatrixLinks } from "./verification-matrix-model.ts";
 
 function writeArtifact(dir: string, name: string, body: string, hashOverride?: string): void {
   mkdirSync(dir, { recursive: true });
@@ -30,6 +31,39 @@ function versionSourcesRepo(versions: { pkg: string; tauri: string; securitySeri
 }
 
 describe("scripts/release-assets.ts", () => {
+  const linkOptions = { repo: "example-org/agent-hub", ref: "v0.4.0" };
+  const matrixUrl = `https://github.com/${linkOptions.repo}/blob`;
+  const pinnedLink = `[matrix](${matrixUrl}/v0.4.0/docs/verification-matrix.md)`;
+  const floatingLink = `[matrix](${matrixUrl}/main/docs/verification-matrix.md)`;
+
+  it.each([
+    `\`\`\`md\n${floatingLink}\n\`\`\``,
+    `~~~md\n${floatingLink}\n~~~`,
+    `    ${floatingLink}`,
+    `\`${floatingLink}\``,
+    `[unused]: ${matrixUrl}/main/docs/verification-matrix.md`,
+    `<!-- ${floatingLink} -->`,
+  ])("ignores a non-rendered link: %s", (example) => {
+    expect(validateRenderedReleaseMatrixLinks(`${example}\n\n${pinnedLink}`, linkOptions)).toEqual([]);
+  });
+
+  it("requires a rendered matrix link even if an example contains a pinned URL", () => {
+    expect(validateRenderedReleaseMatrixLinks(`\`\`\`md\n${pinnedLink}\n\`\`\``, linkOptions)).toHaveLength(1);
+  });
+
+  it.each([
+    `[matrix](${matrixUrl}/main/docs/verification%2Dmatrix.md)`,
+    `[matrix][ref]\n\n[ref]: ${matrixUrl}/main/docs/verification%2dmatrix.md`,
+    `<${matrixUrl}/main/docs/verification%2Dmatrix.md>`,
+    `<a href='${matrixUrl}/main/docs/verification%2Dmatrix.md'>matrix</a>`,
+  ])("rejects an encoded floating link: %s", (link) => {
+    expect(validateRenderedReleaseMatrixLinks(`${pinnedLink}\n\n${link}`, linkOptions)).toHaveLength(1);
+  });
+
+  it("accepts a pinned link with an encoded path", () => {
+    expect(validateRenderedReleaseMatrixLinks(`[matrix](${matrixUrl}/v0.4.0/docs/verification%2Dmatrix.md)`, linkOptions)).toEqual([]);
+  });
+
   it("writes to GitHub only from a run started by pushing that exact tag", () => {
     const push = { GITHUB_EVENT_NAME: "push", GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.4.0-rc.1" };
     expect(isTagPushOf("v0.4.0-rc.1", push)).toBe(true);
@@ -44,7 +78,73 @@ describe("scripts/release-assets.ts", () => {
     const notes = composeReleaseNotes(readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8"), downloads, "0.3.0");
     expect(notes.startsWith("- ")).toBe(true);
     expect(notes).toContain("### English");
-    expect(notes.endsWith(`${downloads.trim()}\n`)).toBe(true);
+    expect(downloads).not.toContain("/blob/main/");
+    expect(notes).toContain("https://github.com/maodesikeng-boop/agent-hub/blob/v0.3.0/docs/verification-matrix.md");
+    expect(notes).not.toContain("/blob/main/docs/verification-matrix.md");
+
+    const rcNotes = composeReleaseNotes(readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8"), downloads, "0.4.0", {
+      ref: "v0.4.0-rc.1",
+      repo: "example-org/agent-hub",
+    });
+    expect(rcNotes).toContain("https://github.com/example-org/agent-hub/blob/v0.4.0-rc.1/docs/verification-matrix.md");
+    expect(rcNotes).not.toContain("{{RELEASE_");
+
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "main" })).toThrow(/release tag or commit SHA/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "HEAD" })).toThrow(/release tag or commit SHA/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "develop" })).toThrow(/release tag or commit SHA/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "v0.3.0" })).toThrow(/release tag/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/maodesikeng-boop/agent-hub/blob/main/docs/verification-matrix.md)",
+        "0.4.0",
+      ),
+    ).toThrow(/floating branch/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/maodesikeng-boop/agent-hub/blob/develop/docs/verification-matrix.md)",
+        "0.4.0",
+        { ref: "v0.4.0" },
+      ),
+    ).toThrow(/release ref|floating branch/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/maodesikeng-boop/agent-hub/blob/v0.3.0/docs/verification-matrix.md)",
+        "0.4.0",
+        { ref: "v0.4.0" },
+      ),
+    ).toThrow(/release ref|v0\.4\.0/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        [
+          "[zh](https://github.com/{{RELEASE_REPO}}/blob/{{RELEASE_REF}}/docs/verification-matrix.md)",
+          "[en](https://github.com/{{RELEASE_REPO}}/blob/develop/docs/verification-matrix.md)",
+        ].join("\n"),
+        "0.4.0",
+        { ref: "v0.4.0" },
+      ),
+    ).toThrow(/release ref|floating branch/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/other-org/agent-hub/blob/v0.4.0/docs/verification-matrix.md)",
+        "0.4.0",
+        { ref: "v0.4.0", repo: "maodesikeng-boop/agent-hub" },
+      ),
+    ).toThrow(/release ref|maodesikeng-boop\/agent-hub/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", "No matrix link in downloads", "0.4.0", { ref: "v0.4.0" })).toThrow(
+      /verification-matrix/i,
+    );
+    const shaNotes = composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", {
+      ref: "6f6eed4107d8a7cc77a0a615c72fba59b1cc77c7",
+    });
+    expect(shaNotes).toContain(
+      "https://github.com/maodesikeng-boop/agent-hub/blob/6f6eed4107d8a7cc77a0a615c72fba59b1cc77c7/docs/verification-matrix.md",
+    );
+
     for (const name of Object.values(RELEASE_INSTALLER_FILES)) expect(downloads).toContain(`\`${name}.sha256\``);
     expect(() => composeReleaseNotes("## v0.3.0\n- x\n", downloads, "9.9.9")).toThrow('no "## v9.9.9" section');
   });
