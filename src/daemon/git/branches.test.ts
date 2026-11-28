@@ -48,8 +48,7 @@ function readme(edits: Record<number, string>): string {
 }
 
 function makeRepo(): { repo: string; base: string } {
-  const repo = join(root, "repo");
-  mkdirSync(repo);
+  const repo = mkdtempSync(join(root, "repo-"));
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), readme({}));
   git(repo, "add", "-A");
