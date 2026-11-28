@@ -19,6 +19,7 @@ import { STEP_SLOT_NAME_MAX_CHARS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { assertHubLimit, fail } from "../context.ts";
 import { formatGraphSpecIssues, type GraphSpecKind } from "./spec-errors.ts";
+import { resolveStepLineage, type LineageMaps, type LineageNode } from "./workspace.ts";
 
 const NODE_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const SLOT_NAME_RE = /^[a-z0-9-]+$/;
@@ -97,13 +98,27 @@ export function assertReviewStepsHaveTarget(
   nodes: Iterable<{ key: TaskNodeKey; review: number; base: string | null; status: string; skipped?: number }>,
   edges: readonly TaskEdge[],
 ): void {
-  for (const n of nodes) {
-    if (n.review !== 1 || n.base !== null || (n.status !== "pending" && n.status !== "waiting")) continue;
-    const ups = edges.filter((e) => e.toKey === n.key).length;
-    if (ups !== 1) {
+  const nodeList = [...nodes];
+  const byKey = new Map<TaskNodeKey, LineageNode>();
+  const incoming = new Map<TaskNodeKey, TaskNodeKey[]>();
+  const outgoing = new Map<TaskNodeKey, TaskNodeKey[]>();
+  for (const n of nodeList) {
+    byKey.set(n.key, { node_key: n.key, review: n.review, skipped: n.skipped ?? 0, base: n.base });
+    incoming.set(n.key, []);
+    outgoing.set(n.key, []);
+  }
+  for (const e of edges) {
+    incoming.get(e.toKey)?.push(e.fromKey);
+    outgoing.get(e.fromKey)?.push(e.toKey);
+  }
+  const maps: LineageMaps = { byKey, incoming, outgoing };
+  for (const n of nodeList) {
+    if (n.review !== 1 || n.base !== null || n.skipped === 1 || (n.status !== "pending" && n.status !== "waiting")) continue;
+    const lineage = resolveStepLineage(n.key, maps);
+    if (lineage.kind === "empty" || lineage.kind === "conflict") {
       throw fail(
         "invalid",
-        `审查步骤「${n.key}」${ups === 0 ? "没有上一步" : `有 ${ups} 个上一步`}，定不下被审分支：给它写 "base": "<被审分支>"`,
+        `审查步骤「${n.key}」${lineage.kind === "empty" ? "没有可审的上游步骤" : "有多个上游分支"}，定不下被审分支：给它写 "base": "<被审分支>"`,
       );
     }
   }

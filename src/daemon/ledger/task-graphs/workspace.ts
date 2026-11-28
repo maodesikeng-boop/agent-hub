@@ -35,13 +35,101 @@ export type StepUpstreamLineage =
   | { kind: "step_and_base"; stepKey: TaskNodeKey; branch: string }
   | { kind: "conflict" };
 
+const isTransparentStep = (node: LineageNode): boolean => node.skipped === 1 || node.review === 1;
+
+function meetCodeStepRef(a: CodeStepRef, b: CodeStepRef): CodeStepRef {
+  if (a.kind === "none") return b;
+  if (b.kind === "none") return a;
+  if (a.kind === "one" && b.kind === "one" && a.stepKey === b.stepKey) return a;
+  return { kind: "many" };
+}
+
+function codeStepRefOf(lineage: StepUpstreamLineage): CodeStepRef {
+  if (lineage.kind === "empty") return { kind: "none" };
+  if (lineage.kind === "step" || lineage.kind === "step_and_base") return { kind: "one", stepKey: lineage.stepKey };
+  if (lineage.kind === "reviewed_base") return lineage.sourceStep;
+  return { kind: "many" };
+}
+
+function meetStepWithReviewedBase(
+  stepKey: TaskNodeKey,
+  branch: string,
+  sourceStep: CodeStepRef,
+): StepUpstreamLineage {
+  if (sourceStep.kind === "none" || (sourceStep.kind === "one" && sourceStep.stepKey === stepKey)) {
+    return { kind: "step_and_base", stepKey, branch };
+  }
+  return { kind: "conflict" };
+}
+
+function meetLineage(a: StepUpstreamLineage, b: StepUpstreamLineage): StepUpstreamLineage {
+  if (a.kind === "empty") return b;
+  if (b.kind === "empty") return a;
+  if (a.kind === "conflict" || b.kind === "conflict") return { kind: "conflict" };
+
+  if (a.kind === "step") {
+    if (b.kind === "step") return a.stepKey === b.stepKey ? a : { kind: "conflict" };
+    if (b.kind === "reviewed_base") return meetStepWithReviewedBase(a.stepKey, b.branch, b.sourceStep);
+    return a.stepKey === b.stepKey ? b : { kind: "conflict" };
+  }
+
+  if (a.kind === "reviewed_base") {
+    if (b.kind === "step") return meetStepWithReviewedBase(b.stepKey, a.branch, a.sourceStep);
+    if (b.kind === "reviewed_base") {
+      if (a.branch !== b.branch) return { kind: "conflict" };
+      return { kind: "reviewed_base", branch: a.branch, sourceStep: meetCodeStepRef(a.sourceStep, b.sourceStep) };
+    }
+    if (a.branch !== b.branch) return { kind: "conflict" };
+    return meetStepWithReviewedBase(b.stepKey, b.branch, a.sourceStep);
+  }
+
+  if (b.kind === "step") return a.stepKey === b.stepKey ? a : { kind: "conflict" };
+  if (b.kind === "reviewed_base") {
+    if (a.branch !== b.branch) return { kind: "conflict" };
+    return meetStepWithReviewedBase(a.stepKey, a.branch, b.sourceStep);
+  }
+  return a.stepKey === b.stepKey && a.branch === b.branch ? a : { kind: "conflict" };
+}
+
+function resolveStepLineageMemo(
+  stepKey: TaskNodeKey,
+  maps: LineageMaps,
+  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+  visiting = new Set<TaskNodeKey>(),
+): StepUpstreamLineage {
+  const cached = memo.get(stepKey);
+  if (cached !== undefined) return cached;
+  if (visiting.has(stepKey)) return { kind: "empty" };
+  visiting.add(stepKey);
+  let acc: StepUpstreamLineage = { kind: "empty" };
+  for (const depKey of maps.incoming.get(stepKey) ?? []) {
+    if (acc.kind === "conflict") break;
+    const dep = maps.byKey.get(depKey);
+    if (dep === undefined) continue;
+    let edgeLineage: StepUpstreamLineage;
+    if (!isTransparentStep(dep)) {
+      edgeLineage = { kind: "step", stepKey: dep.node_key };
+    } else {
+      const up = resolveStepLineageMemo(dep.node_key, maps, memo, visiting);
+      edgeLineage =
+        dep.skipped === 0 && dep.base !== null
+          ? { kind: "reviewed_base", branch: dep.base, sourceStep: codeStepRefOf(up) }
+          : up;
+    }
+    acc = meetLineage(acc, edgeLineage);
+  }
+  visiting.delete(stepKey);
+  memo.set(stepKey, acc);
+  return acc;
+}
+
 /**
  * Precondition: maps describes a Task Graph's step roles and adjacency lists (may contain dangling keys or cycles).
  * Postcondition: resolves stepKey's upstream workspace lineage across arbitrary DAG fan-out/fan-in diamonds,
  * passing through review and skipped steps and merging incoming paths as a commutative, associative meet-semilattice.
  */
-export function resolveStepLineage(_stepKey: TaskNodeKey, _maps: LineageMaps): StepUpstreamLineage {
-  throw new Error("Not implemented");
+export function resolveStepLineage(stepKey: TaskNodeKey, maps: LineageMaps): StepUpstreamLineage {
+  return resolveStepLineageMemo(stepKey, maps, new Map());
 }
 
 /**
@@ -50,10 +138,56 @@ export function resolveStepLineage(_stepKey: TaskNodeKey, _maps: LineageMaps): S
  * terminating safely if maps.incoming contains a cycle.
  */
 export function collectAncestorWorkerIds(
-  _stepKey: TaskNodeKey,
-  _maps: Pick<StepMaps, "byKey" | "incoming">,
+  stepKey: TaskNodeKey,
+  maps: Pick<StepMaps, "byKey" | "incoming">,
 ): Set<number> {
-  throw new Error("Not implemented");
+  const ids = new Set<number>();
+  const visited = new Set<TaskNodeKey>();
+  const stack: TaskNodeKey[] = [stepKey];
+  while (stack.length > 0) {
+    const key = stack.pop()!;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const node = maps.byKey.get(key);
+    if (node !== undefined) {
+      for (const id of workerIdsOf(node)) ids.add(id);
+    }
+    for (const prev of maps.incoming.get(key) ?? []) {
+      if (!visited.has(prev)) stack.push(prev);
+    }
+  }
+  return ids;
+}
+
+function isStepWorktreeContestedMemo(
+  db: Db,
+  projectId: number,
+  stepKey: TaskNodeKey,
+  maps: StepMaps,
+  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+): boolean {
+  const queue = [...(maps.outgoing.get(stepKey) ?? [])];
+  const visited = new Set<TaskNodeKey>([stepKey]);
+  let continuers = 0;
+  let head = 0;
+  while (head < queue.length) {
+    const key = queue[head++]!;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const n = maps.byKey.get(key);
+    if (n === undefined) continue;
+    if (isTransparentStep(n)) {
+      for (const next of maps.outgoing.get(key) ?? []) {
+        if (!visited.has(next)) queue.push(next);
+      }
+      continue;
+    }
+    if (continuedWorktreeTarget(db, projectId, n, maps, memo)?.step.node_key === stepKey) {
+      continuers++;
+      if (continuers > 1) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -61,8 +195,8 @@ export function collectAncestorWorkerIds(
  * Postcondition: returns true iff two or more distinct non-review, non-skipped downstream steps (excluding base === "main")
  * resolve to continue stepKey's worktree; parallel review and base === "main" branches do not contest stepKey's worktree.
  */
-export function isStepWorktreeContested(_db: Db, _projectId: number, _stepKey: TaskNodeKey, _maps: StepMaps): boolean {
-  throw new Error("Not implemented");
+export function isStepWorktreeContested(db: Db, projectId: number, stepKey: TaskNodeKey, maps: StepMaps): boolean {
+  return isStepWorktreeContestedMemo(db, projectId, stepKey, maps, new Map());
 }
 
 type UpstreamWorker = { id: number; worktree_path: string | null; branch: string; base_commit: string };
@@ -92,143 +226,156 @@ function latestWorktreeWorker(db: Db, projectId: number, step: TaskNodeDbRow): U
   return null;
 }
 
-/** Walks the single-parent chain above a step. */
-function* upstreamChain(startKey: TaskNodeKey, maps: StepMaps): Generator<TaskNodeDbRow> {
-  const { byKey, incoming } = maps;
-  let cur = startKey;
-  const seen = new Set<TaskNodeKey>();
-  while (true) {
-    const ups = incoming.get(cur) ?? [];
-    if (ups.length !== 1 || seen.has(ups[0]!)) return;
-    cur = ups[0]!;
-    seen.add(cur);
-    const u = byKey.get(cur);
-    if (u === undefined) return;
-    yield u;
-  }
-}
-
-/** Walks up single-parent edges past skipped and review steps to the step whose worktree a new step would reuse. */
-function upstreamWorktreeStep(
-  startKey: TaskNodeKey,
-  maps: StepMaps,
-): { step: TaskNodeDbRow; forked: boolean } | null {
-  let forked = false;
-  for (const u of upstreamChain(startKey, maps)) {
-    if ((maps.outgoing.get(u.node_key)?.length ?? 0) > 1) forked = true;
-    if (u.skipped === 1 || u.review === 1) continue;
-    return { step: u, forked };
-  }
-  return null;
-}
-
-/** A step after a review with an explicit base continues the reviewed branch, not the trunk or an earlier step's own branch. */
-function reviewedBaseUpstream(startKey: TaskNodeKey, maps: StepMaps): string | null {
-  for (const u of upstreamChain(startKey, maps)) {
-    if (u.skipped === 1) continue;
-    return u.review === 1 ? u.base : null;
-  }
-  return null;
-}
-
 const REPORTED_COMMIT = /\b[0-9a-f]{7,40}\b/i;
 
-/** The commit the nearest finished non-review upstream step reported delivering. */
 export function upstreamDeliveredCommit(input: PlanInput): string | null {
-  for (const u of upstreamChain(input.step.node_key, input)) {
-    if (u.skipped === 1 || u.review === 1) continue;
-    const reported = readStoredArtifact(u.artifact_json).artifact?.commit ?? "";
-    return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
-  }
-  return null;
+  const lineage = resolveStepLineage(input.step.node_key, input);
+  const stepKey =
+    lineage.kind === "step" || lineage.kind === "step_and_base"
+      ? lineage.stepKey
+      : lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one"
+        ? lineage.sourceStep.stepKey
+        : null;
+  if (stepKey === null) return null;
+  const u = input.byKey.get(stepKey);
+  if (u === undefined) return null;
+  const reported = readStoredArtifact(u.artifact_json).artifact?.commit ?? "";
+  return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
 }
 
-function findUpstreamWorktree(db: Db, input: PlanInput): { worker: UpstreamWorker; forked: boolean } | null {
-  const up = upstreamWorktreeStep(input.step.node_key, input);
-  if (up === null) return null;
-  const worker = latestWorktreeWorker(db, input.graphRow.project_id, up.step);
-  return worker === null ? null : { worker, forked: up.forked };
-}
-
-/** Upstream worktree a non-review step continues from, or null when it starts from main or a different reviewed branch. */
-function continuedUpstreamWorktree(
+function continuedWorktreeTarget(
   db: Db,
   projectId: number,
   step: TaskNodeDbRow,
   maps: StepMaps,
-): { step: TaskNodeDbRow; worker: UpstreamWorker; forked: boolean } | null {
-  if (step.review === 1 || step.base === "main") return null;
-  const up = upstreamWorktreeStep(step.node_key, maps);
-  if (up === null) return null;
-  const worker = latestWorktreeWorker(db, projectId, up.step);
+  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+): { step: TaskNodeDbRow; worker: UpstreamWorker } | null {
+  if (step.review === 1 || step.skipped === 1 || step.base === "main") return null;
+  const lineage = resolveStepLineageMemo(step.node_key, maps, memo);
+  let stepKey: TaskNodeKey | null = null;
+  let requiredBranch: string | null = null;
+  if (lineage.kind === "step") {
+    stepKey = lineage.stepKey;
+  } else if (lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one") {
+    stepKey = lineage.sourceStep.stepKey;
+    requiredBranch = lineage.branch;
+  } else if (lineage.kind === "step_and_base") {
+    stepKey = lineage.stepKey;
+    requiredBranch = lineage.branch;
+  }
+  if (stepKey === null) return null;
+  const upStep = maps.byKey.get(stepKey);
+  if (upStep === undefined) return null;
+  const worker = latestWorktreeWorker(db, projectId, upStep);
   if (worker === null) return null;
-  const reviewed = reviewedBaseUpstream(step.node_key, maps);
-  if (reviewed !== null && worker.branch !== reviewed) return null;
-  return { step: up.step, worker, forked: up.forked };
+  if (requiredBranch !== null && worker.branch !== requiredBranch) return null;
+  return { step: upStep, worker };
+}
+
+function resolveReviewedTarget(
+  db: Db,
+  projectId: number,
+  lineage: StepUpstreamLineage,
+  maps: StepMaps,
+): { branch: string; implWorktreePath: string | null; stepKey: TaskNodeKey | null } | null {
+  if (lineage.kind === "step") {
+    const upStep = maps.byKey.get(lineage.stepKey);
+    const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
+    return worker === null ? null : { branch: worker.branch, implWorktreePath: worker.worktree_path, stepKey: upStep!.node_key };
+  }
+  if (lineage.kind === "reviewed_base") {
+    if (lineage.sourceStep.kind === "one") {
+      const upStep = maps.byKey.get(lineage.sourceStep.stepKey);
+      const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
+      if (worker !== null && worker.branch === lineage.branch) {
+        return { branch: lineage.branch, implWorktreePath: worker.worktree_path, stepKey: upStep!.node_key };
+      }
+    }
+    return { branch: lineage.branch, implWorktreePath: null, stepKey: null };
+  }
+  if (lineage.kind === "step_and_base") {
+    const upStep = maps.byKey.get(lineage.stepKey);
+    const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
+    if (worker === null || worker.branch !== lineage.branch) return null;
+    return { branch: lineage.branch, implWorktreePath: worker.worktree_path, stepKey: upStep!.node_key };
+  }
+  return null;
+}
+
+function reviewedWorktreeStepKey(
+  db: Db,
+  projectId: number,
+  reviewStep: TaskNodeDbRow,
+  maps: StepMaps,
+  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+): TaskNodeKey | null {
+  const lineage = resolveStepLineageMemo(reviewStep.node_key, maps, memo);
+  const effectiveLineage: StepUpstreamLineage =
+    reviewStep.base === null
+      ? lineage
+      : { kind: "reviewed_base", branch: reviewStep.base, sourceStep: codeStepRefOf(lineage) };
+  return resolveReviewedTarget(db, projectId, effectiveLineage, maps)?.stepKey ?? null;
 }
 
 const isStepFinished = (step: TaskNodeDbRow): boolean => step.status === "done" || step.status === "cancelled";
 
-/** Whether an active graph may still work in stepKey's worktree: the step is unfinished, or an unfinished downstream step would continue from it. */
 export function graphStillUsesStepWorktree(db: Db, projectId: number, maps: StepMaps, stepKey: TaskNodeKey): boolean {
   const step = maps.byKey.get(stepKey);
   if (step === undefined) return false;
   if (!isStepFinished(step)) return true;
+  const memo = new Map<TaskNodeKey, StepUpstreamLineage>();
   const queue = [...(maps.outgoing.get(stepKey) ?? [])];
-  const visited = new Set<TaskNodeKey>();
-  while (queue.length > 0) {
-    const key = queue.shift()!;
+  const visited = new Set<TaskNodeKey>([stepKey]);
+  let head = 0;
+  while (head < queue.length) {
+    const key = queue[head++]!;
     if (visited.has(key)) continue;
     visited.add(key);
     const n = maps.byKey.get(key);
     if (n === undefined) continue;
-    if (!isStepFinished(n) && continuedUpstreamWorktree(db, projectId, n, maps)?.step.node_key === stepKey) return true;
-    queue.push(...(maps.outgoing.get(key) ?? []));
+    if (!isStepFinished(n)) {
+      if (n.review === 1) {
+        if (reviewedWorktreeStepKey(db, projectId, n, maps, memo) === stepKey) return true;
+      } else if (continuedWorktreeTarget(db, projectId, n, maps, memo)?.step.node_key === stepKey) {
+        return true;
+      }
+    }
+    for (const next of maps.outgoing.get(key) ?? []) {
+      if (!visited.has(next)) queue.push(next);
+    }
   }
   return false;
 }
 
 function resolveReviewPlan(db: Db, input: PlanInput): Extract<StepWorkspacePlan, { kind: "review" }> {
-  const { step } = input;
+  const { graphRow, step } = input;
   if (step.base !== null) return { kind: "review", branch: step.base, implWorktreePath: null };
-  const up = findUpstreamWorktree(db, input);
-  if (up === null) {
+  const resolved = resolveReviewedTarget(db, graphRow.project_id, resolveStepLineage(step.node_key, input), input);
+  if (resolved === null) {
     throw fail(
       "invalid",
       `审查步骤「${step.node_key}」找不到被审分支：上一步没有在 worktree 分支上干活的 Worker（比如在主文件夹里干的）。用 ${HUB_COMMAND} graph patch 给它写 "base": "<被审分支>"`,
     );
   }
-  return { kind: "review", branch: up.worker.branch, implWorktreePath: up.worker.worktree_path };
-}
-
-function chainWorkerIds(step: TaskNodeDbRow, byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>, incoming: KeyAdjacency): Set<number> {
-  const ids = new Set<number>(workerIdsOf(step));
-  let anc: TaskNodeKey | undefined = step.node_key;
-  const visited = new Set<TaskNodeKey>();
-  while (anc !== undefined && !visited.has(anc)) {
-    visited.add(anc);
-    const ancNode = byKey.get(anc);
-    if (ancNode !== undefined) for (const id of workerIdsOf(ancNode)) ids.add(id);
-    const prevs: readonly TaskNodeKey[] = incoming.get(anc) ?? [];
-    anc = prevs.length === 1 ? prevs[0] : undefined;
-  }
-  return ids;
+  return { kind: "review", branch: resolved.branch, implWorktreePath: resolved.implWorktreePath };
 }
 
 export function resolveWorkspacePlan(db: Db, input: PlanInput): StepWorkspacePlan {
-  const { graphRow, step, byKey, incoming } = input;
+  const { graphRow, step } = input;
   if (step.review === 1) return resolveReviewPlan(db, input);
   if (step.base === "main") return { kind: "fresh" };
-  const continued = continuedUpstreamWorktree(db, graphRow.project_id, step, input);
+  const memo = new Map<TaskNodeKey, StepUpstreamLineage>();
+  const lineage = resolveStepLineageMemo(step.node_key, input, memo);
+  const continued = continuedWorktreeTarget(db, graphRow.project_id, step, input, memo);
   if (continued === null) {
-    const reviewed = reviewedBaseUpstream(step.node_key, input);
-    return reviewed === null ? { kind: "fresh" } : { kind: "fork", baseBranch: reviewed };
+    return lineage.kind === "reviewed_base" ? { kind: "fork", baseBranch: lineage.branch } : { kind: "fresh" };
   }
-  const w = continued.worker;
-  if (!continued.forked && w.worktree_path && existsSync(w.worktree_path)) {
-    const chainIds = chainWorkerIds(step, byKey, incoming);
+  const { step: upStep, worker: w } = continued;
+  const contested = isStepWorktreeContestedMemo(db, graphRow.project_id, upStep.node_key, input, memo);
+  if (!contested && w.worktree_path && existsSync(w.worktree_path)) {
+    const ancestorIds = collectAncestorWorkerIds(step.node_key, input);
     const otherUsers = db.all<{ id: number }>("SELECT id FROM workers WHERE worktree_path = ?", w.worktree_path);
-    if (!otherUsers.some((o) => !chainIds.has(o.id))) {
+    if (!otherUsers.some((o) => !ancestorIds.has(o.id))) {
       return { kind: "inherit", fromWorkerId: w.id, worktreePath: w.worktree_path, branch: w.branch, baseCommit: w.base_commit };
     }
   }

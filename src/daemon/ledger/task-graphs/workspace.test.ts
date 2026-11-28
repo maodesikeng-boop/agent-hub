@@ -354,7 +354,6 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
   it("S1/S2/S3: resolveWorkspacePlan, upstreamDeliveredCommit, and graphStillUsesStepWorktree work across multi-round parallel reviews", () => {
     const wt = makeDir("wt-diamond");
     seedWorker(db, { id: 1, branch: "hub/1-impl", worktreePath: wt, baseCommit: "11111111" });
-    seedWorker(db, { id: 4, branch: "hub/1-impl", worktreePath: wt, baseCommit: "11111111" });
 
     const round1 = makeStepMaps([
       { key: "impl", status: "done", workerIds: [1], artifactJson: JSON.stringify({ commit: "abcdef123456" }) },
@@ -372,6 +371,7 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
     expect(upstreamDeliveredCommit(planFor(round1, "fix1"))).toBe("abcdef123456");
     expect(graphStillUsesStepWorktree(db, 1, round1, "impl")).toBe(true);
 
+    seedWorker(db, { id: 4, branch: "hub/1-impl", worktreePath: wt, baseCommit: "11111111" });
     const round2 = makeStepMaps([
       { key: "impl", status: "done", workerIds: [1], artifactJson: JSON.stringify({ commit: "abcdef123456" }) },
       { key: "rev1a", review: true, status: "done", deps: ["impl"] },

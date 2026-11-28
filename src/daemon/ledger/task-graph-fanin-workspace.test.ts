@@ -437,6 +437,7 @@ describe("Task Graph multi-review fan-in workspace inheritance (end-to-end)", ()
       const wFix1 = graphNow(graph.id).nodes.find((n) => n.key === "fix1")!.activeWorkerId!;
       expect(workerRow(wFix1).worktree_path).toBe(impl.worktree_path);
       enqueued.length = 0;
+      db.run("UPDATE actions SET status = 'failed' WHERE type = 'worktree.sync'");
 
       ledger.recoverAfterRestart();
       expect(enqueued.some((a) => a.type === "worktree.sync" && a.params.workerId === wFix1)).toBe(true);
@@ -470,7 +471,11 @@ describe("Task Graph multi-review fan-in workspace inheritance (end-to-end)", ()
       ledger.unarchivePm(lin.pmId);
       expect(ledger.isWorkerCleanable(wImpl)).toBe(false);
 
-      const wRev1 = graphNow(graph.id).nodes.find((n) => n.key === "rev1")!.activeWorkerId!;
+      const wRev1 = ledger.hubCall(lin.sessionId, "worker.start", {
+        graphId: graph.id,
+        node: "rev1",
+        task: "Review after unarchive",
+      }).data.worker.id;
       await prepareWorkspace(wRev1);
       expect(parseReviewTarget(workerRow(wRev1).review_json)?.branch).toBe("feature/renamed-fanin");
 
