@@ -170,56 +170,160 @@ function sameOwnSpaceHunk(a: UnifiedHunk, b: UnifiedHunk): boolean {
   );
 }
 
-function trimMainEdge(candidate: UnifiedHunk, mainHunk: UnifiedHunk): UnifiedHunk | null {
-  if (sameOwnSpaceHunk(candidate, mainHunk)) return null;
-  if (mainHunk.oldCount === 0 || mainHunk.oldCount !== mainHunk.addedLines.length) return candidate;
-  if (candidate.oldCount <= mainHunk.oldCount || candidate.addedLines.length < mainHunk.addedLines.length) return candidate;
+function arrayMatchesAt(haystack: readonly string[], needle: readonly string[], offset: number): boolean {
+  if (offset < 0 || offset + needle.length > haystack.length) return false;
+  for (let i = 0; i < needle.length; i++) {
+    if (haystack[offset + i] !== needle[i]) return false;
+  }
+  return true;
+}
 
-  const mainLen = mainHunk.addedLines.length;
-  if (
-    candidate.oldStart === mainHunk.oldStart &&
-    mainHunk.addedLines.every((line, idx) => candidate.addedLines[idx] === line)
-  ) {
-    return {
-      oldStart: candidate.oldStart + mainHunk.oldCount,
-      oldCount: candidate.oldCount - mainHunk.oldCount,
-      newStart: candidate.newStart + mainLen,
-      newCount: candidate.newCount - mainLen,
-      addedLines: candidate.addedLines.slice(mainLen),
-    };
+function findMatchingSubarrayOffset(
+  haystack: readonly string[],
+  needle: readonly string[],
+  preferredOffset: number,
+  minOffset: number,
+  maxOffset: number,
+): number {
+  if (preferredOffset >= minOffset && preferredOffset <= maxOffset && arrayMatchesAt(haystack, needle, preferredOffset)) {
+    return preferredOffset;
+  }
+  let best = -1;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (let offset = minOffset; offset <= maxOffset; offset++) {
+    if (!arrayMatchesAt(haystack, needle, offset)) continue;
+    const dist = Math.abs(offset - preferredOffset);
+    if (dist < bestDist) {
+      best = offset;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function subtractAlignedMainHunk(candidate: UnifiedHunk, mainHunk: UnifiedHunk): UnifiedHunk[] {
+  const cStart = candidate.oldStart;
+  const cEnd = cStart + candidate.oldCount - 1;
+  const mStart = mainHunk.oldStart;
+  const mEnd = mStart + mainHunk.oldCount - 1;
+  const ovStart = Math.max(cStart, mStart);
+  const ovEnd = Math.min(cEnd, mEnd);
+
+  let excludedAny = false;
+  const out: UnifiedHunk[] = [];
+  let runStart: number | null = null;
+
+  const flushRun = (runEnd: number): void => {
+    if (runStart === null) return;
+    const runLen = runEnd - runStart + 1;
+    const offset = runStart - cStart;
+    out.push({
+      oldStart: runStart,
+      oldCount: runLen,
+      newStart: candidate.newStart + offset,
+      newCount: runLen,
+      addedLines: candidate.addedLines.slice(offset, offset + runLen),
+    });
+    runStart = null;
+  };
+
+  for (let line = cStart; line <= cEnd; line++) {
+    const matchesMain =
+      line >= ovStart &&
+      line <= ovEnd &&
+      candidate.addedLines[line - cStart] === mainHunk.addedLines[line - mStart];
+    if (matchesMain) {
+      excludedAny = true;
+      flushRun(line - 1);
+    } else if (runStart === null) {
+      runStart = line;
+    }
+  }
+  flushRun(cEnd);
+  return excludedAny ? out : [candidate];
+}
+
+function subtractMainHunk(candidate: UnifiedHunk, mainHunk: UnifiedHunk): UnifiedHunk[] {
+  if (sameOwnSpaceHunk(candidate, mainHunk)) return [];
+  if (candidate.oldCount === 0 || mainHunk.oldCount === 0) return [candidate];
+
+  const cStart = candidate.oldStart;
+  const cEnd = cStart + candidate.oldCount - 1;
+  const mStart = mainHunk.oldStart;
+  const mEnd = mStart + mainHunk.oldCount - 1;
+  if (mEnd < cStart || mStart > cEnd) return [candidate];
+
+  if (candidate.oldCount === candidate.addedLines.length && mainHunk.oldCount === mainHunk.addedLines.length) {
+    return subtractAlignedMainHunk(candidate, mainHunk);
   }
 
-  const candidateEnd = candidate.oldStart + candidate.oldCount - 1;
-  const mainEnd = mainHunk.oldStart + mainHunk.oldCount - 1;
-  const suffixOffset = candidate.addedLines.length - mainLen;
-  if (
-    candidateEnd === mainEnd &&
-    mainHunk.addedLines.every((line, idx) => candidate.addedLines[suffixOffset + idx] === line)
-  ) {
-    return {
-      oldStart: candidate.oldStart,
-      oldCount: candidate.oldCount - mainHunk.oldCount,
+  if (mStart < cStart || mEnd > cEnd || candidate.oldCount <= mainHunk.oldCount) return [candidate];
+  const leftOldCount = mStart - cStart;
+  const rightOldCount = cEnd - mEnd;
+  const mLen = mainHunk.addedLines.length;
+
+  if (mLen === 0) {
+    if (candidate.addedLines.length !== leftOldCount + rightOldCount) return [candidate];
+    const out: UnifiedHunk[] = [];
+    if (leftOldCount > 0) {
+      out.push({
+        oldStart: cStart,
+        oldCount: leftOldCount,
+        newStart: candidate.newStart,
+        newCount: leftOldCount,
+        addedLines: candidate.addedLines.slice(0, leftOldCount),
+      });
+    }
+    if (rightOldCount > 0) {
+      out.push({
+        oldStart: mEnd + 1,
+        oldCount: rightOldCount,
+        newStart: candidate.newStart + leftOldCount,
+        newCount: rightOldCount,
+        addedLines: candidate.addedLines.slice(leftOldCount),
+      });
+    }
+    return out;
+  }
+
+  if (candidate.addedLines.length < mLen) return [candidate];
+  const minOffset = leftOldCount === 0 ? 0 : rightOldCount === 0 ? candidate.addedLines.length - mLen : 0;
+  const maxOffset =
+    leftOldCount === 0 ? 0 : rightOldCount === 0 ? candidate.addedLines.length - mLen : candidate.addedLines.length - mLen;
+  const matchOffset = findMatchingSubarrayOffset(candidate.addedLines, mainHunk.addedLines, leftOldCount, minOffset, maxOffset);
+  if (matchOffset === -1) return [candidate];
+
+  const out: UnifiedHunk[] = [];
+  if (leftOldCount > 0) {
+    out.push({
+      oldStart: cStart,
+      oldCount: leftOldCount,
       newStart: candidate.newStart,
-      newCount: candidate.newCount - mainLen,
-      addedLines: candidate.addedLines.slice(0, suffixOffset),
-    };
+      newCount: matchOffset,
+      addedLines: candidate.addedLines.slice(0, matchOffset),
+    });
   }
-
-  return candidate;
+  if (rightOldCount > 0) {
+    const rightNewOffset = matchOffset + mLen;
+    out.push({
+      oldStart: mEnd + 1,
+      oldCount: rightOldCount,
+      newStart: candidate.newStart + rightNewOffset,
+      newCount: candidate.newCount - rightNewOffset,
+      addedLines: candidate.addedLines.slice(rightNewOffset),
+    });
+  }
+  return out;
 }
 
 function subtractMainHunks(containing: readonly UnifiedHunk[], mainHunks?: readonly UnifiedHunk[]): UnifiedHunk[] {
   if (mainHunks === undefined || mainHunks.length === 0) return [...containing];
-  const effective: UnifiedHunk[] = [];
-  for (const hunk of containing) {
-    let trimmed: UnifiedHunk | null = hunk;
-    for (const mainHunk of mainHunks) {
-      if (trimmed === null) break;
-      trimmed = trimMainEdge(trimmed, mainHunk);
-    }
-    if (trimmed !== null) effective.push(trimmed);
+  let pieces: UnifiedHunk[] = [...containing];
+  for (const mainHunk of mainHunks) {
+    pieces = pieces.flatMap((piece) => subtractMainHunk(piece, mainHunk));
+    if (pieces.length === 0) break;
   }
-  return effective;
+  return pieces;
 }
 
 function mergeOldLineIntervals(hunks: readonly UnifiedHunk[]): OldLineInterval[] {

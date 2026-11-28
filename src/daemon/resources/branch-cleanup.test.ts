@@ -328,4 +328,48 @@ describe("createBranchCleanup", () => {
     expect(branchExists("hub/52-part1")).toBe(true);
     expect(run.held.map((h) => h.branch)).toEqual(["hub/52-part1"]);
   });
+
+  it("holds rather than deletes an earlier relay branch when a main-merge conflict kept main's line in the interior of a contiguous hunk", async () => {
+    const lines = (edits: Record<number, string>) =>
+      Array.from({ length: 10 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join("\n") + "\n";
+    writeFileSync(join(repo, "README.md"), lines({}));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "ten lines");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "checkout", "-q", "-b", "hub/54-part1");
+    writeFileSync(join(repo, "README.md"), lines({ 5: "first edit 5" }));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "first edit 5");
+
+    git(repo, "checkout", "-q", "main");
+    writeFileSync(join(repo, "README.md"), lines({ 5: "main edit 5" }));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "main edit 5");
+
+    git(repo, "checkout", "-q", "-b", "hub/55-part2", "hub/54-part1");
+    try {
+      git(repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5.
+    }
+    writeFileSync(join(repo, "README.md"), lines({ 4: "other relay edit 4", 5: "main edit 5", 6: "other relay edit 6" }));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "resolve conflict keeping main line 5 with adjacent edits");
+
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", "hub/55-part2");
+    git(repo, "commit", "-q", "-m", "squash part2");
+
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 54, projectId: 1, branch: "hub/54-part1", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+      { workerId: 55, projectId: 1, branch: "hub/55-part2", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const run = await cleanup.runOnce();
+
+    expect(run.deleted.map((d) => d.branch)).toEqual(["hub/55-part2"]);
+    expect(branchExists("hub/54-part1")).toBe(true);
+    expect(run.held.map((h) => h.branch)).toEqual(["hub/54-part1"]);
+  });
 });

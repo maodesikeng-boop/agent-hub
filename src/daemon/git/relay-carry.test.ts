@@ -148,6 +148,106 @@ describe("relay-carry pure diff contracts", () => {
     ).toBe(true);
   });
 
+  it("excludes main-identical conflict lines in the interior of a contiguous hunk and splits remaining coverage", () => {
+    const file = (hunks: ParsedFileDiff["hunks"]): ParsedFileDiff => ({ path: "target.txt", binary: false, hunks });
+    const ownLine5 = file([{ oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["first edit 5"] }]);
+    const mainLine5 = file([{ oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["main edit 5"] }]);
+
+    // Dropping line 5 to main's exact line while editing surrounding lines 4 and 6 leaves line 5 uncovered.
+    expect(
+      hunksCoverOwnDiff(
+        ownLine5,
+        file([{ oldStart: 4, oldCount: 3, newStart: 4, newCount: 3, addedLines: ["other 4", "main edit 5", "other 6"] }]),
+        mainLine5,
+      ),
+    ).toBe(false);
+
+    // Same interior drop when surrounding line 4 also expands to two lines (non-1-to-1 containing hunk).
+    expect(
+      hunksCoverOwnDiff(
+        ownLine5,
+        file([
+          {
+            oldStart: 4,
+            oldCount: 3,
+            newStart: 4,
+            newCount: 4,
+            addedLines: ["other 4a", "other 4b", "main edit 5", "other 6"],
+          },
+        ]),
+        mainLine5,
+      ),
+    ).toBe(false);
+
+    // Same interior drop when main replaced line 5 with two lines and relay kept both verbatim inside [4..6].
+    expect(
+      hunksCoverOwnDiff(
+        ownLine5,
+        file([
+          {
+            oldStart: 4,
+            oldCount: 3,
+            newStart: 4,
+            newCount: 4,
+            addedLines: ["other 4", "main 5a", "main 5b", "other 6"],
+          },
+        ]),
+        file([{ oldStart: 5, oldCount: 1, newStart: 5, newCount: 2, addedLines: ["main 5a", "main 5b"] }]),
+      ),
+    ).toBe(false);
+
+    // Same interior drop when main touched [4..6] and relay refined 4 and 6 while keeping main's line 5 verbatim.
+    expect(
+      hunksCoverOwnDiff(
+        ownLine5,
+        file([{ oldStart: 4, oldCount: 3, newStart: 4, newCount: 3, addedLines: ["other 4", "main edit 5", "other 6"] }]),
+        file([{ oldStart: 4, oldCount: 3, newStart: 4, newCount: 3, addedLines: ["main 4", "main edit 5", "main 6"] }]),
+      ),
+    ).toBe(false);
+
+    // Same interior drop when main deleted line 5 and relay kept it deleted while editing lines 4 and 6.
+    expect(
+      hunksCoverOwnDiff(
+        ownLine5,
+        file([{ oldStart: 4, oldCount: 3, newStart: 4, newCount: 2, addedLines: ["other 4", "other 6"] }]),
+        file([{ oldStart: 5, oldCount: 1, newStart: 4, newCount: 0, addedLines: [] }]),
+      ),
+    ).toBe(false);
+
+    // Multiple interior main-identical lines inside one hunk leave only the genuinely edited segments covered.
+    const containingMulti = file([
+      { oldStart: 4, oldCount: 5, newStart: 4, newCount: 5, addedLines: ["r4", "main 5", "r6", "main 7", "r8"] },
+    ]);
+    const mainMulti = file([
+      { oldStart: 5, oldCount: 1, newStart: 5, newCount: 1, addedLines: ["main 5"] },
+      { oldStart: 7, oldCount: 1, newStart: 7, newCount: 1, addedLines: ["main 7"] },
+    ]);
+    expect(hunksCoverOwnDiff(ownLine5, containingMulti, mainMulti)).toBe(false);
+    expect(
+      hunksCoverOwnDiff(
+        file([{ oldStart: 7, oldCount: 1, newStart: 7, newCount: 1, addedLines: ["first 7"] }]),
+        containingMulti,
+        mainMulti,
+      ),
+    ).toBe(false);
+    expect(
+      hunksCoverOwnDiff(
+        file([{ oldStart: 6, oldCount: 1, newStart: 6, newCount: 1, addedLines: ["first 6"] }]),
+        containingMulti,
+        mainMulti,
+      ),
+    ).toBe(true);
+
+    // Legitimate conflict resolution that combines/refines line 5 instead of keeping main's line still passes.
+    expect(
+      hunksCoverOwnDiff(
+        ownLine5,
+        file([{ oldStart: 4, oldCount: 3, newStart: 4, newCount: 3, addedLines: ["other 4", "combined 5", "other 6"] }]),
+        mainLine5,
+      ),
+    ).toBe(true);
+  });
+
   it("verifies relay content preservation across a 50-file branch without invoking external diff drivers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-hub-relay-carry-"));
     try {

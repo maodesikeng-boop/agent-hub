@@ -350,6 +350,46 @@ describe("isBranchSquashMergedToMain only trusts a containing ref that carried t
     squashInto(refined.repo, "hub/4-refined", "refined contig (#4)");
     expect(await isBranchSquashMergedToMain(refined.repo, "hub/3-contig", refined.base)).toBe(true);
   });
+
+  it("does not vouch when a main-merge conflict drops the branch line in the interior of a contiguous hunk, but vouches when the conflict line is refined", async () => {
+    const dropped = makeRepo();
+    git(dropped.repo, "checkout", "-q", "-b", "hub/1-interior");
+    commitFiles(dropped.repo, { "README.md": readme({ 5: "first edit 5" }) }, "first edit 5");
+    git(dropped.repo, "checkout", "-q", "main");
+    commitFiles(dropped.repo, { "README.md": readme({ 5: "main edit 5" }) }, "main edit 5");
+    git(dropped.repo, "checkout", "-q", "-b", "hub/2-interior", "hub/1-interior");
+    try {
+      git(dropped.repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5; keep main's line 5 verbatim while editing adjacent lines 4 and 6.
+    }
+    commitFiles(
+      dropped.repo,
+      { "README.md": readme({ 4: "other relay edit 4", 5: "main edit 5", 6: "other relay edit 6" }) },
+      "merge main dropping line 5 inside contiguous hunk",
+    );
+    squashInto(dropped.repo, "hub/2-interior", "interior drop (#2)");
+    expect(await isBranchSquashMergedToMain(dropped.repo, "hub/1-interior", dropped.base)).toBe(false);
+
+    const resolved = makeRepo();
+    git(resolved.repo, "checkout", "-q", "-b", "hub/3-interior");
+    commitFiles(resolved.repo, { "README.md": readme({ 5: "first edit 5" }) }, "first edit 5");
+    git(resolved.repo, "checkout", "-q", "main");
+    commitFiles(resolved.repo, { "README.md": readme({ 5: "main edit 5" }) }, "main edit 5");
+    git(resolved.repo, "checkout", "-q", "-b", "hub/4-interior", "hub/3-interior");
+    try {
+      git(resolved.repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5; combine main and branch edits on line 5 while editing lines 4 and 6.
+    }
+    commitFiles(
+      resolved.repo,
+      { "README.md": readme({ 4: "other relay edit 4", 5: "combined edit 5", 6: "other relay edit 6" }) },
+      "merge main combining line 5 inside contiguous hunk",
+    );
+    squashInto(resolved.repo, "hub/4-interior", "interior combine (#4)");
+    expect(await isBranchSquashMergedToMain(resolved.repo, "hub/3-interior", resolved.base)).toBe(true);
+  });
 });
 
 describe("isBranchSquashMergedToMain never runs repository merge drivers", () => {
