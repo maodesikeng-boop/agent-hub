@@ -511,6 +511,9 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     for (const batch of batches) this.markProcessing(st, batch, at);
     this.forgetWritten(st, batches);
     const errMsg = typeof errorObj.message === "string" ? errorObj.message : "turn/start failed";
+    this.clearTimer(st, "interruptTimer");
+    st.stopRequested = false;
+    st.turnInterrupted = false;
     this.emit(st.id, {
       type: "turn.ended",
       ok: false,
@@ -520,6 +523,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       error: { subtype: "turn_start_error", message: errMsg },
       at,
     });
+    this.resolveInterrupt(st);
     this.afterTurn(st, proc);
     this.settled(st);
   }

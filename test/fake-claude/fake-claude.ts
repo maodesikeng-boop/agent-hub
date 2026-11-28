@@ -138,6 +138,10 @@ export interface FakeScript {
   mcpServers?: unknown[];
   /** 带 cancel_queued 的 interrupt：回执里不列 cancelled（只有 still_queued），被取消的照样各出 command_lifecycle cancelled。 */
   receiptWithoutCancelled?: boolean;
+  /** Hold subsequent user messages in inbox (queued without started) after the first turn completes. */
+  holdQueuedAfterInit?: boolean;
+  /** Delay command_lifecycle(cancelled) emission after control_response so they arrive in separate stdout chunks. */
+  cancelLifecycleDelayMs?: number;
 }
 
 /**
@@ -487,6 +491,7 @@ function assistant(
 }
 
 let currentTurnStartedAt = 0;
+let heldOnce = false;
 
 /** content 为 null：claude 自己开的一轮（selfTurn），turn 是它的剧本；不回显、不数轮数。uuids：开这一轮的消息（command_lifecycle 用）。 */
 async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids: string[] = []): Promise<void> {
@@ -808,7 +813,14 @@ function onLine(line: string): void {
                 : { still_queued: [], cancelled: queued }
               : { still_queued: lifecycle ? queued : [] };
       emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: body } });
-      if (cancel) for (const entry of inbox.splice(0)) emitLifecycle(entry.uuid, "cancelled");
+      if (cancel) {
+        const cancelledEntries = inbox.splice(0);
+        const emitCancelled = () => {
+          for (const entry of cancelledEntries) emitLifecycle(entry.uuid, "cancelled");
+        };
+        if (script.cancelLifecycleDelayMs) setTimeout(emitCancelled, script.cancelLifecycleDelayMs);
+        else emitCancelled();
+      }
       if (interrupting && busy) {
         turnSeq++;
         interruptedMarker();
@@ -830,8 +842,12 @@ function onLine(line: string): void {
   if (script.noInit) return;
   const uuid = typeof msg.uuid === "string" && msg.uuid !== "" ? msg.uuid : undefined;
   emitLifecycle(uuid, "queued");
-  if (busy) inbox.push({ content, ...(uuid === undefined ? {} : { uuid }) });
-  else void runTurn(content, undefined, uuid === undefined ? [] : [uuid]);
+  if (busy || (script.holdQueuedAfterInit && turnSeq === 1 && inbox.length === 0 && !heldOnce)) {
+    if (!busy) heldOnce = true;
+    inbox.push({ content, ...(uuid === undefined ? {} : { uuid }) });
+  } else {
+    void runTurn(content, undefined, uuid === undefined ? [] : [uuid]);
+  }
 }
 
 process.on("SIGINT", () => {

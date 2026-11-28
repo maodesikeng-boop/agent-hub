@@ -24,6 +24,16 @@ import {
 } from "./stop-coordination.ts";
 import { NO_NOTES, type BaseBatch, type BaseProc } from "./driver-helpers.ts";
 import { makeHarness, MemorySessionStore, slowTurn, type Harness } from "./test-helpers.ts";
+import { createLedger } from "../ledger/index.ts";
+import { wireSessionStopHandler } from "../stop-handler.ts";
+import { openTestDb } from "../store/test-helpers.ts";
+import {
+  makeCodexStopHarness,
+  makeOtherAcpVendorHarness,
+  makePiStopHarness,
+  makeSessionRow,
+  type OtherAcpVendor,
+} from "./fake-stop-vendors-fixture.ts";
 
 const FAKE_ACP_AGENT = fileURLToPath(new URL("../../vendors/_common/acp/fixtures/fake-acp-agent.ts", import.meta.url));
 
@@ -483,4 +493,313 @@ describe("Claude interrupt escalation and unchanged ack_only regression (S5, S9)
     expect(AGENT_VENDORS).toContain("kimi");
     expect(AGENT_VENDORS).toContain("opencode");
   });
+});
+
+describe("Claude unstarted batch cancel and post-ack timer regressions", () => {
+  let h: Harness | undefined;
+
+  afterEach(async () => {
+    await h?.cleanup();
+    h = undefined;
+  });
+
+  it("clears post-ack escalation timer and settles ledger when receiptWithoutCancelled delivers command_lifecycle(cancelled) in a later chunk", async () => {
+    const db = openTestDb();
+    const home = mkdtempSync(join(tmpdir(), "bellwood-claude-cancel-ledger-"));
+    let now = 10_000;
+    const ledger = createLedger(db, { now: () => now++, pmHomeRoot: home });
+    const created = ledger.createPm({ name: "PM", mode: "manage_only", persona: "" });
+    const conversationId = created.conversation.id;
+    const sessionId = created.sessionId;
+    const caps = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"];
+
+    h = makeHarness({
+      driver: { interruptGraceMs: 120, interruptPostAckGraceMs: 140, shutdownGraceMs: 100 },
+      script: {
+        capabilities: caps,
+        receiptWithoutCancelled: true,
+        holdQueuedAfterInit: true,
+        cancelLifecycleDelayMs: 30,
+        turns: [{ steps: [{ text: "turn 1 ok" }] }, slowTurn(260)],
+      },
+    });
+    const row = h.addSession({ id: sessionId, conversationId });
+    h.driver.onEvent((id, ev) => ledger.applyDriverEvent(id, ev));
+    const unsubStop = wireSessionStopHandler({
+      ledger,
+      driver: h.driver,
+      setup: { cancel: () => {}, isRunning: () => false },
+      isClosing: () => false,
+      log: () => {},
+    });
+
+    try {
+      const m1 = ledger.postUserMessage({ conversationId, clientId: "c1", text: "turn 1" }).messageId;
+      await h.driver.send(row.id, { messageIds: [m1], source: "user", text: "turn 1" });
+      await h.waitFor("turn.ended", (e) => e.messageIds.includes(m1));
+      await ledger.settleDriverEvents();
+
+      const m2 = ledger.postUserMessage({ conversationId, clientId: "c2", text: "queued before start" }).messageId;
+      await h.driver.send(row.id, { messageIds: [m2], source: "user", text: "queued before start" });
+      await h.waitFor("message.delivered", (e) => e.messageIds.includes(m2));
+      await ledger.settleDriverEvents();
+      expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity).toBe("working");
+
+      ledger.requestStop(conversationId);
+      expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity).toBe("stopping");
+
+      await h.waitFor("message.cancelled", (e) => e.messageIds.includes(m2));
+      await ledger.settleDriverEvents();
+      // Wait for wireSessionStopHandler microtask to invoke settleStop after interrupt resolves.
+      await Promise.resolve();
+      await Promise.resolve();
+      await ledger.settleDriverEvents();
+
+      expect(h.driver.isBusy(row.id)).toBe(false);
+      expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity).toBe("idle");
+
+      // Turn 3 runs longer than interruptPostAckGraceMs (140ms) and must not be killed by a leaked timer from Turn 2.
+      const m3 = ledger.postUserMessage({ conversationId, clientId: "c3", text: "turn 3" }).messageId;
+      await h.driver.send(row.id, { messageIds: [m3], source: "user", text: "turn 3" });
+      const turn3Ended = await h.waitFor("turn.ended", (e) => e.messageIds.includes(m3));
+      expect(turn3Ended).toMatchObject({ ok: true, interrupted: false, messageIds: [m3] });
+      expect(h.of("session.exited")).toEqual([]);
+      expect(h.log().filter((e) => e.kind === "signal")).toEqual([]);
+    } finally {
+      unsubStop();
+      ledger.close();
+      db.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
+describe("S9 cross-vendor stop convergence (codex, pi, cursor, deepseek, kimi, opencode)", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+
+  afterEach(async () => {
+    for (const fn of cleanups.splice(0)) await fn();
+  });
+
+  it("CodexDriver: settles active turn, no-op idle stop, pre-spawn abort, SIGKILL escalation, and #failTurnStart interrupt cleanup", async () => {
+    // 1. Pre-spawn prepareLaunch abort
+    let releasePrepare!: () => void;
+    let prepareStarted!: () => void;
+    const prepareReady = new Promise<void>((resolve) => {
+      prepareStarted = resolve;
+    });
+    const preSpawn = makeCodexStopHarness({
+      prepareLaunch: async (row) => {
+        prepareStarted();
+        await new Promise<void>((resolve) => {
+          releasePrepare = resolve;
+        });
+        return { promptFile: preSpawn.promptFile, env: {}, fingerprint: `fp-${row.id}` };
+      },
+    });
+    cleanups.push(() => preSpawn.cleanup());
+    const preRow = makeSessionRow(911 as SessionId, "codex", preSpawn.cwd);
+    preSpawn.store.add(preRow);
+    const sendPre = preSpawn.driver.send(preRow.id, { messageIds: [1], source: "user", text: "cancel pre-spawn" });
+    await prepareReady;
+    const stopPre = preSpawn.driver.interrupt(preRow.id);
+    releasePrepare();
+    await Promise.all([sendPre, stopPre]);
+    expect(preSpawn.events.some((e) => e.type === "message.delivered")).toBe(false);
+    expect(preSpawn.events.some((e) => e.type === "message.cancelled" && e.messageIds.includes(1))).toBe(true);
+    expect(preSpawn.driver.isBusy(preRow.id)).toBe(false);
+
+    // 2. Active turn stop + idle no-op
+    const active = makeCodexStopHarness({ script: { turns: [{ waitForInterrupt: true }, { replyText: "turn2" }] } });
+    cleanups.push(() => active.cleanup());
+    const activeRow = makeSessionRow(912 as SessionId, "codex", active.cwd);
+    active.store.add(activeRow);
+    await active.driver.send(activeRow.id, { messageIds: [2], source: "user", text: "wait" });
+    await active.waitFor("agent.text_delta");
+    await active.driver.interrupt(activeRow.id);
+    const ended = await active.waitFor("turn.ended", (e) => e.messageIds.includes(2));
+    expect(ended.interrupted).toBe(true);
+    expect(active.driver.isRunning(activeRow.id)).toBe(true);
+    expect(active.driver.isBusy(activeRow.id)).toBe(false);
+    await active.driver.interrupt(activeRow.id);
+    expect(active.driver.isRunning(activeRow.id)).toBe(true);
+
+    // 3. Unresponsive ignoreInterrupt + ignoreSigint escalates to SIGKILL
+    const hung = makeCodexStopHarness({
+      driver: { interruptGraceMs: 80, shutdownGraceMs: 100 },
+      script: { ignoreSigint: true, turns: [{ ignoreInterrupt: true }] },
+    });
+    cleanups.push(() => hung.cleanup());
+    const hungRow = makeSessionRow(913 as SessionId, "codex", hung.cwd);
+    hung.store.add(hungRow);
+    await hung.driver.send(hungRow.id, { messageIds: [3], source: "user", text: "hang" });
+    await hung.waitFor("agent.text_delta");
+    await hung.driver.interrupt(hungRow.id);
+    const exited = await hung.waitFor("session.exited");
+    expect(exited.reason).toBe("interrupt");
+    if (process.platform !== "win32") expect(exited.signal).toBe("SIGKILL");
+
+    // 4. Pre-existing defect regression: #failTurnStart clears interruptTimer and resolves interrupt waiters
+    const gateDir = realpathSync(mkdtempSync(join(tmpdir(), "bellwood-codex-failstart-")));
+    cleanups.push(async () => rmSync(gateDir, { recursive: true, force: true }));
+    const gateFile = join(gateDir, "release-turn-start");
+    const failStart = makeCodexStopHarness({
+      driver: { interruptGraceMs: 120, shutdownGraceMs: 100 },
+      script: { turns: [{ holdTurnStartFile: gateFile, failTurnStartError: "turn/start boom" }, { replyText: "recovered" }] },
+    });
+    cleanups.push(() => failStart.cleanup());
+    const failRow = makeSessionRow(914 as SessionId, "codex", failStart.cwd);
+    failStart.store.add(failRow);
+    await failStart.driver.send(failRow.id, { messageIds: [4], source: "user", text: "fail start" });
+    await failStart.waitFor("message.delivered", (e) => e.messageIds.includes(4));
+    const interruptPromise = failStart.driver.interrupt(failRow.id);
+    writeFileSync(gateFile, "go", "utf8");
+    await interruptPromise;
+    const failedTurn = await failStart.waitFor("turn.ended", (e) => e.messageIds.includes(4));
+    expect(failedTurn.ok).toBe(false);
+    expect(failStart.driver.isRunning(failRow.id)).toBe(true);
+    // Run a second turn past interruptGraceMs (120ms) to confirm no leaked interruptTimer sends SIGINT.
+    const nextGate = join(gateDir, "turn-2");
+    writeFileSync(nextGate, "go", "utf8");
+    await failStart.driver.send(failRow.id, { messageIds: [5], source: "user", text: "turn 2" });
+    const turn2 = await failStart.waitFor("turn.ended", (e) => e.messageIds.includes(5));
+    expect(turn2.ok).toBe(true);
+    expect(failStart.log().filter((e) => e.kind === "signal")).toEqual([]);
+  }, 15_000);
+
+  it("PiDriver: settles active turn, no-op idle stop, pre-spawn abort, and SIGKILL escalation", async () => {
+    // 1. Pre-spawn prepareLaunch abort
+    let releasePrepare!: () => void;
+    let prepareStarted!: () => void;
+    const prepareReady = new Promise<void>((resolve) => {
+      prepareStarted = resolve;
+    });
+    const preSpawn = makePiStopHarness({
+      prepareLaunch: async (row) => {
+        prepareStarted();
+        await new Promise<void>((resolve) => {
+          releasePrepare = resolve;
+        });
+        return { promptFile: preSpawn.promptFile, env: {}, fingerprint: `fp-${row.id}` };
+      },
+    });
+    cleanups.push(() => preSpawn.cleanup());
+    const preRow = makeSessionRow(921 as SessionId, "pi", preSpawn.cwd);
+    preSpawn.store.add(preRow);
+    const sendPre = preSpawn.driver.send(preRow.id, { messageIds: [1], source: "user", text: "cancel pre-spawn" });
+    await prepareReady;
+    const stopPre = preSpawn.driver.interrupt(preRow.id);
+    releasePrepare();
+    await Promise.all([sendPre, stopPre]);
+    expect(preSpawn.events.some((e) => e.type === "message.delivered")).toBe(false);
+    expect(preSpawn.events.some((e) => e.type === "message.cancelled" && e.messageIds.includes(1))).toBe(true);
+    expect(preSpawn.driver.isBusy(preRow.id)).toBe(false);
+
+    // 2. Active turn abort + idle no-op
+    const active = makePiStopHarness({ script: { turns: [{ waitForAbort: true, thinkingDeltas: ["thinking"] }] } });
+    cleanups.push(() => active.cleanup());
+    const activeRow = makeSessionRow(922 as SessionId, "pi", active.cwd);
+    active.store.add(activeRow);
+    await active.driver.send(activeRow.id, { messageIds: [2], source: "user", text: "wait" });
+    await active.waitFor("agent.thinking");
+    await active.driver.interrupt(activeRow.id);
+    const ended = await active.waitFor("turn.ended", (e) => e.messageIds.includes(2));
+    expect(ended.interrupted).toBe(true);
+    expect(active.driver.isRunning(activeRow.id)).toBe(true);
+    expect(active.driver.isBusy(activeRow.id)).toBe(false);
+    await active.driver.interrupt(activeRow.id);
+    expect(active.driver.isRunning(activeRow.id)).toBe(true);
+
+    // 3. Unresponsive ignoreAbort + ignoreSigint escalates to SIGKILL
+    const hung = makePiStopHarness({
+      driver: { interruptGraceMs: 80, shutdownGraceMs: 100 },
+      script: { ignoreSigint: true, turns: [{ waitForAbort: true, ignoreAbort: true, thinkingDeltas: ["stuck"] }] },
+    });
+    cleanups.push(() => hung.cleanup());
+    const hungRow = makeSessionRow(923 as SessionId, "pi", hung.cwd);
+    hung.store.add(hungRow);
+    await hung.driver.send(hungRow.id, { messageIds: [3], source: "user", text: "hang" });
+    await hung.waitFor("agent.thinking");
+    await hung.driver.interrupt(hungRow.id);
+    const exited = await hung.waitFor("session.exited");
+    expect(exited.reason).toBe("interrupt");
+    if (process.platform !== "win32") expect(exited.signal).toBe("SIGKILL");
+  }, 15_000);
+
+  it.each(["cursor", "deepseek", "kimi", "opencode"] as const satisfies readonly OtherAcpVendor[])(
+    "ACP vendor %s: settles active turn, idle no-op, pre-spawn abort, and SIGKILL escalation",
+    async (vendor) => {
+      // 1. Pre-spawn prepareLaunch abort
+      let releasePrepare!: () => void;
+      let prepareStarted!: () => void;
+      const prepareReady = new Promise<void>((resolve) => {
+        prepareStarted = resolve;
+      });
+      const preSpawn = makeOtherAcpVendorHarness(vendor, {
+        prepareLaunch: async (row) => {
+          prepareStarted();
+          await new Promise<void>((resolve) => {
+            releasePrepare = resolve;
+          });
+          return { promptFile: preSpawn.promptFile, env: {}, fingerprint: `fp-${row.id}` };
+        },
+      });
+      cleanups.push(() => preSpawn.cleanup());
+      const preRow = makeSessionRow(931 as SessionId, vendor, preSpawn.cwd);
+      preSpawn.store.add(preRow);
+      const sendPre = preSpawn.driver.send(preRow.id, { messageIds: [1], source: "user", text: "pre-spawn" });
+      await prepareReady;
+      const stopPre = preSpawn.driver.interrupt(preRow.id);
+      releasePrepare();
+      await Promise.all([sendPre, stopPre]);
+      expect(preSpawn.events.some((e) => e.type === "message.delivered")).toBe(false);
+      expect(preSpawn.events.some((e) => e.type === "message.cancelled" && e.messageIds.includes(1))).toBe(true);
+      expect(preSpawn.driver.isBusy?.(preRow.id)).toBe(false);
+
+      // 2. Active turn cancel + post-cancel straggler suppression + idle no-op
+      const active = makeOtherAcpVendorHarness(vendor, {
+        script: {
+          turns: [
+            {
+              textChunks: ["working"],
+              waitForCancel: true,
+              postCancelToolUpdate: { toolCallId: "late_1", name: "run_command", title: "sleep 60", kind: "execute" },
+            },
+          ],
+        },
+      });
+      cleanups.push(() => active.cleanup());
+      const activeRow = makeSessionRow(932 as SessionId, vendor, active.cwd);
+      active.store.add(activeRow);
+      await active.driver.send(activeRow.id, { messageIds: [2], source: "user", text: "run" });
+      await active.waitFor("agent.text_delta");
+      await active.driver.interrupt(activeRow.id);
+      const ended = await active.waitFor("turn.ended", (e) => e.messageIds.includes(2));
+      expect(ended.interrupted).toBe(true);
+      await active.waitFor("commands.changed", (e) => e.commands.some((c) => c.name === "post-cancel-fence"));
+      const lateTools = active.events.slice(active.events.indexOf(ended) + 1).filter((e) => e.type === "agent.tool");
+      expect(lateTools).toEqual([]);
+      expect(active.driver.isRunning?.(activeRow.id)).toBe(true);
+      expect(active.driver.isBusy?.(activeRow.id)).toBe(false);
+      await active.driver.interrupt(activeRow.id);
+      expect(active.driver.isRunning?.(activeRow.id)).toBe(true);
+
+      // 3. Unresponsive ignoreCancel + ignoreSigint escalates to SIGKILL
+      const hung = makeOtherAcpVendorHarness(vendor, {
+        interruptGraceMs: 80,
+        shutdownGraceMs: 100,
+        script: { ignoreSigint: true, turns: [{ textChunks: ["hung"], waitForCancel: true, ignoreCancel: true }] },
+      });
+      cleanups.push(() => hung.cleanup());
+      const hungRow = makeSessionRow(933 as SessionId, vendor, hung.cwd);
+      hung.store.add(hungRow);
+      await hung.driver.send(hungRow.id, { messageIds: [3], source: "user", text: "hang" });
+      await hung.waitFor("agent.text_delta");
+      await hung.driver.interrupt(hungRow.id);
+      const exited = await hung.waitFor("session.exited");
+      expect(exited.reason).toBe("interrupt");
+      if (process.platform !== "win32") expect(exited.signal).toBe("SIGKILL");
+    },
+    15_000,
+  );
 });

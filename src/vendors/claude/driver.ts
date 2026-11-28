@@ -527,12 +527,22 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         if (response.subtype === "success") {
           const cancelled = new Set(interruptCancelled(response.response));
           this.#cancelBatches(st, proc, st.inFlight.filter((b) => !b.started && cancelled.has(b.uuid)), at);
+          // Wait for command_lifecycle(cancelled) when receiptWithoutCancelled omits cancelled uuids for unstarted batches.
+          const awaitingUnstartedCancel =
+            proc.capabilities.has("msg_lifecycle_v1") &&
+            !st.selfTurn &&
+            st.inFlight.length > 0 &&
+            st.inFlight.every((b) => !b.started);
           if (this.busy(st)) {
-            armPostAckInterruptEscalation(st, proc, this.opts.interruptPostAckGraceMs, (s, p) =>
-              this.sigintForInterrupt(s, p),
+            armPostAckInterruptEscalation(
+              st,
+              proc,
+              this.opts.interruptPostAckGraceMs,
+              (s, p) => this.sigintForInterrupt(s, p),
+              (s) => this.busy(s) && s.stopRequested,
             );
           }
-          this.resolveInterrupt(st);
+          if (!awaitingUnstartedCancel) this.resolveInterrupt(st);
         } else this.sigintForInterrupt(st, proc);
         return;
       }
@@ -586,6 +596,10 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.inFlight = st.inFlight.filter((b) => !batches.includes(b));
     this.releaseUntaken(st, batches, untakenReleaseCause(proc.closing, true), at);
     if (!this.busy(st)) {
+      this.clearTimer(st, "interruptTimer");
+      st.stopRequested = false;
+      st.turnInterrupted = false;
+      this.resolveInterrupt(st);
       this.afterTurn(st, proc);
       this.settled(st);
     }

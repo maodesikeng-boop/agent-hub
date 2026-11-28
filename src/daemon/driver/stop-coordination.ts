@@ -108,11 +108,13 @@ export function armPostAckInterruptEscalation<
   proc: TProc,
   postAckGraceMs: number,
   onEscalate: (st: TState, proc: TProc) => void,
+  shouldEscalate?: (st: TState, proc: TProc) => boolean,
 ): void {
   if (st.interruptTimer) clearTimeout(st.interruptTimer);
   st.interruptTimer = setTimeout(() => {
     st.interruptTimer = null;
     if (st.proc !== proc || proc.closing !== null) return;
+    if (shouldEscalate && !shouldEscalate(st, proc)) return;
     onEscalate(st, proc);
   }, postAckGraceMs);
 }
