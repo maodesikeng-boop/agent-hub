@@ -3,8 +3,28 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveAffectedTests, type VitestProjectSpec } from "./related-graph.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
-import { ALWAYS_RUN_TESTS, findReferencingFiles, listChangedFiles, referenceNeedles, sandboxSkipReport, selectRelatedTargets } from "./test-related.ts";
+import {
+  ALWAYS_RUN_TESTS,
+  findReferencingFiles,
+  formatExplainLines,
+  listChangedFiles,
+  referenceNeedles,
+  sandboxSkipReport,
+} from "./test-related.ts";
+
+const TEST_PROJECTS: readonly VitestProjectSpec[] = [
+  {
+    name: "node",
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts", "test/**/*.test.ts"],
+    exclude: ["src/web/**"],
+  },
+  {
+    name: "web",
+    include: ["src/web/**/*.test.{ts,tsx}"],
+  },
+];
 
 describe("scripts/test-related.ts", () => {
   const dirs: string[] = [];
@@ -80,40 +100,77 @@ describe("scripts/test-related.ts", () => {
     expect(findReferencingFiles(["docs/ui-polish/baseline/style-brief.md"], sources)).toEqual(["test/ui-polish/rubric.test.ts"]);
   });
 
-  it("keeps package manifests and lockfiles out of vitest related targets and skips src/ runtime propagation while keeping tests, scripts/, other changes, and guards", () => {
-    const sources = new Map([
-      ["scripts/staged-lockfile.ts", 'readFileSync(join(REPO_ROOT, "pnpm-lock.yaml"), "utf8")'],
-      ["scripts/stage-runtime-common.ts", 'readFileSync(join(REPO_ROOT, "package.json"), "utf8")'],
-      ["src/daemon/self-reload.ts", 'join(options.repoDir, "package.json")'],
-      ["src/daemon/self-reload.test.ts", 'writeFileSync(join(root, "package.json"), "{}")'],
-      ["src/vendors/deepseek/driver.ts", 'join(dshHome, "profiles", DEEPSEEK_PROFILE, "package.json")'],
-      ["test/smoke/setup.ts", 'readFileSync("pnpm-lock.yaml", "utf8")'],
-      ["src/web/App.tsx", "export {}"],
+  it("keeps package manifests and lockfiles scoped to referencing tests, scripts/, other changes, and guards without triggering fullSuite", () => {
+    const baseSources = new Map([
+      ["scripts/staged-lockfile.ts", 'export const lock = "pnpm-lock.yaml";\n'],
+      ["scripts/staged-lockfile.test.ts", 'import { lock } from "./staged-lockfile.ts";\nvoid lock;\n'],
+      ["scripts/stage-runtime-common.ts", 'export const pkg = "package.json";\n'],
+      ["scripts/stage-runtime-common.test.ts", 'import { pkg } from "./stage-runtime-common.ts";\nvoid pkg;\n'],
+      ["src/daemon/self-reload.ts", 'export const p = "package.json";\n'],
+      ["src/daemon/self-reload.test.ts", 'export const f = "package.json";\n'],
+      ["src/vendors/deepseek/driver.ts", 'export const p = "package.json";\n'],
+      ["src/vendors/deepseek/driver.test.ts", 'import { p } from "./driver.ts";\nvoid p;\n'],
+      ["test/smoke/setup.ts", 'export const s = "pnpm-lock.yaml";\n'],
+      ["src/web/App.tsx", "export const app = 1;\n"],
+      ["src/web/App.test.tsx", 'import { app } from "./App.tsx";\nvoid app;\n'],
+      ["src/direct-dependencies.test.ts", "export {};\n"],
     ]);
-    const { linked, targets } = selectRelatedTargets(
-      ["package.json", "pnpm-lock.yaml", ".agents/skills/poteto-mode/scripts/package.json", "src/web/App.tsx"],
-      sources,
-    );
-    expect(linked).toEqual(["scripts/stage-runtime-common.ts", "scripts/staged-lockfile.ts", "src/daemon/self-reload.test.ts"]);
-    expect(targets).not.toContain("package.json");
-    expect(targets).not.toContain("pnpm-lock.yaml");
-    expect(targets).not.toContain(".agents/skills/poteto-mode/scripts/package.json");
-    expect(targets).not.toContain("src/daemon/self-reload.ts");
-    expect(targets).not.toContain("src/vendors/deepseek/driver.ts");
-    expect(targets).not.toContain("test/smoke/setup.ts");
-    expect(targets).toContain("src/web/App.tsx");
-    expect(targets).toContain("scripts/stage-runtime-common.ts");
-    expect(targets).toContain("scripts/staged-lockfile.ts");
-    expect(targets).toContain("src/daemon/self-reload.test.ts");
-    expect(targets).toContain("src/direct-dependencies.test.ts");
-    for (const guard of ALWAYS_RUN_TESTS) expect(targets).toContain(guard);
+    const currentSources = new Map(baseSources);
+    currentSources.set("src/web/App.tsx", "export const app = 2;\n");
+
+    const result = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["package.json", "pnpm-lock.yaml", ".agents/skills/poteto-mode/scripts/package.json", "src/web/App.tsx"],
+      projects: TEST_PROJECTS,
+      alwaysRunTests: ["src/direct-dependencies.test.ts"],
+      sources: currentSources,
+      readBaseFile: (p) => baseSources.get(p),
+    });
+
+    expect(result.fullSuite).toBe(false);
+    expect(result.linkedByPath).toEqual(["scripts/stage-runtime-common.ts", "scripts/staged-lockfile.ts", "src/daemon/self-reload.test.ts"]);
+    expect(result.testFiles).toEqual([
+      "scripts/stage-runtime-common.test.ts",
+      "scripts/staged-lockfile.test.ts",
+      "src/daemon/self-reload.test.ts",
+      "src/direct-dependencies.test.ts",
+      "src/web/App.test.tsx",
+    ]);
+    expect(result.testFiles).not.toContain("src/vendors/deepseek/driver.test.ts");
   });
 
-  it("keeps vitest and vite config files in vitest related targets so config edits still run the full suite", () => {
-    const { targets } = selectRelatedTargets(["vitest.config.ts", "vitest.eval.config.ts", "vite.config.ts"], new Map());
-    expect(targets).toContain("vitest.config.ts");
-    expect(targets).toContain("vitest.eval.config.ts");
-    expect(targets).toContain("vite.config.ts");
+  it("triggers fullSuite when vitest, vite, or tsconfig files change", () => {
+    const sources = new Map([["src/a.test.ts", "export {};\n"]]);
+    for (const cfg of ["vitest.config.ts", "vitest.eval.config.ts", "vite.config.ts", "tsconfig.json"]) {
+      const result = resolveAffectedTests({
+        repoRoot: REPO_ROOT,
+        baseRef: "origin/main",
+        changedFiles: [cfg],
+        projects: TEST_PROJECTS,
+        alwaysRunTests: [],
+        sources,
+        readBaseFile: () => undefined,
+      });
+      expect(result.fullSuite, cfg).toBe(true);
+    }
+  });
+
+  it("formats causal explanation lines for --explain including always-run guards", () => {
+    const lines = formatExplainLines(
+      {
+        fullSuite: false,
+        linkedByPath: [],
+        testFiles: ["src/a.test.ts", "src/guard.test.ts"],
+        totalTestFiles: 2,
+        reasons: new Map([["src/a.test.ts", [{ changedFile: "src/a.ts", symbol: "foo", path: ["src/a.ts", "src/a.test.ts"] }]]]),
+      },
+      ["src/guard.test.ts"],
+    );
+    expect(lines).toEqual([
+      "  src/a.test.ts  <- src/a.ts#foo (src/a.ts -> src/a.test.ts)",
+      "  src/guard.test.ts  [always-run guard]",
+    ]);
   });
 
   it("always runs guard tests that exist", () => {
