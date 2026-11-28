@@ -38,6 +38,38 @@ export interface ScheduleRunSummary {
   replyPreview: string | null;
 }
 
+export interface ScheduleEditInput {
+  name?: string;
+  prompt?: string;
+  daily?: string;
+  everyMinutes?: number;
+}
+
+export interface ScheduleEditPlan {
+  changed: boolean;
+  frequencyChanged: boolean;
+  name: string;
+  kind: ScheduleKind;
+  atTime: string | null;
+  everyMinutes: number | null;
+  prompt: string;
+  nextRunAt: number;
+}
+
+/**
+ * Precondition: patch supplies at least one mutable field (name, prompt, daily, or everyMinutes) and never both daily and everyMinutes.
+ * Postcondition: returns { ok: true, plan } with normalized fields; preserves current.nextRunAt when frequency is unchanged,
+ * recomputes nextRunAt = nextRunAfter(nextFrequency, nowMs) strictly after nowMs when frequency changes, and sets changed to false
+ * when every resulting field matches current. Returns { ok: false, error } on invalid name, prompt, or frequency.
+ */
+export function planScheduleEdit(
+  _current: Pick<ScheduleRecord, "name" | "kind" | "atTime" | "everyMinutes" | "prompt" | "nextRunAt" | "enabled">,
+  _patch: ScheduleEditInput,
+  _nowMs: number,
+): { ok: true; plan: ScheduleEditPlan } | { ok: false; error: string } {
+  throw new Error("Not implemented");
+}
+
 const DAILY_TIME = /^([01][0-9]|2[0-3]):([0-5][0-9])$/;
 const EVERY = /^([1-9][0-9]*)([mh])$/;
 const DURATION = /^(?:([1-9][0-9]*)h)?(?:([1-9][0-9]*)m)?(?:([1-9][0-9]*)s)?$/;
