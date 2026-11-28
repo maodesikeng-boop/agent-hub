@@ -1,6 +1,6 @@
-import { AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
+import { AGY_HANDOVER_MAX_SINGLE_MESSAGE_BYTES } from "./limits.ts";
 
 export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
 export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
