@@ -28,7 +28,7 @@ import type { SelfReloadStatus } from "./api.ts";
 import type { AskDetail, PendingAsk } from "./pending-asks.ts";
 import type { PmWatchId, PmWatchRecord } from "./pm-watch.ts";
 import type { ScheduleId, ScheduleRecord, ScheduleRunSummary } from "./schedule.ts";
-import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
+import type { AgentVendor, VendorAvailability } from "./vendors.ts";
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
 import { HUB_COMMAND } from "./names.ts";
@@ -347,13 +347,12 @@ export interface PatchTaskGraphSpecInput {
 export const ASK_CARD_WHERE = "卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走";
 export const ASK_CARD_TELL_USER = "跟用户说“卡在上面，直接点选”，别让用户去右栏找";
 
-const EXAMPLE_REVIEW_VENDOR = AGENT_VENDORS.find((vendor) => vendor !== DEFAULT_AGENT_VENDOR) ?? DEFAULT_AGENT_VENDOR;
 const EXAMPLE_BRIEF = `…（最多 ${hubLimitMaximum("step.brief")}）`;
 export const TASK_GRAPH_CREATE_JSON_HINT =
-  `{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"${EXAMPLE_BRIEF}"},{"key":"review","title":"…","brief":"${EXAMPLE_BRIEF}","review":true,"vendor":"${EXAMPLE_REVIEW_VENDOR}"}]}`;
+  `{"title":"…","goal":"…","steps":[{"key":"step1","title":"…","brief":"${EXAMPLE_BRIEF}"},{"key":"step2","title":"…","brief":"${EXAMPLE_BRIEF}"}]}`;
 
 export const TASK_GRAPH_PATCH_JSON_HINT =
-  `{"goal":"…","addSteps":[{"key":"qa","title":"…","brief":"${EXAMPLE_BRIEF}","deps":["review"]}],"updateSteps":[{"key":"review","brief":"${EXAMPLE_BRIEF}"}],"removeSteps":["old"],"skipSteps":["polish"],"doneSteps":[]}`;
+  `{"goal":"…","addSteps":[{"key":"step3","title":"…","brief":"${EXAMPLE_BRIEF}","deps":["step2"]}],"updateSteps":[{"key":"step2","brief":"${EXAMPLE_BRIEF}"}],"removeSteps":["old"],"skipSteps":["optional"],"doneSteps":[]}`;
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 

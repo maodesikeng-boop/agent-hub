@@ -21,7 +21,6 @@ import {
 import { insertEdgeRow, insertStepRow, publishGraphIn } from "./store.ts";
 import { formatGraphText, unlockedNoteOf } from "./text.ts";
 import type { PmCaller, TaskGraphCtx, TaskGraphDbRow } from "./types.ts";
-import { sameVendorReviewHint } from "./workspace.ts";
 
 function parseCreateSpec(raw: unknown): { spec: CreateTaskGraphSpecInput; list: CreateTaskGraphNodeInput[]; sequential: boolean } {
   const spec = parseSpecJson<CreateTaskGraphSpecInput>(raw, createSpecSchema, "create", {
@@ -120,9 +119,8 @@ export function createIn(
   const progress = recomputeGraphProgressIn(g, p, graphRow, caller, context);
   const graph = publishGraphIn(g, p, graphRow.id, "task_graph.created");
   const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
-  const reviewHint = sameVendorReviewHint(g.db, graphRow.id, caller.vendor);
   return {
-    text: `已创建${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
+    text: `已创建${formatGraphText(graph, true, { ...g, pmVendor: caller.vendor })}${progressNote !== "" ? `\n${progressNote}` : ""}`,
     data: { graph },
   };
 }

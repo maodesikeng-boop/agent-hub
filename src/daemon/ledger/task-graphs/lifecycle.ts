@@ -280,7 +280,8 @@ export function cancelGraph(g: TaskGraphCtx, graphId: TaskGraphId, input: Cancel
 
 type GraphBranches = ReturnType<typeof collectGraphBranches>;
 
-function assertNoOpenPrs(db: Db, graphRow: TaskGraphDbRow, branches: GraphBranches, graphPrs: Readonly<Record<string, WorkerPr>>): void {
+function openPrNote(db: Db, graphRow: TaskGraphDbRow, branches: GraphBranches, graphPrs: Readonly<Record<string, WorkerPr>> | undefined): string {
+  if (graphPrs === undefined) return "";
   const openPrs = new Map<string, string>();
   const noteOpen = (pr: WorkerPr | undefined, where: string) => {
     if (pr === undefined || pr.state.toUpperCase() !== "OPEN" || openPrs.has(pr.url)) return;
@@ -288,11 +289,7 @@ function assertNoOpenPrs(db: Db, graphRow: TaskGraphDbRow, branches: GraphBranch
   };
   for (const b of branches) noteOpen(graphPrs[b.branch], `节点「${b.nodeKey}」分支 ${b.branch}`);
   for (const u of collectGraphPrUrls(db, graphRow)) noteOpen(graphPrs[u.prUrl], `节点「${u.nodeKey}」补记的 PR`);
-  if (openPrs.size === 0) return;
-  throw fail(
-    "conflict",
-    `任务图 #${graphRow.id} 还有未合并（OPEN）的 PR：${[...openPrs.values()].join("；")}。请合并后再调 ${HUB_COMMAND} graph finish ${graphRow.id} --stdin；若确认不合并直接结束，请加 --unmerged-ok`,
-  );
+  return openPrs.size === 0 ? "" : `\n注意：以下 PR 仍处于未合并状态：${[...openPrs.values()].join("；")}。`;
 }
 
 function reportLinks(branches: GraphBranches, graphPrs: Readonly<Record<string, WorkerPr>> | undefined, nodeRows: readonly TaskNodeDbRow[]): RouterReportLink[] {
@@ -337,7 +334,7 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   assertAllSettled(g, graphRow, nodeRows);
   const branches = collectGraphBranches(g.db, graphRow);
   const graphPrs = context?.graphPrs;
-  if (args.unmergedOk !== true && graphPrs !== undefined) assertNoOpenPrs(g.db, graphRow, branches, graphPrs);
+  const openPrsText = openPrNote(g.db, graphRow, branches, graphPrs);
   const links = reportLinks(branches, graphPrs, nodeRows);
   const report = g.router.reportIn(
     p,
@@ -354,7 +351,7 @@ export function finishIn(g: TaskGraphCtx, p: Pending, caller: PmCaller, args: Hu
   stopQueuedDeliveryNotesIn(g, p, graphRow.conversation_id, graphRow.id);
   const graph = publishGraphIn(g, p, graphRow.id);
   return {
-    text: `任务图 #${graph.id}「${graph.title}」已结束（completed），交付摘要已同步至总助（汇报 #${report.data.item.id}）。`,
+    text: `任务图 #${graph.id}「${graph.title}」已结束（completed），交付摘要已同步至总助（汇报 #${report.data.item.id}）。${openPrsText}`,
     data: { graph, reportItem: report.data.item },
   };
 }

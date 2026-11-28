@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { sessionLaunchDir } from "../shared/paths.ts";
-import { TASK_GRAPH_SKILL_NAME, taskGraphSkillMarkdown } from "../shared/task-graph-skill.ts";
+import { TASK_GRAPH_MANUAL_SUMMARY, TASK_GRAPH_SKILL_NAME, taskGraphSkillMarkdown } from "../shared/task-graph-skill.ts";
 import { writeFileAtomicSyncWithRetry } from "./platform/index.ts";
 
 function joinSkillPath(base: string, ...parts: string[]): string {
@@ -42,7 +42,7 @@ export function taskGraphManualNote(launchDir: string | undefined, sessionId: nu
     launchDir === undefined
       ? `运行 \`${HUB_COMMAND} help graph\``
       : `\`${taskGraphSkillFile(sessionLaunchDir(launchDir, sessionId))}\`（也可以 \`${HUB_COMMAND} help graph\`）`;
-  return `任务图手册（建图、改图、换人、审查的做法）：${where}`;
+  return `任务图手册（${TASK_GRAPH_MANUAL_SUMMARY}）：${where}`;
 }
 
 export function removeProductSkills(sessionDir: string): void {

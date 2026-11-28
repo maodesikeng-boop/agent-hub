@@ -33,7 +33,7 @@ Read-path compatibility in `src/shared/task-graph-compat.ts` maps legacy payload
 To keep the base PM system prompt short (`src/daemon/prompt.ts`) and avoid over-splitting trivial one-step requests:
 
 - Simple single-turn questions and direct low-risk actions stay in the PM or a single `hub worker start`.
-- Multi-step or cross-vendor workflows load the built-in `fusa-task-graph` skill written per PM session at `state/launch/<sessionId>/skills/fusa-task-graph/SKILL.md` (`src/daemon/task-graph-skill.ts` and `src/shared/task-graph-skill.ts`, capped under 5,000 tokens).
+- Multi-step workflows load the built-in `fusa-task-graph` skill written per PM session at `state/launch/<sessionId>/skills/fusa-task-graph/SKILL.md` (`src/daemon/task-graph-skill.ts` and `src/shared/task-graph-skill.ts`, capped under 5,000 tokens).
 - Receipts from `hub graph create`, `hub graph patch`, and `hub status` include the manual path, and session renewal (`src/daemon/ledger/loaded-skills.ts`) carries loaded skill bodies across handovers.
 
 ## Decisions, user blockers, and deliverables
@@ -59,6 +59,6 @@ hub graph patch <graphId> --stdin                 # add, rewire, or prune pendin
 hub graph ask --node <key> --option "..." --stdin # attach options and summary to a waiting gate
 hub graph decide <key> --choice "..."             # record an explicit user decision from chat
 hub graph skip --node <key>                       # skip a step and unblock dependents
-hub graph finish <graphId>                        # close an all-done graph after final acceptance
+hub graph finish <graphId>                        # close an all-done graph with a delivery summary (notes any open PRs without blocking)
 hub graph cancel <graphId>                        # cancel an active graph
 ```

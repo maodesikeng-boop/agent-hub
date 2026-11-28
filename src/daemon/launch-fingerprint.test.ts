@@ -9,10 +9,10 @@ import { projectContext, workerContext } from "./test-helpers.ts";
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 // Updating any pinned hash restarts live sessions and triggers a one-time full cache write per session.
-const PINNED_HUB_USAGE_PROMPT_SHA = "9797314a92cc191b893691205517467950c19fcd67a6f0e3da9728580bb564c7";
-const PINNED_SKILL_CATALOG_SHA = "379bde7b4a3182276ba37d31a17c960c6a44cbaef1596d041c49fddfa83605e9";
-const PINNED_PM_FINGERPRINT_PROMPT_SHA = "02a63cb23aae592f7a092e634e2693f71d89536b6544d3e0b5bf42f0a1950aee";
-const PINNED_WORKER_FINGERPRINT_PROMPT_SHA = "942dd91a204c6fc75b13a8389fcd37c9d93c50c4ae7c557e292060c9054731a9";
+const PINNED_HUB_USAGE_PROMPT_SHA = "4841b5863981b8fdec5af0397e46d9afc5db2e630e02ab9e9ee6291da3f72d47";
+const PINNED_SKILL_CATALOG_SHA = "f9de34b4ffdfa1328f458de709cfe2a8da8cb701c26e8ff4db7408f8434be5a2";
+const PINNED_PM_FINGERPRINT_PROMPT_SHA = "440590b7ef5c474fe9208bd8cf79e644721279cfa2e85383350fdf4b5c4ee893";
+const PINNED_WORKER_FINGERPRINT_PROMPT_SHA = "6ab0c56f491cc6eb27aa76660c0812deeb925b180b45f8eff91cf9ab59725bc4";
 
 const CACHE_REBUILD_HINT =
   "Changing this prefix restarts every live session and forces a one-time full prompt-cache rebuild; if intentional, update the hash and state the cache cost in the PR description.";
