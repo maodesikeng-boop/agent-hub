@@ -18,6 +18,7 @@ import { verifyComposerLayout } from "./verify-composer-layout.ts";
 import { verifyProjectListHeader } from "./verify-list-header.ts";
 import { verifyShellWidths } from "./verify-shell-widths.ts";
 import { verifySettingsKeyboard } from "./verify-settings-keyboard.ts";
+import { verifyCardCorners } from "./verify-card-corners.ts";
 import { verifyTabFocus } from "./verify-tab-focus.ts";
 import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
@@ -250,6 +251,7 @@ async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir
     phase("发消息等假 claude 回复、截图");
 
     await verifyTabFocus(page);
+    await verifyCardCorners(page);
     if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
     phase("Work panel tabs: no focus mark on press, outline by keyboard");
     return trip;
