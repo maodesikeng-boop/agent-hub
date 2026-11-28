@@ -67,6 +67,7 @@ export const HUB_COMMANDS = [
   "schedule.add",
   "schedule.list",
   "schedule.show",
+  "schedule.edit",
   "schedule.pause",
   "schedule.resume",
   "schedule.remove",
@@ -112,6 +113,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "schedule.add": ["pm"],
   "schedule.list": ["pm"],
   "schedule.show": ["pm"],
+  "schedule.edit": ["pm"],
   "schedule.pause": ["pm"],
   "schedule.resume": ["pm"],
   "schedule.remove": ["pm"],
@@ -139,6 +141,7 @@ export const HUB_HELP_ONLY_COMMANDS = {
   "ask.list": `看全部在等用户的卡：${HUB_COMMAND} ask list`,
   "ask.show": `看全文：${HUB_COMMAND} ask show <编号>`,
   "schedule.show": `看全文和最近几次结果：${HUB_COMMAND} schedule show <编号>`,
+  "schedule.edit": `原地修改：${HUB_COMMAND} schedule edit <编号> [--name <名>] [--daily HH:MM | --every 30m|2h] [--stdin]`,
   "watch.add": `要等外部条件（比如检查通过）再动手，用 ${HUB_COMMAND} watch add 让后台盯着，结果出来叫醒你（用法见 ${HUB_COMMAND} help）。`,
   "watch.list": `看在盯的条件：${HUB_COMMAND} watch list`,
   "watch.close": `不用再盯了：${HUB_COMMAND} watch close <编号>`,
@@ -205,6 +208,7 @@ export interface HubArgsMap {
   "schedule.add": { name: string; prompt: string; daily?: string; everyMinutes?: number };
   "schedule.list": Record<string, never>;
   "schedule.show": { scheduleId: ScheduleId };
+  "schedule.edit": { scheduleId: ScheduleId; name?: string; prompt?: string; daily?: string; everyMinutes?: number };
   "schedule.pause": { scheduleId: ScheduleId };
   "schedule.resume": { scheduleId: ScheduleId };
   "schedule.remove": { scheduleId: ScheduleId };
@@ -500,6 +504,7 @@ interface HubDataMap {
   "schedule.add": { schedule: ScheduleRecord };
   "schedule.list": { schedules: ScheduleRecord[] };
   "schedule.show": { schedule: ScheduleRecord; runs: ScheduleRunSummary[] };
+  "schedule.edit": { schedule: ScheduleRecord };
   "schedule.pause": { schedule: ScheduleRecord };
   "schedule.resume": { schedule: ScheduleRecord };
   "schedule.remove": { schedule: ScheduleRecord };
