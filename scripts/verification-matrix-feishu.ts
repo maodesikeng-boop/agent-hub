@@ -1,6 +1,14 @@
 // Derives packaged desktop Feishu CLI paths from actual packaging scripts and Tauri configs so README cannot drift.
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import {
+  FEISHU_CLI_ENTRY_FILE,
+  FEISHU_SOURCE_SUBDIR,
+  REPO_ROOT,
+  SOURCE_FEISHU_ENTRY_RELATIVE_PATH,
+  STAGED_DAEMON_SRC_DIR,
+  STAGED_FEISHU_ENTRY_RELATIVE_PATH,
+} from "./stage-runtime-common.ts";
 
 export interface PackagedFeishuLayout {
   macAppPath: string;
@@ -29,15 +37,58 @@ function requireMatch(source: string, pattern: RegExp, description: string): str
 }
 
 export function readPackagedFeishuLayout(repoRoot: string): PackagedFeishuLayout {
-  const sourceFeishuEntry = "src/feishu/main.ts";
-  if (!existsSync(join(repoRoot, sourceFeishuEntry))) {
-    throw new Error(`Missing Feishu CLI entrypoint: ${sourceFeishuEntry}`);
+  const stageCommon = readFileSync(join(repoRoot, "scripts", "stage-runtime-common.ts"), "utf8");
+  const declaredStagedSrcDir = requireMatch(
+    stageCommon,
+    /export\s+const\s+STAGED_DAEMON_SRC_DIR\s*=\s*["']([^"']+)["']/,
+    "STAGED_DAEMON_SRC_DIR",
+  );
+  const feishuSubdir = requireMatch(
+    stageCommon,
+    /export\s+const\s+FEISHU_SOURCE_SUBDIR\s*=\s*["']([^"']+)["']/,
+    "FEISHU_SOURCE_SUBDIR",
+  );
+  const feishuEntryFile = requireMatch(
+    stageCommon,
+    /export\s+const\s+FEISHU_CLI_ENTRY_FILE\s*=\s*["']([^"']+)["']/,
+    "FEISHU_CLI_ENTRY_FILE",
+  );
+  const daemonSubdirs = requireMatch(stageCommon, /const\s+DAEMON_SOURCE_SUBDIRS\s*=\s*\[([^\]]+)\]/, "DAEMON_SOURCE_SUBDIRS");
+  const hasFeishuSubdir =
+    new RegExp(`\\bFEISHU_SOURCE_SUBDIR\\b|["']${feishuSubdir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(daemonSubdirs);
+  if (!hasFeishuSubdir) {
+    throw new Error(`scripts/stage-runtime-common.ts DAEMON_SOURCE_SUBDIRS must include "${feishuSubdir}"`);
+  }
+  const copyTargetExpr = requireMatch(
+    stageCommon,
+    /copyFilteredSourceTree\(\s*join\(repoRoot,\s*["']src["'],\s*sub\),\s*join\(daemonOutDir,\s*([^,]+),\s*sub\)\s*\)/,
+    "stageDaemonTree copyFilteredSourceTree destination",
+  ).trim();
+  let actualStagedSrcDir: string;
+  if (copyTargetExpr === "STAGED_DAEMON_SRC_DIR") {
+    actualStagedSrcDir = declaredStagedSrcDir;
+  } else {
+    const literalMatch = /^["']([^"']+)["']$/.exec(copyTargetExpr);
+    if (!literalMatch?.[1]) {
+      throw new Error(`Unsupported stageDaemonTree destination expression "${copyTargetExpr}"`);
+    }
+    actualStagedSrcDir = literalMatch[1];
   }
 
-  const stageCommon = readFileSync(join(repoRoot, "scripts", "stage-runtime-common.ts"), "utf8");
-  const daemonSubdirs = requireMatch(stageCommon, /const\s+DAEMON_SOURCE_SUBDIRS\s*=\s*\[([^\]]+)\]/, "DAEMON_SOURCE_SUBDIRS");
-  if (!/["']feishu["']/.test(daemonSubdirs)) {
-    throw new Error('scripts/stage-runtime-common.ts DAEMON_SOURCE_SUBDIRS must include "feishu"');
+  const sourceFeishuEntry = `src/${feishuSubdir}/${feishuEntryFile}`;
+  const stagedFeishuEntry = `${actualStagedSrcDir}/${feishuSubdir}/${feishuEntryFile}`;
+  if (resolve(repoRoot) === resolve(REPO_ROOT)) {
+    const expectedSource = `src/${FEISHU_SOURCE_SUBDIR}/${FEISHU_CLI_ENTRY_FILE}`;
+    const expectedStaged = `${STAGED_DAEMON_SRC_DIR}/${FEISHU_SOURCE_SUBDIR}/${FEISHU_CLI_ENTRY_FILE}`;
+    if (sourceFeishuEntry !== SOURCE_FEISHU_ENTRY_RELATIVE_PATH || sourceFeishuEntry !== expectedSource) {
+      throw new Error(`Feishu source entry mismatch: ${sourceFeishuEntry} vs ${SOURCE_FEISHU_ENTRY_RELATIVE_PATH}`);
+    }
+    if (stagedFeishuEntry !== STAGED_FEISHU_ENTRY_RELATIVE_PATH || stagedFeishuEntry !== expectedStaged) {
+      throw new Error(`Feishu staged entry mismatch: ${stagedFeishuEntry} vs ${STAGED_FEISHU_ENTRY_RELATIVE_PATH}`);
+    }
+  }
+  if (!existsSync(join(repoRoot, sourceFeishuEntry))) {
+    throw new Error(`Missing Feishu CLI entrypoint: ${sourceFeishuEntry}`);
   }
 
   const macBuild = readFileSync(join(repoRoot, "scripts", "build-mac-app.sh"), "utf8");
@@ -99,10 +150,10 @@ export function readPackagedFeishuLayout(repoRoot: string): PackagedFeishuLayout
     macAppPath: `/Applications/${macAppName}`,
     macRuntimeRelativeDir: `${macContentsSeg}/${macResourcesSeg}/${macRuntimeSeg}`,
     macNodeRelativePath,
-    macFeishuEntryRelativePath: `${macDaemonDir}/${sourceFeishuEntry}`,
+    macFeishuEntryRelativePath: `${macDaemonDir}/${stagedFeishuEntry}`,
     winInstallDirEnv: `${winInstallRoot}\\${productName}`,
     winNodeRelativePath: `${winNodeResource.replace(/\//g, "\\")}\\${winNodeExe}`,
-    winFeishuEntryRelativePath: `${winDaemonResource.replace(/\//g, "\\")}\\${sourceFeishuEntry.replace(/\//g, "\\")}`,
+    winFeishuEntryRelativePath: `${winDaemonResource.replace(/\//g, "\\")}\\${stagedFeishuEntry.replace(/\//g, "\\")}`,
     sourceFeishuEntryRelativePath: sourceFeishuEntry,
   };
 }

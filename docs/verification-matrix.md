@@ -78,8 +78,11 @@ Static workflows and benches configured in the repository (having a configured s
 
 ## Reproduce and update
 
+Offline `check` validates schema, commit-bound run references, workflow configs, Markdown sync, and packaged Feishu commands without network access. Pass `--verify-runs` to also query GitHub Actions metadata (`head_sha`, workflow path, and passing job runner platforms) for every recorded CI run.
+
 ```sh
 node scripts/verification-matrix.ts check
+node scripts/verification-matrix.ts check --verify-runs
 node scripts/verification-matrix.ts render --write
 node scripts/verification-matrix.ts ingest-tester --run <run-record.json> --write
 ```

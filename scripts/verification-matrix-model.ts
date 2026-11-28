@@ -130,8 +130,68 @@ export interface MatrixValidationProblem {
 }
 
 export const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/;
-export const PLACEHOLDER_VALUE_RE = /^(?:unknown|n\/a|na|none|null|undefined|tbd|latest|unverified|manual|ok|passed|local|-|\?)$/i;
+export const PLACEHOLDER_VALUE_RE = /^(?:unknown|n\/a|na|none|null|undefined|tbd|latest|unverified|manual|ok|passed|local|placeholder|-|\?)$/i;
 export const FORBIDDEN_REFERENCE_RE = new RegExp(`\\b(?:${["open", "claw"].join("")}|${["mag", "pie"].join("")})\\b`, "i");
+const GITHUB_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const MATRIX_LINK_TARGET_RE = /verification-matrix(?:\.(?:md|json))?(?:$|[/?#])/i;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function isValidReleaseRefForVersion(ref: string, version: string): boolean {
+  const trimmed = ref.trim();
+  if (trimmed === "" || /^(?:main|master|HEAD|develop)$/i.test(trimmed)) return false;
+  if (COMMIT_SHA_RE.test(trimmed)) return true;
+  return new RegExp(`^v${escapeRegex(version)}(?:-rc\\.[1-9]\\d*)?$`).test(trimmed);
+}
+
+export function extractMatrixLinkTargets(markdown: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const record = (raw: string) => {
+    const target = raw.trim().replace(/^<|>$/g, "");
+    if (!target || seen.has(target)) return;
+    if (MATRIX_LINK_TARGET_RE.test(target)) {
+      seen.add(target);
+      found.push(target);
+    }
+  };
+  for (const match of markdown.matchAll(/\]\(([^)\s]+)\)/g)) record(match[1]!);
+  for (const match of markdown.matchAll(/^\s*\[[^\]]+\]:\s*(\S+)/gm)) record(match[1]!);
+  for (const match of markdown.matchAll(/href=["']([^"']+)["']/gi)) record(match[1]!);
+  for (const match of markdown.matchAll(/https?:\/\/[^\s)\]>'"。，；：]+/g)) record(match[0]!);
+  return found;
+}
+
+export function validateRenderedReleaseMatrixLinks(
+  renderedDownloads: string,
+  opts: { repo: string; ref: string },
+): string[] {
+  const problems: string[] = [];
+  const repo = opts.repo.trim();
+  const ref = opts.ref.trim();
+  if (!GITHUB_REPO_RE.test(repo)) {
+    problems.push(`Release downloads repo must be owner/name, got "${repo}"`);
+    return problems;
+  }
+  const targets = extractMatrixLinkTargets(renderedDownloads);
+  if (targets.length === 0) {
+    problems.push("Release downloads template must include a pinned link to docs/verification-matrix.md");
+    return problems;
+  }
+  const expectedRe = new RegExp(
+    `^https://github\\.com/${escapeRegex(repo)}/blob/${escapeRegex(ref)}/docs/verification-matrix\\.(?:md|json)(?:#[A-Za-z0-9_.-]+)?$`,
+  );
+  for (const target of targets) {
+    if (!expectedRe.test(target)) {
+      problems.push(
+        `Release downloads matrix link "${target}" must point to release ref "${ref}" on "${repo}" (expected https://github.com/${repo}/blob/${ref}/docs/verification-matrix.md), not a floating branch or another ref`,
+      );
+    }
+  }
+  return problems;
+}
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\b(?:t|u|a)-[A-Za-z0-9._-]{20,}/g,
@@ -391,8 +451,11 @@ export function renderVerificationMatrixMarkdown(matrix: VerificationMatrix): st
     "",
     "## Reproduce and update",
     "",
+    "Offline `check` validates schema, commit-bound run references, workflow configs, Markdown sync, and packaged Feishu commands without network access. Pass `--verify-runs` to also query GitHub Actions metadata (`head_sha`, workflow path, and passing job runner platforms) for every recorded CI run.",
+    "",
     "```sh",
     "node scripts/verification-matrix.ts check",
+    "node scripts/verification-matrix.ts check --verify-runs",
     "node scripts/verification-matrix.ts render --write",
     "node scripts/verification-matrix.ts ingest-tester --run <run-record.json> --write",
     "```",

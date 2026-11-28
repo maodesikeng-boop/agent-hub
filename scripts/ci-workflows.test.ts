@@ -371,6 +371,7 @@ describe(".github/workflows", () => {
     for (const required of [
       "scripts/verification-matrix-feishu.ts",
       "scripts/verification-matrix-model.ts",
+      "scripts/verification-matrix-runs.ts",
       "scripts/build-mac-app.sh",
       "scripts/stage-mac-runtime.ts",
       "scripts/stage-win-runtime.ts",

@@ -34,6 +34,8 @@ on:
       - "scripts/verification-matrix.ts"
       - "scripts/verification-matrix-feishu.ts"
       - "scripts/verification-matrix-model.ts"
+      - "scripts/verification-matrix-runs.ts"
+      - "scripts/verification-matrix-runs.test.ts"
       - "scripts/verification-matrix.test.ts"
       - "scripts/stage-runtime-common.ts"
       - "scripts/stage-mac-runtime.ts"
@@ -86,7 +88,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Release script unit tests
-        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts scripts/verification-matrix.test.ts
+        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts scripts/verification-matrix.test.ts scripts/verification-matrix-runs.test.ts
       - name: Version sources, CHANGELOG.md, and verification matrix agree
         run: node scripts/release-assets.ts check
       - name: Plan the tag

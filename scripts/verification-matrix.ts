@@ -1,11 +1,11 @@
 // Invariant: every registered vendor in AGENT_VENDORS x every platform in VERIFICATION_PLATFORMS has exactly one cell;
 // static workflow configs never substitute for commit-bound run records, and rendered Markdown matches JSON byte-for-byte.
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import writeFileAtomic from "write-file-atomic";
-import { parse as parseYaml } from "yaml";
+import { UPDATE_RELEASE_REPO } from "../src/shared/limits.ts";
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor } from "../src/shared/vendors.ts";
 import type { VendorEndpointSupport } from "../test/mock-llm/types.ts";
 import { VENDOR_MOCK_ADAPTERS } from "../test/mock-llm/vendors.ts";
@@ -37,6 +37,7 @@ import {
   parseVerificationMatrix,
   redactText,
   renderVerificationMatrixMarkdown,
+  validateRenderedReleaseMatrixLinks,
   type FakeCliOfflineCell,
   type GapCell,
   type LiveServiceCell,
@@ -53,6 +54,19 @@ import {
   type VerificationTier,
   type WorkflowRealCliPlatformMap,
 } from "./verification-matrix-model.ts";
+import {
+  defaultGitHubRunFetcher,
+  parseGitHubRunUrl,
+  readWorkflowPlatforms,
+  readWorkflowRealCliPlatforms,
+  readWorkflowRealCliVendors,
+  scanWorkflows,
+  verifyRecordedRunsOnline,
+  type GitHubRunFetcher,
+  type GitHubRunRef,
+  type GitHubWorkflowJobMetadata,
+  type GitHubWorkflowRunMetadata,
+} from "./verification-matrix-runs.ts";
 
 export {
   VERIFICATION_FIELD_MAX_CHARS,
@@ -62,13 +76,23 @@ export {
   VERIFICATION_MAX_SURFACES,
   VERIFICATION_PLATFORMS,
   VERIFICATION_TIERS,
+  defaultGitHubRunFetcher,
   packagedFeishuCommands,
+  parseGitHubRunUrl,
   parseVerificationMatrix,
   readPackagedFeishuLayout,
+  readWorkflowPlatforms,
+  readWorkflowRealCliPlatforms,
+  readWorkflowRealCliVendors,
   renderVerificationMatrixMarkdown,
   validateFeishuQuickStartDocs,
+  verifyRecordedRunsOnline,
   type FakeCliOfflineCell,
   type GapCell,
+  type GitHubRunFetcher,
+  type GitHubRunRef,
+  type GitHubWorkflowJobMetadata,
+  type GitHubWorkflowRunMetadata,
   type LiveServiceCell,
   type MatrixValidationCode,
   type MatrixValidationProblem,
@@ -94,98 +118,6 @@ const TRACEABLE_LIVE_REF_RE = /^(?:https:\/\/\S+|tester:[^:\s]+:model\.turn\.[a-
 
 const isStaticWorkflowPath = (ref: string): boolean => STATIC_WORKFLOW_PATH_RE.test(ref.trim());
 const isWorkflowFilename = (source: string): boolean => /\.ya?ml$/i.test(source.trim());
-
-interface ParsedWorkflowJob {
-  "runs-on"?: string | string[];
-  env?: Record<string, unknown>;
-  steps?: Array<{ env?: Record<string, unknown> }>;
-}
-
-interface ParsedWorkflow {
-  env?: Record<string, unknown>;
-  jobs?: Record<string, ParsedWorkflowJob>;
-}
-
-function platformsFromRunsOn(runsOn: string | string[] | undefined): VerificationPlatform[] {
-  const labels = Array.isArray(runsOn) ? runsOn : typeof runsOn === "string" ? [runsOn] : [];
-  const found = new Set<VerificationPlatform>();
-  for (const label of labels) {
-    const lower = label.toLowerCase();
-    if (lower.startsWith("ubuntu") || lower.includes("linux")) found.add("linux");
-    else if (lower.startsWith("windows")) found.add("windows");
-    else if (lower.startsWith("macos")) found.add("macos");
-  }
-  return [...found].sort();
-}
-
-function collectEnvRealCli(env: Record<string, unknown> | undefined, target: Set<AgentVendor>, file: string): void {
-  const raw = env?.["BELLWOOD_REQUIRE_REAL_CLI"];
-  if (typeof raw !== "string" || raw.trim() === "") return;
-  for (const part of raw.split(",")) {
-    const vendor = part.trim();
-    if (vendor === "") continue;
-    if (!isAgentVendor(vendor)) {
-      throw new Error(`Workflow ${file} declares unknown vendor "${vendor}" in BELLWOOD_REQUIRE_REAL_CLI`);
-    }
-    target.add(vendor);
-  }
-}
-
-function scanWorkflows(workflowsDir: string): {
-  realCliVendors: Record<string, readonly AgentVendor[]>;
-  platforms: Record<string, readonly VerificationPlatform[]>;
-  realCliPlatforms: Record<string, Partial<Record<VerificationPlatform, readonly AgentVendor[]>>>;
-} {
-  const realCliVendors: Record<string, readonly AgentVendor[]> = {};
-  const platforms: Record<string, readonly VerificationPlatform[]> = {};
-  const realCliPlatforms: Record<string, Partial<Record<VerificationPlatform, readonly AgentVendor[]>>> = {};
-  const files = readdirSync(workflowsDir).filter((n) => n.endsWith(".yml") || n.endsWith(".yaml")).sort();
-  for (const file of files) {
-    const parsed = parseYaml(readFileSync(join(workflowsDir, file), "utf8")) as ParsedWorkflow | null;
-    if (!parsed || typeof parsed !== "object") continue;
-    const wfVendors = new Set<AgentVendor>();
-    const wfPlatforms = new Set<VerificationPlatform>();
-    const byPlatform: Partial<Record<VerificationPlatform, Set<AgentVendor>>> = {};
-    const topEnvVendors = new Set<AgentVendor>();
-    collectEnvRealCli(parsed.env, topEnvVendors, file);
-    for (const v of topEnvVendors) wfVendors.add(v);
-
-    for (const job of Object.values(parsed.jobs ?? {})) {
-      if (!job || typeof job !== "object") continue;
-      const jobPlatforms = platformsFromRunsOn(job["runs-on"]);
-      for (const p of jobPlatforms) wfPlatforms.add(p);
-      const jobVendors = new Set<AgentVendor>(topEnvVendors);
-      collectEnvRealCli(job.env, jobVendors, file);
-      for (const step of job.steps ?? []) collectEnvRealCli(step?.env, jobVendors, file);
-      for (const v of jobVendors) wfVendors.add(v);
-      if (jobVendors.size > 0) {
-        for (const p of jobPlatforms) {
-          byPlatform[p] ??= new Set<AgentVendor>();
-          for (const v of jobVendors) byPlatform[p]!.add(v);
-        }
-      }
-    }
-    if (wfPlatforms.size > 0) platforms[file] = [...wfPlatforms].sort();
-    if (wfVendors.size > 0) realCliVendors[file] = [...wfVendors].sort();
-    const mapped = Object.fromEntries(
-      Object.entries(byPlatform).map(([p, set]) => [p, [...set!].sort()]),
-    ) as Partial<Record<VerificationPlatform, readonly AgentVendor[]>>;
-    if (Object.keys(mapped).length > 0) realCliPlatforms[file] = mapped;
-  }
-  return { realCliVendors, platforms, realCliPlatforms };
-}
-
-export function readWorkflowRealCliVendors(workflowsDir: string): Readonly<Record<string, readonly AgentVendor[]>> {
-  return scanWorkflows(workflowsDir).realCliVendors;
-}
-
-export function readWorkflowPlatforms(workflowsDir: string): Readonly<Record<string, readonly VerificationPlatform[]>> {
-  return scanWorkflows(workflowsDir).platforms;
-}
-
-export function readWorkflowRealCliPlatforms(workflowsDir: string): WorkflowRealCliPlatformMap {
-  return scanWorkflows(workflowsDir).realCliPlatforms;
-}
 
 function addProblem(problems: MatrixValidationProblem[], path: string, code: MatrixValidationCode, message: string): void {
   problems.push({ path, code, message });
@@ -331,7 +263,22 @@ function validateLiveCell(
   if (cell.verifiedAt && !isValidIsoDate(cell.verifiedAt)) {
     addProblem(problems, `${path}.verifiedAt`, "invalid_date", `Invalid ISO date "${cell.verifiedAt}"`);
   }
-  if (isStaticWorkflowPath(cell.evidenceRef) || !TRACEABLE_LIVE_REF_RE.test(cell.evidenceRef.trim())) {
+  const testerRefMatch = TESTER_CELL_REF_RE.exec(cell.evidenceRef.trim());
+  const rawFragment = testerRefMatch?.[4];
+  let decodedFragment = rawFragment;
+  if (rawFragment) {
+    try {
+      decodedFragment = decodeURIComponent(rawFragment);
+    } catch {
+      decodedFragment = rawFragment;
+    }
+  }
+  if (
+    isStaticWorkflowPath(cell.evidenceRef) ||
+    !TRACEABLE_LIVE_REF_RE.test(cell.evidenceRef.trim()) ||
+    (decodedFragment !== undefined &&
+      (PLACEHOLDER_VALUE_RE.test(decodedFragment.trim()) || PLACEHOLDER_VALUE_RE.test(basename(decodedFragment.trim()))))
+  ) {
     addProblem(problems, `${path}.evidenceRef`, "unverified_run_evidence", `live_service evidenceRef "${cell.evidenceRef}" must be a traceable run artifact`);
   } else {
     const matched = validRuns.some(
@@ -562,6 +509,69 @@ export function validateVerificationMatrix(
   return problems;
 }
 
+function isExistingRegularFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isAbsoluteArtifactPath(raw: string): boolean {
+  return isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw);
+}
+
+function encodeArtifactRefSegments(relPath: string): string {
+  return relPath
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function resolveVerifiedEvidenceArtifact(
+  rawItem: string,
+  flowId: string,
+  opts: { evidenceBaseDir?: string; fileExists?: (filePath: string) => boolean },
+): string {
+  const trimmed = rawItem.trim();
+  if (trimmed === "" || PLACEHOLDER_VALUE_RE.test(trimmed)) {
+    throw new Error(`RunRecord evidence artifact "${rawItem}" for passing turn ${flowId} is a placeholder or empty`);
+  }
+  const fileExists = opts.fileExists ?? isExistingRegularFile;
+  const sanitizedFlowDir = flowId.replace(/[^\w.@-]/g, "_");
+  const baseDir = opts.evidenceBaseDir ? resolve(opts.evidenceBaseDir) : process.cwd();
+  const candidates: string[] = [];
+  if (isAbsoluteArtifactPath(trimmed)) {
+    candidates.push(trimmed);
+  } else {
+    if (trimmed.split(/[\\/]/).includes("..")) {
+      throw new Error(`RunRecord evidence artifact "${rawItem}" for passing turn ${flowId} must not escape its run directory`);
+    }
+    candidates.push(join(baseDir, trimmed), join(baseDir, sanitizedFlowDir, trimmed));
+  }
+  const foundPath = candidates.find((candidate) => fileExists(candidate));
+  if (!foundPath) {
+    throw new Error(`RunRecord evidence artifact "${trimmed}" for passing turn ${flowId} does not exist`);
+  }
+  const fileName = basename(foundPath.replace(/\\/g, "/"));
+  if (!fileName || PLACEHOLDER_VALUE_RE.test(fileName)) {
+    throw new Error(`RunRecord evidence artifact "${trimmed}" for passing turn ${flowId} is a placeholder filename`);
+  }
+  let publicRel = fileName;
+  if (opts.evidenceBaseDir) {
+    const flowRoot = join(baseDir, sanitizedFlowDir);
+    const relFromFlow = relative(flowRoot, foundPath);
+    const relFromBase = relative(baseDir, foundPath);
+    if (relFromFlow && !relFromFlow.startsWith("..") && !isAbsolute(relFromFlow)) publicRel = relFromFlow;
+    else if (relFromBase && !relFromBase.startsWith("..") && !isAbsolute(relFromBase)) publicRel = relFromBase;
+  }
+  const encoded = encodeArtifactRefSegments(publicRel);
+  if (!encoded) throw new Error(`RunRecord evidence artifact "${trimmed}" for passing turn ${flowId} produced an empty ref`);
+  return encoded;
+}
+
 export function ingestTesterRunRecord(
   matrix: VerificationMatrix,
   record: RunRecord,
@@ -569,11 +579,19 @@ export function ingestTesterRunRecord(
     platformByInstance: Readonly<Record<InstanceRole, VerificationPlatform>>;
     recordedAt: string;
     commitKeyByInstance?: Partial<Record<InstanceRole, string>>;
+    evidenceBaseDir?: string;
+    fileExists?: (filePath: string) => boolean;
   },
 ): VerificationMatrix {
   if (!isValidIsoDate(opts.recordedAt)) throw new Error(`Invalid recordedAt date "${opts.recordedAt}"`);
-  if (!record || typeof record !== "object" || typeof record.runId !== "string" || record.runId.trim() === "") {
-    throw new Error("Invalid RunRecord: missing runId");
+  if (
+    !record ||
+    typeof record !== "object" ||
+    typeof record.runId !== "string" ||
+    record.runId.trim() === "" ||
+    /[\s:#]/.test(record.runId)
+  ) {
+    throw new Error("Invalid RunRecord: missing or malformed runId");
   }
   if (!Array.isArray(record.results) || !record.preflight || !Array.isArray(record.preflight.coverage)) {
     throw new Error("Invalid RunRecord: missing results or preflight coverage");
@@ -618,15 +636,17 @@ export function ingestTesterRunRecord(
           `RunRecord missing valid non-unknown CLI version for ${vendor}@${instance} (got ${JSON.stringify(readiness?.version ?? null)})`,
         );
       }
-      const evidenceItems = (Array.isArray(result.evidence) ? result.evidence : [])
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
-        .filter((item) => item !== "");
-      if (evidenceItems.length === 0) {
+      if (!Array.isArray(result.checks) || result.checks.length === 0) {
+        throw new Error(`RunRecord passing turn ${result.id} must include at least one passing check`);
+      }
+      if (result.checks.some((check) => !check || typeof check.check !== "string" || check.check.trim() === "" || check.ok !== true)) {
+        throw new Error(`RunRecord passing turn ${result.id} contains a failing or invalid check`);
+      }
+      const rawEvidence = Array.isArray(result.evidence) ? result.evidence.filter((item): item is string => typeof item === "string") : [];
+      if (rawEvidence.length === 0) {
         throw new Error(`RunRecord missing traceable evidence artifacts for passing turn ${result.id}`);
       }
-      if (Array.isArray(result.checks) && result.checks.some((check) => !check.ok)) {
-        throw new Error(`RunRecord passing turn ${result.id} contains a failing check`);
-      }
+      const verifiedArtifacts = rawEvidence.map((item) => resolveVerifiedEvidenceArtifact(item, result.id, opts));
 
       let liveRun = liveRunsByInstance.get(instance);
       if (!liveRun) {
@@ -644,7 +664,7 @@ export function ingestTesterRunRecord(
         tier: "live_service",
         cliVersion: redactText(readiness.version),
         model: redactText(model),
-        evidenceRef: redactText(`tester:${record.runId}:${result.id}#${evidenceItems[0]}`),
+        evidenceRef: redactText(`tester:${record.runId}:${result.id}#${verifiedArtifacts[0]}`),
         verifiedAt: opts.recordedAt,
         ...(note ? { note } : {}),
       };
@@ -752,16 +772,44 @@ export function validateRepoVerificationMatrix(repoRoot: string, appVersionOverr
   const releaseDownloadsPath = join(repoRoot, ".github", "release-downloads.md");
   if (existsSync(releaseDownloadsPath)) {
     const downloads = readFileSync(releaseDownloadsPath, "utf8");
-    if (/\/blob\/(?:main|master|HEAD)\/docs\/verification-matrix\.md\b/.test(downloads)) {
-      addProblem(
-        problems,
-        ".github/release-downloads.md",
-        "unverified_run_evidence",
-        "Release downloads template must pin docs/verification-matrix.md to the release tag instead of a floating branch",
-      );
+    const appVersion = appVersionOverride ?? readDesktopAppVersion(repoRoot);
+    for (const ref of [`v${appVersion}`, `v${appVersion}-rc.1`]) {
+      const rendered = downloads
+        .replaceAll("{{RELEASE_REPO}}", UPDATE_RELEASE_REPO)
+        .replaceAll("{{RELEASE_REF}}", ref);
+      if (/\{\{RELEASE_(?:REPO|REF)\}\}/.test(rendered)) {
+        addProblem(problems, ".github/release-downloads.md", "unverified_run_evidence", "Release downloads template contains unresolved placeholders");
+        break;
+      }
+      const linkProblems = validateRenderedReleaseMatrixLinks(rendered, { repo: UPDATE_RELEASE_REPO, ref });
+      if (linkProblems.length > 0) {
+        for (const msg of linkProblems) addProblem(problems, ".github/release-downloads.md", "unverified_run_evidence", msg);
+        break;
+      }
     }
   }
 
+  return problems;
+}
+
+export async function validateRepoVerificationMatrixAsync(
+  repoRoot: string,
+  opts?: { appVersionOverride?: string; verifyRuns?: boolean; runFetcher?: GitHubRunFetcher },
+): Promise<MatrixValidationProblem[]> {
+  const problems = validateRepoVerificationMatrix(repoRoot, opts?.appVersionOverride);
+  if (!opts?.verifyRuns) return problems;
+  const jsonPath = join(repoRoot, "docs", "verification-matrix.json");
+  if (!existsSync(jsonPath)) return problems;
+  try {
+    const matrix = parseVerificationMatrix(JSON.parse(readFileSync(jsonPath, "utf8")) as unknown);
+    const onlineProblems = await verifyRecordedRunsOnline(matrix, {
+      fetcher: opts.runFetcher,
+      expectedRepo: UPDATE_RELEASE_REPO,
+    });
+    problems.push(...onlineProblems);
+  } catch {
+    return problems;
+  }
   return problems;
 }
 
@@ -782,9 +830,13 @@ function parseCliFlags(args: readonly string[]): Map<string, string> {
 }
 
 const CLI_USAGE = [
-  "Usage: node scripts/verification-matrix.ts check",
+  "Usage: node scripts/verification-matrix.ts check [--verify-runs]",
   "  | render [--write]",
   "  | ingest-tester --run <run-record.json> [--date YYYY-MM-DD] [--local-commit-key <name>] [--remote-commit-key <name>] [--write]",
+  "",
+  "Modes:",
+  "  check               Offline schema, workflow-config, Markdown-sync, release-link, and Feishu layout validation (no network).",
+  "  check --verify-runs Also queries GitHub Actions metadata (head_sha, workflow path, passing job platform) for each recorded CI run.",
 ].join("\n");
 
 export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoRoot?: string }): number {
@@ -796,6 +848,10 @@ export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoR
 
   try {
     if (command === "check") {
+      if (flags.has("verify-runs")) {
+        console.error("--verify-runs requires async execution; invoke via CLI or runVerificationMatrixCliAsync");
+        return 2;
+      }
       const problems = validateRepoVerificationMatrix(repoRoot);
       for (const p of problems) console.error(`[${p.code}] ${p.path}: ${redactText(p.message)}`);
       return problems.length > 0 ? 1 : 0;
@@ -815,8 +871,9 @@ export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoR
         console.error("Missing --run <run-record.json>");
         return 2;
       }
+      const resolvedRunFile = resolve(repoRoot, runFile);
       const matrix = parseVerificationMatrix(JSON.parse(readFileSync(jsonPath, "utf8")) as unknown);
-      const record = JSON.parse(readFileSync(resolve(repoRoot, runFile), "utf8")) as RunRecord;
+      const record = JSON.parse(readFileSync(resolvedRunFile, "utf8")) as RunRecord;
       const recordedAt = flags.get("date") ?? (typeof record.finishedAt === "string" ? record.finishedAt.slice(0, 10) : matrix.recordedAt);
       const commitKeyByInstance: Partial<Record<InstanceRole, string>> = {};
       const localKey = flags.get("local-commit-key");
@@ -826,6 +883,7 @@ export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoR
       const updated = ingestTesterRunRecord(matrix, record, {
         platformByInstance: { local: "macos", remote: "linux" },
         recordedAt,
+        evidenceBaseDir: dirname(resolvedRunFile),
         ...(Object.keys(commitKeyByInstance).length > 0 ? { commitKeyByInstance } : {}),
       });
       const problems = validateVerificationMatrix(updated, collectRepoFacts(repoRoot));
@@ -851,6 +909,28 @@ export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoR
   }
 }
 
+export async function runVerificationMatrixCliAsync(
+  argv: readonly string[],
+  opts?: { repoRoot?: string; runFetcher?: GitHubRunFetcher },
+): Promise<number> {
+  const repoRoot = opts?.repoRoot ?? REPO_ROOT;
+  const [command, ...rest] = argv;
+  const flags = parseCliFlags(rest);
+  if (command === "check" && flags.has("verify-runs")) {
+    try {
+      const problems = await validateRepoVerificationMatrixAsync(repoRoot, { verifyRuns: true, runFetcher: opts?.runFetcher });
+      for (const p of problems) console.error(`[${p.code}] ${p.path}: ${redactText(p.message)}`);
+      return problems.length > 0 ? 1 : 0;
+    } catch (error) {
+      console.error(redactText(error instanceof Error ? error.message : String(error)));
+      return 1;
+    }
+  }
+  return runVerificationMatrixCli(argv, opts);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  process.exitCode = runVerificationMatrixCli(process.argv.slice(2));
+  void runVerificationMatrixCliAsync(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
 }

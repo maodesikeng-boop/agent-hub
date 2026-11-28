@@ -1,14 +1,21 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { AGENT_VENDORS, type AgentVendor } from "../src/shared/vendors.ts";
 import { VENDOR_MOCK_ADAPTERS } from "../test/mock-llm/vendors.ts";
 import type { VendorEndpointSupport } from "../test/mock-llm/types.ts";
 import type { RunRecord } from "../test/tester/types.ts";
 import { VENDOR_BENCH } from "../test/tester/vendors.ts";
-import { collectDaemonRuntimeDependencyNames, REPO_ROOT, readDesktopAppVersion } from "./stage-runtime-common.ts";
+import {
+  FEISHU_SOURCE_SUBDIR,
+  REPO_ROOT,
+  SOURCE_FEISHU_ENTRY_RELATIVE_PATH,
+  STAGED_FEISHU_ENTRY_RELATIVE_PATH,
+  collectDaemonRuntimeDependencyNames,
+  readDesktopAppVersion,
+} from "./stage-runtime-common.ts";
 import { ALWAYS_RUN_TESTS } from "./test-related.ts";
 import {
   VERIFICATION_FIELD_MAX_CHARS,
@@ -222,7 +229,14 @@ function buildRepoFacts(overrides: Partial<RepoVerificationFacts> = {}): RepoVer
   };
 }
 
-function buildSampleTesterRunRecord(commit = `${TEST_COMMIT}${"0".repeat(32)}`): RunRecord {
+const SAMPLE_EVIDENCE_DIR = mkdtempSync(join(tmpdir(), "bellwood-sample-evidence-"));
+const SAMPLE_EVIDENCE_FILE = join(SAMPLE_EVIDENCE_DIR, "reply.json");
+writeFileSync(SAMPLE_EVIDENCE_FILE, '{"ok":true}\n', "utf8");
+afterAll(() => {
+  rmSync(SAMPLE_EVIDENCE_DIR, { recursive: true, force: true });
+});
+
+function buildSampleTesterRunRecord(commit = `${TEST_COMMIT}${"0".repeat(32)}`, evidenceFile = SAMPLE_EVIDENCE_FILE): RunRecord {
   const coverage = AGENT_VENDORS.flatMap((vendor) =>
     (["local", "remote"] as const).map((instance) => ({
       vendor,
@@ -252,7 +266,7 @@ function buildSampleTesterRunRecord(commit = `${TEST_COMMIT}${"0".repeat(32)}`):
         checks: [{ check: "reply", ok: true, detail: "replied" }],
         externalErrors: [],
         metrics: {},
-        evidence: ["reply.json"],
+        evidence: [evidenceFile],
         startedAt: "2026-11-28T10:01:00Z",
         durationMs: 2500,
       },
@@ -263,7 +277,7 @@ function buildSampleTesterRunRecord(commit = `${TEST_COMMIT}${"0".repeat(32)}`):
         checks: [{ check: "reply", ok: true, detail: "replied" }],
         externalErrors: [],
         metrics: {},
-        evidence: ["reply.json"],
+        evidence: [evidenceFile],
         startedAt: "2026-11-28T10:02:00Z",
         durationMs: 2600,
       },
@@ -274,7 +288,7 @@ function buildSampleTesterRunRecord(commit = `${TEST_COMMIT}${"0".repeat(32)}`):
         checks: [{ check: "reply", ok: true, detail: "replied" }],
         externalErrors: [],
         metrics: {},
-        evidence: ["reply.json"],
+        evidence: [evidenceFile],
         startedAt: "2026-11-28T10:03:00Z",
         durationMs: 2700,
       },
@@ -680,22 +694,63 @@ describe("regression: review blocker fixes (commit-bound runs, strict live_servi
     expect(crossProblems.some((p) => p.code === "platform_mismatch")).toBe(true);
     expect(crossProblems.some((p) => p.code === "unverified_run_evidence")).toBe(true);
 
+    const unrunFixture = buildValidMatrix({
+      recordedRuns: base.recordedRuns.filter((run) => run.platform !== "macos" && run.source !== "nightly.yml"),
+      cells: base.cells.map((cell) => {
+        if (cell.platform === "macos") {
+          return { vendor: cell.vendor, platform: "macos", tier: "unverified", gapReason: "No macOS run recorded", fallbackTests: ["src/vendors/contract.test.ts"] };
+        }
+        if (cell.platform === "linux" && cell.tier === "real_cli_mock_llm") {
+          return {
+            vendor: cell.vendor,
+            platform: "linux",
+            tier: "fake_cli_offline",
+            evidenceRef: TEST_CHECK_RUN_URL,
+            gapReason: "Only check.yml offline run recorded",
+            fallbackTests: ["src/vendors/contract.test.ts"],
+          };
+        }
+        return cell;
+      }),
+    });
+    expect(validateVerificationMatrix(unrunFixture, facts)).toEqual([]);
+    expect(unrunFixture.cells.filter((c) => c.platform === "macos").every((c) => c.tier === "unverified")).toBe(true);
+    expect(unrunFixture.cells.filter((c) => c.platform === "linux").every((c) => c.tier === "fake_cli_offline")).toBe(true);
+
     const repoMatrix = parseVerificationMatrix(
       JSON.parse(readFileSync(join(REPO_ROOT, "docs", "verification-matrix.json"), "utf8")) as unknown,
     );
-    for (const cell of repoMatrix.cells) {
-      if (cell.tier === "real_cli_mock_llm" || cell.tier === "live_service") {
-        expect(cell.evidenceRef, `${cell.vendor}@${cell.platform} must not cite static workflow config`).not.toMatch(
-          /^\.github\/workflows\//,
-        );
+    const assertRepoInvariants = (matrix: VerificationMatrix) => {
+      for (const cell of matrix.cells) {
+        if (cell.tier === "real_cli_mock_llm" || cell.tier === "live_service") {
+          expect(cell.evidenceRef, `${cell.vendor}@${cell.platform} must not cite static workflow config`).not.toMatch(
+            /^\.github\/workflows\//,
+          );
+        }
+        if (cell.tier === "fake_cli_offline") {
+          expect(cell.evidenceRef, `${cell.vendor}@${cell.platform} should record commit-bound run URL`).toBeDefined();
+          expect(cell.evidenceRef).not.toMatch(/^\.github\/workflows\//);
+        }
       }
-      if (cell.tier === "fake_cli_offline") {
-        expect(cell.evidenceRef, `${cell.vendor}@${cell.platform} should record commit-bound run URL`).toBeDefined();
-        expect(cell.evidenceRef).not.toMatch(/^\.github\/workflows\//);
-      }
-    }
-    expect(repoMatrix.cells.filter((c) => c.platform === "macos").every((c) => c.tier === "unverified")).toBe(true);
-    expect(repoMatrix.cells.filter((c) => c.platform === "linux").every((c) => c.tier === "fake_cli_offline")).toBe(true);
+    };
+    assertRepoInvariants(repoMatrix);
+
+    const repoFacts: RepoVerificationFacts = {
+      vendors: AGENT_VENDORS,
+      mockSupportByVendor: mockSupportMap(),
+      workflowRealCliVendors: readWorkflowRealCliVendors(join(REPO_ROOT, ".github", "workflows")),
+      workflowPlatforms: wfPlatforms,
+      workflowRealCliPlatforms: wfRealCliPlatforms,
+      appVersion: readDesktopAppVersion(REPO_ROOT),
+    };
+    const withLiveBench = ingestTesterRunRecord(repoMatrix, buildSampleTesterRunRecord(`${repoMatrix.commit}${"0".repeat(40 - repoMatrix.commit.length)}`), {
+      platformByInstance: { local: "macos", remote: "linux" },
+      recordedAt: repoMatrix.recordedAt,
+    });
+    expect(validateVerificationMatrix(withLiveBench, repoFacts)).toEqual([]);
+    assertRepoInvariants(withLiveBench);
+    expect(withLiveBench.cells.find((c) => c.vendor === "claude" && c.platform === "macos")?.tier).toBe("live_service");
+    expect(withLiveBench.cells.find((c) => c.vendor === "claude" && c.platform === "linux")?.tier).toBe("live_service");
   });
 
   it("R6: requires per-instance commit match, concrete non-unknown CLI version, and non-empty evidence for live_service", () => {
@@ -731,6 +786,34 @@ describe("regression: review blocker fixes (commit-bound runs, strict live_servi
     emptyEvidence.results = emptyEvidence.results.map((r) => (r.id === "model.turn.claude@local" ? { ...r, evidence: [] } : r));
     expect(() => ingestTesterRunRecord(base, emptyEvidence, opts)).toThrow(/evidence/i);
 
+    const emptyChecks = buildSampleTesterRunRecord();
+    emptyChecks.results = emptyChecks.results.map((r) => (r.id === "model.turn.claude@local" ? { ...r, checks: [] } : r));
+    expect(() => ingestTesterRunRecord(base, emptyChecks, opts)).toThrow(/check/i);
+
+    const missingEvidenceFile = buildSampleTesterRunRecord(undefined, "nonexistent-placeholder.json");
+    expect(() => ingestTesterRunRecord(base, missingEvidenceFile, opts)).toThrow(/exist|evidence|placeholder/i);
+
+    const placeholderEvidence = buildSampleTesterRunRecord(undefined, "ok");
+    expect(() => ingestTesterRunRecord(base, placeholderEvidence, opts)).toThrow(/exist|evidence|placeholder/i);
+
+    const spaceDir = mkdtempSync(join(tmpdir(), "bellwood evidence with spaces-"));
+    try {
+      const spaceFile = join(spaceDir, "my reply artifact.json");
+      writeFileSync(spaceFile, '{"reply":"ok"}\n', "utf8");
+      const spaceRecord = buildSampleTesterRunRecord(undefined, spaceFile);
+      const ingestedSpace = ingestTesterRunRecord(base, spaceRecord, opts);
+      const macClaude = ingestedSpace.cells.find((c) => c.vendor === "claude" && c.platform === "macos");
+      expect(macClaude?.tier).toBe("live_service");
+      if (macClaude?.tier === "live_service") {
+        expect(macClaude.evidenceRef).not.toMatch(/\s/);
+        expect(macClaude.evidenceRef).not.toContain(spaceDir);
+        expect(macClaude.evidenceRef).toContain("my%20reply%20artifact.json");
+      }
+      expect(validateVerificationMatrix(ingestedSpace, buildRepoFacts())).toEqual([]);
+    } finally {
+      rmSync(spaceDir, { recursive: true, force: true });
+    }
+
     const invalidLiveCell = buildValidMatrix({
       cells: base.cells.map((cell) =>
         cell.vendor === "claude" && cell.platform === "macos"
@@ -752,7 +835,12 @@ describe("regression: review blocker fixes (commit-bound runs, strict live_servi
   });
 
   it("R7: binds packaged Feishu quick-start guard directly to real packaging configs and scripts", () => {
-    expect(readPackagedFeishuLayout(REPO_ROOT)).toEqual(DEFAULT_FEISHU_LAYOUT);
+    const layout = readPackagedFeishuLayout(REPO_ROOT);
+    expect(layout).toEqual(DEFAULT_FEISHU_LAYOUT);
+    expect(FEISHU_SOURCE_SUBDIR).toBe("feishu");
+    expect(layout.sourceFeishuEntryRelativePath).toBe(SOURCE_FEISHU_ENTRY_RELATIVE_PATH);
+    expect(layout.macFeishuEntryRelativePath).toBe(`daemon/${STAGED_FEISHU_ENTRY_RELATIVE_PATH}`);
+    expect(layout.winFeishuEntryRelativePath).toBe(`daemon\\${STAGED_FEISHU_ENTRY_RELATIVE_PATH.replace(/\//g, "\\")}`);
     const copyFiles = [
       "README.md",
       "README.zh-CN.md",
@@ -797,6 +885,21 @@ describe("regression: review blocker fixes (commit-bound runs, strict live_servi
       writeFileSync(bundlePath, origBundle.replace('"staged-runtime/daemon": "daemon"', '"staged-runtime/daemon": "alt-daemon"'));
       expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
       writeFileSync(bundlePath, origBundle);
+
+      const stageCommonPath = join(tmpRoot, "scripts", "stage-runtime-common.ts");
+      const origStageCommon = readFileSync(stageCommonPath, "utf8");
+      const mutatedConst = origStageCommon.replace(/STAGED_DAEMON_SRC_DIR\s*=\s*"src"/, 'STAGED_DAEMON_SRC_DIR = "alt-src"');
+      expect(mutatedConst).not.toBe(origStageCommon);
+      writeFileSync(stageCommonPath, mutatedConst);
+      expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
+      const mutatedCopyDest = origStageCommon.replace(
+        "join(daemonOutDir, STAGED_DAEMON_SRC_DIR, sub)",
+        'join(daemonOutDir, "direct-alt", sub)',
+      );
+      expect(mutatedCopyDest).not.toBe(origStageCommon);
+      writeFileSync(stageCommonPath, mutatedCopyDest);
+      expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
+      writeFileSync(stageCommonPath, origStageCommon);
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }

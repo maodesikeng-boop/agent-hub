@@ -57,6 +57,8 @@ describe("scripts/release-assets.ts", () => {
 
     expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "main" })).toThrow(/release tag or commit SHA/i);
     expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "HEAD" })).toThrow(/release tag or commit SHA/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "develop" })).toThrow(/release tag or commit SHA/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "v0.3.0" })).toThrow(/release tag/i);
     expect(() =>
       composeReleaseNotes(
         "## v0.4.0\n- x\n",
@@ -64,6 +66,50 @@ describe("scripts/release-assets.ts", () => {
         "0.4.0",
       ),
     ).toThrow(/floating branch/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/maodesikeng-boop/agent-hub/blob/develop/docs/verification-matrix.md)",
+        "0.4.0",
+        { ref: "v0.4.0" },
+      ),
+    ).toThrow(/release ref|floating branch/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/maodesikeng-boop/agent-hub/blob/v0.3.0/docs/verification-matrix.md)",
+        "0.4.0",
+        { ref: "v0.4.0" },
+      ),
+    ).toThrow(/release ref|v0\.4\.0/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        [
+          "[zh](https://github.com/{{RELEASE_REPO}}/blob/{{RELEASE_REF}}/docs/verification-matrix.md)",
+          "[en](https://github.com/{{RELEASE_REPO}}/blob/develop/docs/verification-matrix.md)",
+        ].join("\n"),
+        "0.4.0",
+        { ref: "v0.4.0" },
+      ),
+    ).toThrow(/release ref|floating branch/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/other-org/agent-hub/blob/v0.4.0/docs/verification-matrix.md)",
+        "0.4.0",
+        { ref: "v0.4.0", repo: "maodesikeng-boop/agent-hub" },
+      ),
+    ).toThrow(/release ref|maodesikeng-boop\/agent-hub/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", "No matrix link in downloads", "0.4.0", { ref: "v0.4.0" })).toThrow(
+      /verification-matrix/i,
+    );
+    const shaNotes = composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", {
+      ref: "6f6eed4107d8a7cc77a0a615c72fba59b1cc77c7",
+    });
+    expect(shaNotes).toContain(
+      "https://github.com/maodesikeng-boop/agent-hub/blob/6f6eed4107d8a7cc77a0a615c72fba59b1cc77c7/docs/verification-matrix.md",
+    );
 
     for (const name of Object.values(RELEASE_INSTALLER_FILES)) expect(downloads).toContain(`\`${name}.sha256\``);
     expect(() => composeReleaseNotes("## v0.3.0\n- x\n", downloads, "9.9.9")).toThrow('no "## v9.9.9" section');
