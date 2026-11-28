@@ -61,6 +61,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 - [Shipped prompt de-overfitting](prompt-deoverfitting-design.md): Separating platform mechanics from project workflow policy across shipped PM and Worker prompts, the Task Graph skill, CLI help, JSON hints, and runtime daemon notices, enforced by a workflow-neutrality audit contract.
 - [Session stop lifecycle and settlement fix](stop-lifecycle-design.md): Root-cause traces on real `agy acp`, `stopId`-matched ledger stop settlement, unified `BaseSessionDriver` interrupt coordination with bounded `SIGINT` to `SIGKILL` escalation, post-turn ACP notification gating, and frontend `useStop` reset closure.
 - [README and user documentation rewrite](readme-docs-rewrite-design.md): Full audit of current `main` versus user-facing docs and screenshots, architecture comparison, user sign-off decisions, visual refresh manifest, and automated doc-to-code consistency contract.
+- [Codex model catalog recovery and quota reset reconciliation](codex-catalog-and-quota-refresh-design.md): Isolated `codex 0.169.0` traces of silent built-in fallback after 5-second refresh timeouts, cross-vendor `ModelCatalogs` degraded-probe semantics with bounded `models_cache.json` recovery, and bidirectional `probedAt`-fenced quota reconciliation, per-vendor non-blocking deadlines, and restart hydration between `ProviderQuota` and `ObservedQuotaStore`.
 
 ## Testing
 
