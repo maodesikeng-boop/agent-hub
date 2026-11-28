@@ -21,11 +21,11 @@ Bellwood ships system prompts, an on-demand Task Graph skill, `hub` CLI help, JS
 
 ### Decisions needed
 
-This plan changes user-visible Project Manager behavior, Task Graph receipts, and default Worker prompts. Three product decisions require user approval before implementation starts, followed by the complete item-by-item before/after table showing what both the user and the model will see.
+Settled on Draft PR #513 (2026-11-28): the user approved Option A ("全部采用推荐项（D1 全面清理 + D2 graph finish 不因 OPEN PR 拦错 + D3 去请验收前缀）并放行进入实现"), adopting Option 1 for D1, D2, and D3 and approving all 13 before/after changes below.
 
 #### D1. Make review, planning, and formal acceptance strictly opt-in across prompts, skills, and runtime notices
 
-Today the PM base prompt, Task Graph skill, JSON hints, and two runtime daemon messages (`delivery.ts` and `sameVendorReviewHint`) push every PM toward a plan-code-review pipeline even when the user never asked for review and the project has no review rules.
+**Chosen: Option 1.** Today the PM base prompt, Task Graph skill, JSON hints, and two runtime daemon messages (`delivery.ts` and `sameVendorReviewHint`) push every PM toward a plan-code-review pipeline even when the user never asked for review and the project has no review rules.
 
 | Option | What the user and model see |
 | --- | --- |
@@ -34,7 +34,7 @@ Today the PM base prompt, Task Graph skill, JSON hints, and two runtime daemon m
 
 #### D2. Stop blocking `hub graph finish` by default when a branch has an OPEN PR
 
-Today `src/daemon/ledger/task-graphs/lifecycle.ts:283-296, 340` rejects `hub graph finish` whenever any branch or artifact in the graph has an OPEN PR (`请合并后再调 hub graph finish ...；若确认不合并直接结束，请加 --unmerged-ok`). This encodes the Bellwood repository's own rule ("merge PR before finishing the graph", documented in `AGENTS.md`) as a product-wide default. External users whose workflow is "let Bellwood open a PR so I can review and merge it later" hit an error that pressures the PM to merge first or retry with `--unmerged-ok`.
+**Chosen: Option 1.** Today `src/daemon/ledger/task-graphs/lifecycle.ts:283-296, 340` rejects `hub graph finish` whenever any branch or artifact in the graph has an OPEN PR (`请合并后再调 hub graph finish ...；若确认不合并直接结束，请加 --unmerged-ok`). This encodes the Bellwood repository's own rule ("merge PR before finishing the graph", documented in `AGENTS.md`) as a product-wide default. External users whose workflow is "let Bellwood open a PR so I can review and merge it later" hit an error that pressures the PM to merge first or retry with `--unmerged-ok`.
 
 | Option | What the user and model see |
 | --- | --- |
@@ -43,7 +43,7 @@ Today `src/daemon/ledger/task-graphs/lifecycle.ts:283-296, 340` rejects `hub gra
 
 #### D3. Remove the fixed `"请验收"` prefix and mandatory Router report for every standalone Worker
 
-Today `src/daemon/prompt.ts:109` tells the PM that for every standalone Worker it must call `hub router report --pr … --worker … --file <截图或文件>` with a card title starting with `"请验收"`, and lectures it `也不贴到 PR 评论里代替`.
+**Chosen: Option 1.** Today `src/daemon/prompt.ts:109` tells the PM that for every standalone Worker it must call `hub router report --pr … --worker … --file <截图或文件>` with a card title starting with `"请验收"`, and lectures it `也不贴到 PR 评论里代替`.
 
 | Option | What the user and model see |
 | --- | --- |
@@ -271,6 +271,7 @@ Read from `git show origin/main:REVIEW.md`:
 #### Commands and visual checks
 
 - Pre-implementation baseline & acceptance tests: `pnpm exec vitest run src/shared/prompt-deoverfit.test.ts`
+  - Recorded pre-implementation baseline at commit `48298ccf`: `pnpm typecheck` exited 0; `pnpm lint` passed (`knip clean`); `src/docs-guard.test.ts`, `src/code-hygiene.test.ts`, `src/prompt-portability.test.ts`, and `src/daemon/launch-fingerprint.test.ts` passed (24/24); `src/shared/prompt-deoverfit.test.ts` ran 12 tests with **7 failed** (S1, S2, S3a, S3b, S4, S5, S6) and **5 passed** (R1, R2, R3, R4, R5).
 - Related unit and guard suites: `pnpm exec vitest run src/prompt-portability.test.ts src/daemon/prompt.test.ts src/daemon/task-graph-skill.test.ts src/daemon/launch-fingerprint.test.ts src/daemon/ledger/task-graphs.test.ts src/shared/review.test.ts src/shared/worker.test.ts src/hub/registry.test.ts src/docs-guard.test.ts`
 - Final local gate (after implementation): `pnpm lint`, `pnpm typecheck`, `pnpm test:related`, `pnpm verify`
 - Visual and empirical artifacts: Playwright MP4 recording or start-to-finish screenshot sequence of the clean-project task flow and explicit-review flow, plus the per-vendor before/after `TokenUsage.cacheRead` comparison table.
