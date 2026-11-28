@@ -62,18 +62,83 @@ describe("user documentation review follow-up guards", () => {
     expect(zhBetween).toContain("Create");
   });
 
-  it("README.md and README.zh-CN.md document the Windows no-MXC read-only fallback and Antigravity modelProvider setting", () => {
-    for (const file of ["README.md", "README.zh-CN.md"] as const) {
-      const text = readRepoFile(file);
-      const readonlyLine = text.split(/\r?\n/).find((line) => /Read-only Workers|只读 Worker/.test(line)) ?? "";
-      expect(readonlyLine, `${file} read-only Worker bullet must note Windows MXC fallback`).toContain("MXC");
-      expect(readonlyLine, `${file} read-only Worker bullet must mention Windows fallback limitation`).toMatch(
-        /Windows/i,
-      );
+  it("docs/linux.md documents AGENT_HUB_HOME for mesh/feishu commands and multi-instance SSH, journalctl, and ui-token mapping", () => {
+    const linuxDoc = readRepoFile("docs/linux.md");
+    const connectSection = sectionBetween(linuxDoc, /^## 4\. Connect from your laptop or phone$/m, /^## /m);
+    expect(connectSection, "docs/linux.md must include section 4").not.toBe("");
 
-      const agyLine = text.split(/\r?\n/).find((line) => line.includes("**Antigravity (`agy`)")) ?? "";
-      expect(agyLine, `${file} Antigravity manual login must document modelProvider`).toContain("modelProvider");
-      expect(agyLine, `${file} Antigravity manual login must set modelProvider to gemini`).toContain("gemini");
+    expect(connectSection, "docs/linux.md must show AGENT_HUB_HOME example for mesh CLI").toMatch(
+      /AGENT_HUB_HOME=\S+\s+node src\/mesh\/main\.ts\b/,
+    );
+    expect(connectSection, "docs/linux.md must show AGENT_HUB_HOME example for feishu CLI").toMatch(
+      /AGENT_HUB_HOME=\S+\s+node src\/feishu\/main\.ts\b/,
+    );
+    expect(
+      connectSection,
+      "docs/linux.md must warn that omitting AGENT_HUB_HOME accesses default admin.sock and state/ui-token",
+    ).toMatch(/Omitting `AGENT_HUB_HOME`[\s\S]*~\/\.agent-hub\/run\/admin\.sock[\s\S]*~\/\.agent-hub\/state\/ui-token/);
+    expect(connectSection, "docs/linux.md must show per-instance SSH port mapping for AGENT_HUB_PORT").toMatch(
+      /-L\s+<port>:127\.0\.0\.1:<port>/,
+    );
+    expect(connectSection, "docs/linux.md must show per-instance systemd unit name for journalctl").toMatch(
+      /journalctl --user -u <unit>/,
+    );
+    expect(connectSection, "docs/linux.md must document <AGENT_HUB_HOME>/state/ui-token path").toContain(
+      "<AGENT_HUB_HOME>/state/ui-token",
+    );
+  });
+
+  it("README.md and README.zh-CN.md document Windows no-MXC outer-sandbox fallback limits and Codex exception", () => {
+    const enReadonly = readRepoFile("README.md")
+      .split(/\r?\n/)
+      .find((line) => line.includes("Read-only Workers")) ?? "";
+    expect(enReadonly, "README.md read-only Worker bullet must scope Windows MXC fallback to outer-sandbox Workers").toMatch(
+      /outer sandbox/i,
+    );
+    expect(enReadonly).toContain("MXC");
+    expect(enReadonly).toMatch(/restricted token/i);
+    expect(enReadonly, "README.md must state post-fallback write and credential read limits").toMatch(
+      /does not enforce full[- ]filesystem read-only writes[\s\S]*external credential paths/i,
+    );
+    expect(enReadonly, "README.md must document the Codex built-in read-only sandbox exception").toMatch(
+      /Codex \(`codex`\)[\s\S]*built-in read-only sandbox[\s\S]*(?:rather than|not)[\s\S]*fallback/i,
+    );
+
+    const zhReadonly = readRepoFile("README.zh-CN.md")
+      .split(/\r?\n/)
+      .find((line) => line.includes("只读 Worker")) ?? "";
+    expect(zhReadonly, "README.zh-CN.md read-only Worker bullet must scope Windows MXC fallback to outer-sandbox Workers").toContain(
+      "外层沙箱",
+    );
+    expect(zhReadonly).toContain("MXC");
+    expect(zhReadonly).toContain("受限令牌");
+    expect(zhReadonly, "README.zh-CN.md must state post-fallback write and credential read limits").toMatch(
+      /(?:全盘禁写|全盘只读)[\s\S]*外部凭据路径/,
+    );
+    expect(zhReadonly, "README.zh-CN.md must document the Codex built-in read-only sandbox exception").toMatch(
+      /Codex（`codex`）[\s\S]*自带的只读沙箱[\s\S]*不走[\s\S]*降级/,
+    );
+  });
+
+  it("README.md, README.zh-CN.md, and docs/linux.md guide Antigravity API key via Settings -> Providers first and explain daemon env for manual setup", () => {
+    for (const file of ["README.md", "README.zh-CN.md", "docs/linux.md"] as const) {
+      const agyLine = readRepoFile(file)
+        .split(/\r?\n/)
+        .find((line) => line.includes("Antigravity (`agy`)")) ?? "";
+      expect(agyLine, `${file} must point to Settings -> Providers -> Antigravity -> API key`).toContain(
+        "Settings → Providers → Antigravity → API key",
+      );
+      expect(agyLine, `${file} must document GEMINI_API_KEY`).toContain("GEMINI_API_KEY");
+      expect(agyLine, `${file} must document modelProvider`).toContain("modelProvider");
+      expect(agyLine, `${file} must set modelProvider to gemini`).toContain("gemini");
+      expect(agyLine, `${file} must document systemd Environment= and EnvironmentFile=`).toContain("Environment=");
+      expect(agyLine, `${file} must document systemd EnvironmentFile=`).toContain("EnvironmentFile=");
+      expect(agyLine, `${file} must explain GEMINI_API_KEY must enter the daemon environment`).toMatch(
+        /daemon|守护进程/,
+      );
+      expect(agyLine, `${file} must warn against exporting GEMINI_API_KEY only after startup`).toMatch(
+        /after (?:Bellwood|the service)|启动 Bellwood 后/i,
+      );
     }
   });
 

@@ -73,7 +73,7 @@ Bellwood 支持 **Claude Code** (`claude`)、**Antigravity** (`agy`)、**Codex**
 <br>
 
 - **Claude Code (`claude`)**：macOS/Linux 运行 `curl -fsSL https://claude.ai/install.sh | bash`，Windows PowerShell 运行 `irm https://claude.ai/install.ps1 | iex`；登录运行 `claude auth login`。
-- **Antigravity (`agy`)**：macOS/Linux 运行 `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell 运行 `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录，或配置 `GEMINI_API_KEY` 并在 `~/.gemini/antigravity-cli/settings.json` 中将 `modelProvider` 设为 `"gemini"`。
+- **Antigravity (`agy`)**：macOS/Linux 运行 `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell 运行 `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录，或优先在 **Settings → Providers → Antigravity → API key** 中保存 Gemini API Key（Bellwood 会代存 `GEMINI_API_KEY` 并在 `~/.gemini/antigravity-cli/settings.json` 自动写入 `"modelProvider": "gemini"`）。若改为手动配置，须在 `~/.gemini/antigravity-cli/settings.json` 将 `modelProvider` 设为 `"gemini"`，并把 `GEMINI_API_KEY` 注入 Bellwood 守护进程环境（启动 Bellwood 后再在终端临时 `export` 不会生效；Linux `systemd --user` 需写入 unit 文件的 `Environment=` 或 `EnvironmentFile=`）。
 - **Codex (`codex`)**：macOS/Linux 运行 `curl -fsSL https://chatgpt.com/codex/install.sh | sh`，Windows 运行 `npm install -g @openai/codex`；登录运行 `codex login`（无浏览器服务器用 `codex login --device-auth`）。
 - **Pi (`pi`)**：macOS/Linux 运行 `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell 运行 `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；运行 `pi` 后输入 `/login`。
 - **DeepSeek Harness (`dsh`)**：运行 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，运行 `dsh` 或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`。
@@ -256,7 +256,7 @@ hub persona edit --stdin                                   # 修改项目经理�
 Worker 以你当前系统用户身份改代码和运行命令，在敏感机器上使用前请了解实际边界：
 
 - **普通 Worker**：在原生系统沙箱内（macOS 为 `sandbox-exec`，Linux 为 `bubblewrap`，Windows 为 `fusa-run.exe` Job Object、受限令牌与 NTFS ACL），每个普通 Worker 在受保护根目录下只能写入自己的 worktree，禁止读取 `state/` 与 `backups/`（SQLite 账本、界面与厂商令牌、飞书与组网私钥、PM 记忆或其他会话启动目录），且只能连接 `run/hub.sock`、禁连 `run/admin.sock`（详见 [docs/write-scope.md](docs/write-scope.md)）。受保护目录之外保留你的常规读写与联网权限。
-- **只读 Worker**：除私有临时目录和必要厂商运行路径外全盘禁写，仅放行只读工具，执行同等的数据目录边界，并拦截读取 SSH、云厂商、各家 CLI 凭据与 `.env` 文件（详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。在 Windows 11 24H2 及更新版本上，能力探测通过时使用 `@microsoft/mxc-sdk` ProcessContainer 实施外层只读沙箱；当 MXC 不可用（含旧版 Windows）时，Bellwood 会显示告警并降级为受限令牌、数据目录 NTFS ACL 与工具层检查，无法保证全盘只读或拦截读取所有外部凭据路径。
+- **只读 Worker**：除私有临时目录和必要厂商运行路径外全盘禁写，仅放行只读工具，执行同等的数据目录边界，并拦截读取 SSH、云厂商、各家 CLI 凭据与 `.env` 文件（详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。在 Windows 上，需要 Bellwood 外层沙箱的只读 Worker 会在 Windows 11 24H2 及更新版本且能力探测通过时使用 `@microsoft/mxc-sdk` ProcessContainer；当 MXC 不可用（含旧版 Windows）时，Bellwood 会显示告警并降级为受限令牌、NTFS ACL（仍由内核拦截受保护根目录的写入以及数据目录的读写）与工具层检查，不再由内核强制全盘禁写或拦截读取所有外部凭据路径。Codex（`codex`）属于例外：其只读 Worker 直接使用 Codex 自带的只读沙箱，不走 Bellwood 外层沙箱或 Windows 无 MXC 降级路径。
 - **需人工确认的 Computer Use 例外（仅 macOS）**：在 macOS 上，明确挂载 Computer Use 能力的 Worker 可申请 `--no-outer-sandbox`，以避开嵌套 `sandbox-exec` 冲突并改由厂商内置沙箱接管。Worker 必须等待你在网页工作台点击**批准本次运行**后才开工（飞书仅发送只读提示），且每次尝试控制新的桌面应用都需逐应用弹出确认卡（允许本次运行或拒绝）。退出外层沙箱期间，Worker 在厂商内置沙箱下可读取全盘文件（含 Bellwood 数据目录），两类授权均在该 Worker 结束时立即失效。
 - **项目经理与本机网络**：项目经理以当前系统用户身份运行，不进外层沙箱；本机网页界面默认仅监听 `127.0.0.1`。完整威胁模型与私密漏洞报告渠道见 [SECURITY.md](SECURITY.md)。
 
