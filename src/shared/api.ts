@@ -17,6 +17,7 @@ import type {
   RouterCommandId,
   RouterItemId,
   SessionState,
+  StopId,
   TaskGraph,
   TaskEdge,
   TaskGraphId,
@@ -166,6 +167,10 @@ export const API_PATHS = {
   providerAuthApiKey: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/api-key`,
   providerAuthLogout: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/logout`,
 } as const;
+
+export interface StopConversationResponse {
+  stopId: StopId | null;
+}
 
 export interface ConversationSnapshot {
   conversation: Conversation;

@@ -260,4 +260,42 @@ describe("ledger stop lifecycle integration (S1, S4, S5, S8, S12)", () => {
     expect(ledger.getMessage(queuedSys)?.status).toBe("queued");
     expect(activity()).toBe("stopping");
   });
+
+  it("does not resurrect working state when a duplicate agent.text arrives on an idle session", () => {
+    const msgId = ledger.postUserMessage({ conversationId, clientId: "m-dup-text", text: "hello" }).messageId;
+    ev({ type: "message.delivered", messageIds: [msgId], at: now });
+    ev({ type: "message.processing", messageIds: [msgId], at: ++now });
+    ev({ type: "agent.text", uuid: "text-dup-1", text: "done", at: ++now });
+    ev({ type: "turn.ended", ok: true, interrupted: false, messageIds: [msgId], durationMs: 20, at: ++now });
+    expect(activity()).toBe("idle");
+
+    ev({ type: "agent.text", uuid: "text-dup-1", text: "done", at: ++now });
+    expect(activity()).toBe("idle");
+  });
+
+  it("echoes stopId while stopping and settledStopId across idle and subsequent turns in SessionState", () => {
+    expect(ledger.requestStop(conversationId)).toBeNull();
+
+    const msgId = ledger.postUserMessage({ conversationId, clientId: "m-stop-id", text: "work" }).messageId;
+    ev({ type: "message.delivered", messageIds: [msgId], at: now });
+    ev({ type: "message.processing", messageIds: [msgId], at: ++now });
+
+    const stopId = ledger.requestStop(conversationId);
+    expect(typeof stopId).toBe("number");
+    const stoppingSnap = ledger.snapshot().sessions.find((s) => s.sessionId === sessionId);
+    expect(stoppingSnap?.activity).toBe("stopping");
+    expect(stoppingSnap?.stopId).toBe(stopId);
+
+    ledger.settleStop!(sessionId, stopId as number, { driverBusy: false, setupActive: false });
+    const settledSnap = ledger.snapshot().sessions.find((s) => s.sessionId === sessionId);
+    expect(settledSnap?.activity).toBe("idle");
+    expect(settledSnap?.stopId).toBeUndefined();
+    expect(settledSnap?.settledStopId).toBe(stopId);
+
+    const msg2 = ledger.postUserMessage({ conversationId, clientId: "m-stop-id-2", text: "next" }).messageId;
+    ev({ type: "message.delivered", messageIds: [msg2], at: ++now });
+    const nextSnap = ledger.snapshot().sessions.find((s) => s.sessionId === sessionId);
+    expect(nextSnap?.activity).toBe("working");
+    expect(nextSnap?.settledStopId).toBe(stopId);
+  });
 });

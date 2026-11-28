@@ -495,7 +495,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     postedUserMessageId: messages.postedUserMessageId,
     requestStop(conversationId) {
       workers.clearMaxTime(conversationId);
-      messages.requestStop(conversationId);
+      return messages.requestStop(conversationId);
     },
     endWorkerConversation(conversationId) {
       write((p) => workers.endWorkerConversationIn(p, conversationId));

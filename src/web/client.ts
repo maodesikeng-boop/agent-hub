@@ -96,6 +96,7 @@ import {
   type SkipTaskNodeRequest,
   type SkipTaskNodeResponse,
   type StateSnapshot,
+  type StopConversationResponse,
   type TaskGraphId,
   type TaskNodeKey,
   type UpdateRouterSettingsRequest,
@@ -277,7 +278,7 @@ export function createClient(device: DeviceId | null) {
         throw err;
       }
     },
-    postStop: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.stop(conversationId))),
+    postStop: (conversationId: ConversationId) => postJson<StopConversationResponse | void>(at(API_PATHS.stop(conversationId))),
     postEndWorker: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.endWorker(conversationId))),
     postRewind: (conversationId: ConversationId) => postJson<RewindMessageResponse>(at(API_PATHS.rewind(conversationId))),
     postCreatePm: (body: CreatePmRequest) => postJson<CreatePmResponse>(at(API_PATHS.pms), body),

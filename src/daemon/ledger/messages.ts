@@ -152,6 +152,43 @@ function userMessageMetaOf(input: PostUserMessageInput, sentWhileBusy: boolean):
   return Object.keys(meta).length === 0 ? null : meta;
 }
 
+function stopSessionIn(
+  deps: {
+    db: Db;
+    sessions: Pick<LedgerSessions, "liveOf" | "updateLive" | "cancelStreamTimer">;
+    transition: (p: Pending, id: MessageId, to: MessageStatus) => unknown;
+    options: Pick<LedgerMessagesOptions, "nextStopId" | "requestTurnStop">;
+  },
+  p: Pending,
+  session: AgentSessionRow & { conversationId: ConversationId },
+  source: StopSource = "user",
+): { stopped: boolean; stopId: StopId | null } {
+  const { db, sessions, transition, options } = deps;
+  const working = sessions.liveOf(session.id).activity !== "idle";
+  const leftover =
+    !working &&
+    db.get(
+      `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
+      session.id,
+    ) !== undefined;
+  const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
+  if (!working && !leftover && queued.length === 0) return { stopped: false, stopId: null };
+  for (const { id } of queued) transition(p, id, "cancelled");
+  const stopId = options.nextStopId?.();
+  if (working) {
+    sessions.updateLive(p, session.id, (l) => {
+      l.activity = "stopping";
+      if (stopId !== undefined) l.stopId = stopId;
+      clearStreaming(l);
+    });
+  } else {
+    p.after.push(() => sessions.cancelStreamTimer(session.id));
+  }
+  options.requestTurnStop?.(p, session.id, source);
+  p.stops.push({ conversationId: session.conversationId, sessionId: session.id, ...(stopId !== undefined ? { stopId } : {}) });
+  return { stopped: true, stopId: working ? (stopId ?? null) : null };
+}
+
 export function createLedgerMessages(
   ctx: LedgerContext,
   sessions: LedgerSessions,
@@ -396,11 +433,13 @@ export function createLedgerMessages(
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : textMeta;
-        insertAgentMessage(ctx, p, session, { kind: "text", text: event.text, meta, dedupeKey });
-        updateLive(p, sessionId, (l) => {
-          if (event.parentToolUseId === undefined) clearStreaming(l);
-          working(event.at, null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
-        });
+        const inserted = insertAgentMessage(ctx, p, session, { kind: "text", text: event.text, meta, dedupeKey });
+        if (shouldApplyLiveToolStart(inserted, liveOf(sessionId).activity)) {
+          updateLive(p, sessionId, (l) => {
+            if (event.parentToolUseId === undefined) clearStreaming(l);
+            working(event.at, null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
+          });
+        }
         return;
       }
       case "agent.tool": {
@@ -560,39 +599,15 @@ export function createLedgerMessages(
       return inFlight.some((message) => !resumesAfterShutdown(session, message)) ? [{ sessionId, role: session.role }] : [];
     });
 
-  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }, source: StopSource = "user"): boolean => {
-    const working = liveOf(session.id).activity !== "idle";
-    const leftover =
-      !working &&
-      db.get(
-        `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
-        session.id,
-      ) !== undefined;
-    const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
-    if (!working && !leftover && queued.length === 0) return false;
-    for (const { id } of queued) transition(p, id, "cancelled");
-    const stopId = options.nextStopId?.();
-    if (working) {
-      updateLive(p, session.id, (l) => {
-        l.activity = "stopping";
-        if (stopId !== undefined) l.stopId = stopId;
-        clearStreaming(l);
-      });
-    } else {
-      p.after.push(() => sessions.cancelStreamTimer(session.id));
-    }
-    options.requestTurnStop?.(p, session.id, source);
-    p.stops.push({ conversationId: session.conversationId, sessionId: session.id, ...(stopId !== undefined ? { stopId } : {}) });
-    return true;
-  };
+  const stopDeps = { db, sessions, transition, options };
+  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }, source: StopSource = "user"): boolean =>
+    stopSessionIn(stopDeps, p, session, source).stopped;
 
-  const requestStop = (conversationId: ConversationId) => {
+  const requestStop = (conversationId: ConversationId): StopId | null => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     const session = currentSession(conversationId);
-    if (session === null) return;
-    write((p) => {
-      stopIn(p, { ...session, conversationId });
-    });
+    if (session === null) return null;
+    return write((p) => stopSessionIn(stopDeps, p, { ...session, conversationId }).stopId);
   };
 
   const rewindLastUserMessage = (conversationId: ConversationId): Message | null => {

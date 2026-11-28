@@ -17,7 +17,7 @@ import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { RowError } from "./SettingsList.tsx";
 import { ArchiveRemaining } from "./TimeAgo.tsx";
-import { useStop } from "../useStop.ts";
+import { useStop, type StopRequestResult } from "../useStop.ts";
 import { actionStartedAt, hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 
 function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }) {
@@ -94,7 +94,7 @@ export const Conversation = memo(function Conversation({
   notices: React.ReactNode;
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
-  onStop: (conversationId: ConversationId) => Promise<void>;
+  onStop: (conversationId: ConversationId) => Promise<StopRequestResult>;
   onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;

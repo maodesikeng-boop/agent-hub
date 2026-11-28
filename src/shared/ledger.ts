@@ -40,6 +40,7 @@ import type {
   ProjectId,
   RouterItemId,
   SessionId,
+  StopId,
   TaskGraphId,
   TaskNodeKey,
   WorkerRecord,
@@ -269,7 +270,7 @@ export interface HubCallContext {
 
 export type GraphPrTarget = { cwd: string; branch: string } | { cwd: string; prUrl: string };
 
-export type StopId = number;
+export type { StopId };
 
 export interface StopEvent {
   readonly conversationId: ConversationId;
@@ -285,7 +286,7 @@ export interface StopSettlementState {
 export interface Ledger extends LedgerHandoverWork {
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   composerTarget(conversationId: ConversationId): ComposerTarget;
-  requestStop(conversationId: ConversationId): void;
+  requestStop(conversationId: ConversationId): StopId | null | void;
   endWorkerConversation(conversationId: ConversationId): void;
   rewindLastUserMessage(conversationId: ConversationId): Message | null;
   snapshot(): LedgerSnapshot;

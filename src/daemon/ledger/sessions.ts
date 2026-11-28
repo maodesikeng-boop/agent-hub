@@ -47,6 +47,7 @@ export interface LiveSession {
   streamingChars?: number;
   toolStepAt?: number;
   stopId?: StopId | null;
+  settledStopId?: StopId;
 }
 
 interface LiveTool {
@@ -132,6 +133,9 @@ export const clearStreaming = (l: LiveSession) => {
 };
 
 export const idle = (l: LiveSession) => {
+  if (l.stopId != null) {
+    l.settledStopId = l.settledStopId === undefined ? l.stopId : Math.max(l.settledStopId, l.stopId);
+  }
   l.activity = "idle";
   l.currentTool = null;
   l.apiRetry = null;
@@ -251,6 +255,8 @@ export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: Session
       stepStartedAt: l.stepStartedAt ?? null,
       lastEventAt: row.lastEventAt,
       ...(l.streamingText ? { streamingText: l.streamingText } : {}),
+      ...(l.stopId != null ? { stopId: l.stopId } : {}),
+      ...(l.settledStopId !== undefined ? { settledStopId: l.settledStopId } : {}),
     };
   };
 
