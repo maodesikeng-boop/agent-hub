@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { COMPOSER_MAX_HEIGHT_PX } from "../src/web/limits.ts";
+import type { VerifyStepContext } from "./verify-diagnostics.ts";
 
 interface BrowserTextarea {
   value: string;
@@ -128,7 +129,7 @@ async function verifyComposition(page: Page, box: Locator, singleHeight: number,
   console.log(`PASS ${engine}: marked text holds the row in place, and commit wraps without losing text or focus`);
 }
 
-export async function verifyComposerInteractions(page: Page, engine: "Chromium" | "WebKit", outDir: string): Promise<void> {
+export async function verifyComposerInteractions(page: Page, engine: "Chromium" | "WebKit", outDir: string, _steps?: VerifyStepContext): Promise<void> {
   const box = page.getByRole("textbox", { name: "Message", exact: true });
   await box.fill("One short line");
   const { height } = await geometry(box);
@@ -137,7 +138,7 @@ export async function verifyComposerInteractions(page: Page, engine: "Chromium" 
   await verifyComposition(page, box, height, engine, outDir);
 }
 
-export async function verifyTouchSoftWrap(page: Page, scale: "sm" | "md", outDir: string): Promise<void> {
+export async function verifyTouchSoftWrap(page: Page, scale: "sm" | "md", outDir: string, _steps?: VerifyStepContext): Promise<void> {
   const { coarse, bodyFontSize } = await page.evaluate(async (uiScale) => {
     const browser = globalThis as unknown as {
       document: { documentElement: { dataset: { uiScale: string } }; body: unknown };

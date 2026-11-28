@@ -2,9 +2,9 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, type Page } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
 import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
@@ -12,6 +12,7 @@ import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/sha
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
+import type { VerifyStepContext, VerifyStepTracker } from "./verify-diagnostics.ts";
 import { digestOf, lostAfterRestart, sendAndAwaitReply, type RoundTrip } from "./verify-steps.ts";
 import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
 import { verifyComposerLayout } from "./verify-composer-layout.ts";
@@ -357,4 +358,35 @@ async function main(): Promise<number> {
   return failed === 0 ? 0 : 1;
 }
 
-process.exitCode = await main();
+export interface SmokeBrowserHandle {
+  close(): Promise<void>;
+}
+
+export interface SmokeBrowserDeps<TBrowser extends SmokeBrowserHandle = SmokeBrowserHandle> {
+  verifyWebKitComposer(conversationId: number, steps: VerifyStepContext): Promise<void>;
+  launchChromium(): Promise<TBrowser>;
+  runChromiumChecks(browser: TBrowser, tracker: VerifyStepTracker, checkComposer: boolean, conversationId: number | undefined): Promise<RoundTrip>;
+}
+
+export interface SmokeBrowserOptions {
+  checkComposer: boolean;
+  conversationId: number | undefined;
+  tracker: VerifyStepTracker;
+}
+
+/**
+ * Precondition: the daemon is running and `tracker` is initialized for the current smoke run.
+ * Postcondition: when `checkComposer` is true, validates `conversationId` is defined and completes the WebKit composer
+ * check before launching Chromium so the two browser engines never run concurrently; launches Chromium, runs all
+ * Chromium phases, and always closes Chromium in `finally`. Returns the completed `RoundTrip`.
+ */
+export async function runBrowserVerifications<TBrowser extends SmokeBrowserHandle>(
+  _deps: SmokeBrowserDeps<TBrowser>,
+  _options: SmokeBrowserOptions,
+): Promise<RoundTrip> {
+  throw new Error("Not implemented");
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  process.exitCode = await main();
+}

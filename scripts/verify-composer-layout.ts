@@ -2,18 +2,82 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { webkit, type Page } from "playwright";
+import { VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
+import type { VerifyStepContext } from "./verify-diagnostics.ts";
 import { verifyComposerInteractions, verifyTouchSoftWrap } from "./verify-composer-interactions.ts";
 
-interface TimelineRecord {
+export interface TimelineRecord {
   type: string;
   startTime: number;
   data?: { message?: string; root?: number[] };
   children?: TimelineRecord[];
 }
 
+export interface WebKitTimelineSession {
+  on(event: "Timeline.eventRecorded", listener: (event: { record: TimelineRecord }) => void): void;
+  off?(event: "Timeline.eventRecorded", listener: (event: { record: TimelineRecord }) => void): void;
+  removeListener?(event: "Timeline.eventRecorded", listener: (event: { record: TimelineRecord }) => void): void;
+  isDisposed?(): boolean;
+  send(
+    method: "Timeline.enable" | "Timeline.start" | "Timeline.stop" | "Timeline.disable",
+    params?: Record<string, unknown>,
+  ): Promise<unknown>;
+}
+
+export interface WebKitTimelineOptions {
+  timeoutMs?: number;
+  steps?: VerifyStepContext;
+  describeState?: () => string;
+}
+
+export interface WebKitTimelineResult<T> {
+  result: T;
+  records: TimelineRecord[];
+}
+
+export interface OpenComposerOptions {
+  timeoutMs?: number;
+  steps?: VerifyStepContext;
+}
+
+export const COMPOSER_CHAT_TEXTAREA_SELECTOR = '#chat .composer-frame textarea[aria-label="Message"]';
+
 interface TimelineSession {
   on(event: "Timeline.eventRecorded", listener: (event: { record: TimelineRecord }) => void): void;
   send(method: "Timeline.enable" | "Timeline.start" | "Timeline.stop"): Promise<unknown>;
+}
+
+/**
+ * Precondition: `session` is an active WebKit inspector session and `timeoutMs` is a positive finite duration.
+ * Postcondition: subscribes to `Timeline.eventRecorded`, sends `Timeline.enable` and `Timeline.start` with
+ * `{ maxCallStackDepth: 0 }`, executes `run`, and always removes the event listener and attempts `Timeline.stop` and
+ * `Timeline.disable` in `finally` (skipping commands when `session.isDisposed?.()` is true). Never masks an error thrown
+ * by `run` with a teardown error, rewrites empty-message ProtocolErrors with method/type/logs/state details, and rejects
+ * if any inspector command exceeds `timeoutMs`.
+ */
+export async function runWithWebKitTimeline<T>(
+  _session: WebKitTimelineSession,
+  _run: () => Promise<T>,
+  _options: WebKitTimelineOptions = { timeoutMs: VERIFY_SMOKE_STEP_TIMEOUT_MS },
+): Promise<WebKitTimelineResult<T>> {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: `page` is a freshly created Playwright page and `loginUrl` is a valid Bellwood passwordless auth URL.
+ * Postcondition: attaches `pageerror`, `console`, `crash`, and `close` listeners (ignoring only the known WebKit
+ * `interactive-widget` viewport warning), navigates through `loginUrl` until redirected off `/auth`, opens
+ * `/#/c/<conversationId>`, waits for `COMPOSER_CHAT_TEXTAREA_SELECTOR`, `networkidle`, `document.fonts.ready`, and two
+ * animation frames, applying `timeoutMs` (default `VERIFY_SMOKE_STEP_TIMEOUT_MS`) to every wait.
+ */
+export async function openComposerPage(
+  _page: Page,
+  _loginUrl: string,
+  _conversationId: number,
+  _errors: string[],
+  _options: OpenComposerOptions = { timeoutMs: VERIFY_SMOKE_STEP_TIMEOUT_MS },
+): Promise<void> {
+  throw new Error("Not implemented");
 }
 
 function timelineSession(page: Page): TimelineSession {
@@ -146,7 +210,7 @@ async function openComposer(page: Page, loginUrl: string, conversationId: number
   });
 }
 
-export async function verifyComposerLayout(loginUrl: string, conversationId: number, outDir: string): Promise<void> {
+export async function verifyComposerLayout(loginUrl: string, conversationId: number, outDir: string, _steps?: VerifyStepContext): Promise<void> {
   const browser = await webkit.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
