@@ -67,6 +67,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 - [Blind new-user walkthrough](blind-new-user-walkthrough-design.md): Zero-context new-user exploration on an isolated real Bellwood instance, Track 1 unattended Playwright vision and accessibility runs with H.264 MP4 recording, Track 2 prepared native macOS Computer Use handoffs, noise filtering, and severity-ranked pain-point reports.
 - [Product capability evaluation](product-eval-design.md): The unified three-tier product capability evaluation framework (`harness`, `replay`, and `canary`), five non-collapsed capability dimensions, loopback mock model server with prompt-cache prefix verification, multi-trial `pass@k` and `pass^k` gating, holdout anti-overfitting guards, and CI and release-gate integration.
 - [Real CLI with mock model test environment](real-cli-mock-model-design.md): Empirical 8-vendor endpoint audit, loopback multi-dialect mock LLM HTTP/SSE server, isolated temporary HOME provisioning, deterministic prompt-cache prefix stability assertions, normalized protocol snapshots, and cross-platform real-CLI CI strategy.
+- [Packaged Feishu quick start and commit-bound verification matrix](verification-matrix-and-quickstart-design.md): Audit of desktop installer Feishu onboarding paths, candidate comparison for bundled CLI versus in-app Feishu setup, commit-bound `8 vendors x 3 platforms` verification matrix schema, truthfulness validator, `test/tester/` run ingestion, and release integration.
 
 ## Desktop and distribution
 
