@@ -12,10 +12,11 @@
 - [src/daemon/vendors/types.ts](../src/daemon/vendors/types.ts): Adds optional `isDegraded` predicate to `VendorCatalogProbe`.
 - [src/daemon/driver/model-catalog.ts](../src/daemon/driver/model-catalog.ts): Adds degraded-catalog handling and `onInputsChanged` notification to `ModelCatalogs` across all eight vendors.
 - [src/vendors/codex/catalog.ts](../src/vendors/codex/catalog.ts): Adds Codex stderr remote-refresh failure detection, bounded `models_cache.json` fallback, and priority-based default selection.
+- [src/shared/vendors.ts](../src/shared/vendors.ts): Expands `COMMON_QUOTA_PATTERN` to match Claude and vendor limit messages such as `"You've hit your limit"`, `"reached your limit"`, `"out of extra usage"`, and `"usage cap"`.
 - [src/daemon/quota/fetched-quota.ts](../src/daemon/quota/fetched-quota.ts): Adds `FetchedQuotaSnapshot` with probe-start timestamps (`probedAt`) plus `onFetched` and `onScopeChanged` hooks.
-- [src/daemon/quota/provider-quota.ts](../src/daemon/quota/provider-quota.ts): Adds targeted `getSnapshot({ vendor, refresh })` and wires per-vendor fetch and scope callbacks.
-- [src/daemon/quota/observed-quota.ts](../src/daemon/quota/observed-quota.ts): Adds `reconcileFetched` and timestamp-guarded `mergeVendorQuota`, plus Codex `"try again at ..."` reset-time parsing.
-- [src/daemon/agent-api/server.ts](../src/daemon/agent-api/server.ts): Passes `refresh` and `vendor` to `quota.getSnapshot` during `hub models`.
+- [src/daemon/quota/provider-quota.ts](../src/daemon/quota/provider-quota.ts): Adds targeted `getSnapshot({ vendor, refresh, timeoutMs })` with per-vendor non-blocking deadlines and wires per-vendor fetch and scope callbacks.
+- [src/daemon/quota/observed-quota.ts](../src/daemon/quota/observed-quota.ts): Adds bidirectional `reconcileFetched`, restart `hydrateFromRateLimits`, window-aware `observeRateLimit`, timestamp-guarded `mergeVendorQuota`, and Codex `"try again at ..."` reset-time parsing.
+- [src/daemon/agent-api/server.ts](../src/daemon/agent-api/server.ts): Passes `refresh`, `vendor`, and per-vendor wait budget to `quota.getSnapshot` during `hub models`.
 - [src/vendors/codex/catalog-degradation.acceptance.test.ts](../src/vendors/codex/catalog-degradation.acceptance.test.ts): Pre-implementation acceptance suite covering Codex degraded fallback and all-vendor catalog degradation semantics.
 - [src/daemon/quota/quota-reconciliation.acceptance.test.ts](../src/daemon/quota/quota-reconciliation.acceptance.test.ts): Pre-implementation acceptance suite covering probe-start timestamp reconciliation, `hub models --refresh`, real rate-limit protection, and all-vendor quota clearing.
 
@@ -38,8 +39,9 @@ None. This change fixes stale model discovery and stale quota lockouts without a
 > 「codex限额重置了」
 > 「肯定要用6.2sol啊」
 > 「现在就去查」
+> 「厂商限额状态反馈到 hub models：刚才 hub models 显示 Claude 和 Codex 都是“可用”，结果派出去立刻秒报限额，连续换了两次才切到 AGY。如果刚触发限额的厂商能在 hub models 里缓存标注“限额中（预计恢复时间）”，就能避免空派。」
 
-When a user refreshes or inspects Codex models after an upstream model rollout or an early quota reset, Bellwood must report the latest available Codex models (including `gpt-6.2-sol` and `gpt-6.2-astra`) without silently poisoning the 6-hour catalog cache with built-in fallback lists, and must clear stale `observedQuota` limits once a fresher upstream quota probe confirms availability while preserving real rate-limit protection.
+When a user refreshes or inspects models after an upstream model rollout, a rate-limit hit, or an early quota reset, Bellwood must report the latest available Codex models (including `gpt-6.2-sol` and `gpt-6.2-astra`) without silently poisoning the 6-hour catalog cache with built-in fallback lists, and must keep `hub models` quota status accurate in both directions: immediately marking exhausted vendors as limited with reset time (so Project Managers avoid empty dispatches across Claude, Codex, and all other vendors) and immediately clearing stale `observedQuota` limits once a fresher upstream quota probe confirms availability while preserving real rate-limit protection.
 
 ---
 
@@ -75,13 +77,18 @@ Live quota visibility evolved across two separate PRs. Commit `48fd8deb` (`#435`
 - `[Measured]` Inspecting `~/.codex/models_cache.json` (read-only metadata check) confirmed 12 entries (`10` with `visibility: "list"`, `2` with `visibility: "hide"`), all carrying numeric `priority` (`1` for `gpt-6.2-sol`, `2` for `gpt-6.2-astra`, ..., `12` for `codex-auto-review`) and `isDefault: undefined`. `parseCodexModels` (`src/vendors/codex/catalog.ts:72-107`) checks only `entry.isDefault === true` and never sorts by `priority` or derives the default model from the lowest visible `priority`.
 - `[Measured]` `createModelCatalogs` (`src/daemon/driver/model-catalog.ts:191-200`) treats every non-null `source.parse(raw)` result as healthy, overwrites `slot.cached`, clears `slot.failedAt = null`, and caches it for `MODEL_CATALOG_FRESH_MS` (6 hours, `src/shared/limits.ts:189`). A single transient Codex refresh timeout during `hub models --vendor codex --refresh` overwrites a good 10-model catalog with the 9-model static fallback and locks it in for 6 hours.
 
-#### Quota refresh and reconciliation
+#### Quota refresh, false-available gaps, and bidirectional reconciliation
 
-- `[Measured]` `mergeVendorQuota` (`src/daemon/quota/observed-quota.ts:97-107`) returns `status: "limited"` unconditionally whenever `observed !== null && observed.expiresAt > at`, even if `fetched` already reports `seven_day: { utilization: 0, status: "allowed" }`.
-- `[Measured]` `createFetchedQuota` (`src/daemon/quota/fetched-quota.ts:62-118`) stores `{ value, until }` in `cached` and discards the probe start timestamp. Neither `CachedQuota` nor `ProviderQuota` exposes when a vendor's fetched quota was probed.
-- `[Measured]` `parseQuotaResetAt` (`src/daemon/quota/observed-quota.ts:66-81`) matches only `reset(s|s_at|s at)` patterns. It returns `null` for Codex's real error string `"You’ve hit your usage limit... try again at Dec 2nd, 2026 10:19 AM."`, causing `observeTurnError` (`observed-quota.ts:145`) either to inherit a multi-day `resetsAt` from an earlier `rate_limit` event or to apply the 15-minute `OBSERVED_QUOTA_FALLBACK_TTL_MS` with raw error text.
-- `[Measured]` `createPreparation` for `command === "models"` (`src/daemon/agent-api/server.ts:584-592`) forwards `refresh: body.refresh === true` to `opts.models.list(...)`, but calls `modelQuotas(opts.quota, vendor, signal)` (`server.ts:543-560`) with no `refresh` parameter, a fixed `HUB_MODELS_QUOTA_WAIT_MS` (1,500 ms) timeout, and no reconciliation back into `observedQuota`.
-- `[Measured]` `daemon.ts:408` clears `observedQuota` only in `providerManager`'s `onVendorChanged` callback. Terminal-side credential changes (such as running `codex login` outside Bellwood) invalidate `ProviderQuota` and `ModelCatalogs` via fingerprints, but never clear `observedQuota`.
+- `[Measured]` **Direction A (stale lockout after reset)**: `mergeVendorQuota` (`src/daemon/quota/observed-quota.ts:97-107`) returns `status: "limited"` unconditionally whenever `observed !== null && observed.expiresAt > at`, even if `fetched` already reports `seven_day: { utilization: 0, status: "allowed" }`.
+- `[Measured]` **Direction A**: `createFetchedQuota` (`src/daemon/quota/fetched-quota.ts:62-118`) stores `{ value, until }` in `cached` and discards the probe start timestamp. Neither `CachedQuota` nor `ProviderQuota` exposes when a vendor's fetched quota was probed.
+- `[Measured]` **Direction A**: `parseQuotaResetAt` (`src/daemon/quota/observed-quota.ts:66-81`) matches only `reset(s|s_at|s at)` patterns. It returns `null` for Codex's real error string `"You’ve hit your usage limit... try again at Dec 2nd, 2026 10:19 AM."`, causing `observeTurnError` (`observed-quota.ts:145`) either to inherit a multi-day `resetsAt` from an earlier `rate_limit` event or to apply the 15-minute `OBSERVED_QUOTA_FALLBACK_TTL_MS` with raw error text.
+- `[Measured]` **Direction A**: `createPreparation` for `command === "models"` (`src/daemon/agent-api/server.ts:584-592`) forwards `refresh: body.refresh === true` to `opts.models.list(...)`, but calls `modelQuotas(opts.quota, vendor, signal)` (`server.ts:543-560`) with no `refresh` parameter, a fixed `HUB_MODELS_QUOTA_WAIT_MS` (1,500 ms) timeout, and no reconciliation back into `observedQuota`.
+- `[Measured]` **Direction A**: `daemon.ts:408` clears `observedQuota` only in `providerManager`'s `onVendorChanged` callback. Terminal-side credential changes (such as running `codex login` outside Bellwood) invalidate `ProviderQuota` and `ModelCatalogs` via fingerprints, but never clear `observedQuota`.
+- `[Measured]` **Direction B (false "可用" causing empty dispatches)**: `mergeFetchedQuotas` (`src/daemon/quota/fetched-quota.ts:146-153`) awaits `Promise.all` across all three quota-capable CLIs (`claude`, `codex`, `agy`), and `modelQuotas` (`src/daemon/agent-api/server.ts:547-550`) races that combined promise against `HUB_MODELS_QUOTA_WAIT_MS` (1,500 ms). Once the 60-second `FETCHED_QUOTA_FRESH_MS` cache expires (or on initial query), any single slow CLI (>1.5s) makes `Promise.race` return `null`, discarding even fast finished probes from Claude or Codex and reporting both as `可用`.
+- `[Measured]` **Direction B**: Fetched exhaustion from `/api/quota` or startup `void quota.get()` (`daemon.ts:1029`) lives only inside `createFetchedQuota` for 60 seconds and is never recorded into `ObservedQuotaStore`. At 61 seconds, `hub models` triggers a fresh probe, hits the 1.5s timeout cliff, and falsely displays `可用` even though `resetsAt` is still hours or days away.
+- `[Measured]` **Direction B**: `COMMON_QUOTA_PATTERN` (`src/shared/vendors.ts:391`) requires a duration modifier before `limit` (`\b(?:session|weekly|daily|monthly|\d+[ -](?:hour|day|week)) limit\b`) and does not match Claude's real error `"You've hit your limit · resets 7pm (Asia/Shanghai)"`, `"reached your limit"`, `"out of extra usage"`, or `"usage cap"`. `observeTurnError` drops those failures silently.
+- `[Measured]` **Direction B**: `observeRateLimit` (`src/daemon/quota/observed-quota.ts:139-142`) checks only `isQuotaExhausted(info, at)` (which inspects top-level `info.status === "rejected"` and ignores `info.windows`) and calls `clear(vendor)` on any non-rejected event. An `allowed` event whose `windows` still contain a `rejected` or `utilization >= 1` window, or a same-timestamp/older event from a sibling window, wrongly wipes an active exhaustion record.
+- `[Measured]` **Direction B**: `createObservedQuotaStore()` (`src/daemon/daemon.ts:403`) starts empty after daemon restart or `hub self-reload`, ignoring unexpired `rejected` rate limits already persisted on `agent_sessions.rate_limit`. Until a new turn fails or a slow quota probe finishes within 1.5s, `hub models` reports `可用`.
 
 ---
 
@@ -105,25 +112,26 @@ Live quota visibility evolved across two separate PRs. Commit `48fd8deb` (`#435`
 
 ### Candidate comparison: Quota reset reconciliation
 
-| Dimension | Candidate B1 (Patch): Let `fetched` always override `observed` in `mergeVendorQuota` | Candidate B2 (Recommended, Day-1 design): Probe-start timestamp (`probedAt`) + `ObservedQuotaStore.reconcileFetched` + targeted `ProviderQuota.getSnapshot({ vendor, refresh })` | Candidate B3: Persist `observedQuota` in SQLite with a 60-second background polling loop |
+| Dimension | Candidate B1 (Patch): Let `fetched` always override `observed` in `mergeVendorQuota` | Candidate B2 (Recommended, Day-1 design): Probe-start timestamp (`probedAt`) + bidirectional `ObservedQuotaStore.reconcileFetched` + per-vendor deadline `ProviderQuota.getSnapshot` + startup hydration | Candidate B3: Persist `observedQuota` in SQLite with a 60-second background polling loop |
 | --- | --- | --- | --- |
-| Architecture | Reorder `if` branches in `mergeVendorQuota` | Record `probedAt` at probe start in `createFetchedQuota`; expose `getSnapshot({ vendor, refresh })` on `ProviderQuota`; reconcile `ObservedQuotaStore` on any newer all-allowed fetched snapshot and clear on external scope/input change | Add SQLite table and migration plus daemon interval polling `ProviderQuota` |
+| Architecture | Reorder `if` branches in `mergeVendorQuota` | Record `probedAt` at probe start in `createFetchedQuota`; expose per-vendor non-blocking `getSnapshot({ vendor, refresh, timeoutMs })` on `ProviderQuota`; reconcile `ObservedQuotaStore` bidirectionally (recording fetched exhaustion and clearing on newer all-allowed probes); expand `COMMON_QUOTA_PATTERN`; check `windows` in `observeRateLimit`; hydrate unexpired `agent_sessions.rate_limit` on startup | Add SQLite table and migration plus daemon interval polling `ProviderQuota` |
 | Early quota reset recovery | Clears on read, but leaves zombie entry in `ObservedQuotaStore` | Clears `ObservedQuotaStore` immediately on `/api/quota` fetch or `hub models --refresh` once `probedAt > observedAt` confirms all windows allowed | Clears within 60s poll interval |
+| False-"可用" prevention (avoiding empty dispatches) | **Not fixed**: 1.5s `Promise.all` timeout, 60s fetched expiry, missed Claude phrasing, and restart amnesia still report `可用` | **Fixed end to end**: fast vendor probes never wait on slow siblings; fetched exhaustion persists in `ObservedQuotaStore` until `resetsAt` or newer allowed fetch; Claude `"hit your limit"` matches `COMMON_QUOTA_PATTERN`; startup hydrates unexpired session limits with `observedAt = updatedAt` | Partial (still misses live error phrasing and partial-window clobber) |
 | Real rate-limit protection | **Broken**: 60s cached `fetched` from before the error hides a real limit | **Preserved**: `probedAt <= observedAt`, empty/failed probes, or any exhausted window keep `observed` active | Preserved, at high process-spawn cost |
-| Child process and restart cost | Low | Zero background polling; `hub models --vendor codex --refresh` probes only `codex`; in-memory store stays clean across restarts | High background CLI churn; adds migration and retention surface |
+| Child process and restart cost | Low | Zero background polling; `hub models --vendor codex --refresh` probes only `codex`; startup hydration uses existing `agent_sessions.rate_limit` with zero schema migration and self-clears via startup `quota.get()` when reset | High background CLI churn; adds migration and retention surface |
 
 ### Recommendation and red-flag screening
 
-Choose **Candidate A2 + Candidate B2**. Both introduce the exact missing domain concepts (`isDegraded` probe quality in `ModelCatalogs`, `probedAt`-fenced reconciliation between `ProviderQuota` and `ObservedQuotaStore`) without rebuilding SQLite schemas or coupling Bellwood to vendor OAuth tokens.
+Choose **Candidate A2 + Candidate B2**. Both introduce the exact missing domain concepts (`isDegraded` probe quality in `ModelCatalogs`, `probedAt`-fenced bidirectional reconciliation between `ProviderQuota` and `ObservedQuotaStore`, per-vendor non-blocking deadlines in `ProviderQuota.getSnapshot`, and startup hydration from existing `agent_sessions.rate_limit`) without rebuilding SQLite schemas or coupling Bellwood to vendor OAuth tokens.
 
 Screening against `.agents/skills/architect/references/design-red-flags.md`:
 
-- **Shallow module**: `ModelCatalogs` absorbs all degraded-preservation and retry-backoff policy behind one optional `isDegraded` predicate; `ObservedQuotaStore.reconcileFetched` encapsulates all timestamp and window-exhaustion checks behind one method.
+- **Shallow module**: `ModelCatalogs` absorbs all degraded-preservation and retry-backoff policy behind one optional `isDegraded` predicate; `ObservedQuotaStore.reconcileFetched` encapsulates bidirectional fetched-quota reconciliation (both caching exhaustion past the 60s fetched window and clearing on newer all-allowed probes) behind one method.
 - **Information leakage**: `QuotaResponse` on the `/api/quota` wire keeps its existing `{ groups }` shape; internal `probedAt` reconciliation metadata stays private to `ProviderQuotaSnapshot` and daemon modules. Codex's stderr pattern and `models_cache.json` parsing stay encapsulated inside `src/vendors/codex/catalog.ts`.
 - **Temporal decomposition**: Validation, fallback selection, and priority ordering for Codex models live in `src/vendors/codex/catalog.ts`; freshness, backoff, and invalidation live in `src/daemon/driver/model-catalog.ts`.
-- **Pass-through method**: `ProviderQuota.getSnapshot` adds real policy (targeted single-vendor querying, explicit cache invalidation on `refresh`, and per-vendor `probedAt` assembly) rather than forwarding `get()`.
+- **Pass-through method**: `ProviderQuota.getSnapshot` adds real policy (targeted single-vendor querying, explicit cache invalidation on `refresh`, per-vendor non-blocking `timeoutMs` deadlines, and per-vendor `probedAt` assembly) rather than forwarding `get()`.
 - **Split ownership**: `ObservedQuotaStore` remains the sole writer of `VendorQuotaObservation`; `ProviderQuota` and `ModelCatalogs` notify it through explicit callbacks (`onFetched`, `onScopeChanged`, `onInputsChanged`) instead of mutating shared maps.
-- **Two ways to do one task**: `hub models --refresh` and `/api/quota` both flow through `ProviderQuota` and `ObservedQuotaStore.reconcileFetched` using the same `probedAt > observedAt` predicate.
+- **Two ways to do one task**: `hub models`, `hub models --refresh`, and `/api/quota` all flow through `ProviderQuota` and `ObservedQuotaStore.reconcileFetched` using the same `probedAt > observedAt` predicate.
 - **Importable internals**: Internal cache entries (`cached.probedAt`, `slot.degraded`) stay closure-private inside `createFetchedQuota` and `createModelCatalogs`.
 - **Hand-synced list**: Vendor iteration still derives from `AGENT_VENDORS` and `VENDOR_LIST` with no duplicated vendor arrays.
 
@@ -137,10 +145,10 @@ Every affected cache satisfies all four rules in `AGENTS.md`:
    - `ModelCatalogs` keeps `CatalogFingerprint` (`inputs` and `probeState`) checks; when `inputs` change, it resets `slot.cached` (including clearing `degraded`) and invokes `onInputsChanged(vendor)` so `ObservedQuotaStore` drops stale observations for that vendor.
    - Degraded catalogs set `slot.failedAt = at` and retry on `MODEL_CATALOG_RETRY_MS` (30 seconds), never locking a degraded result for `MODEL_CATALOG_FRESH_MS` (6 hours).
    - `createFetchedQuota` keeps fingerprint invalidation (invoking `onScopeChanged`), window-reset early expiry, and short `FETCHED_QUOTA_RETRY_MS` (30 seconds) backoff on failures or empty results.
-   - `ObservedQuotaStore` clears immediately on `reconcileFetched` when `probedAt > observedAt` and all active fetched windows are non-exhausted, on turn success, on allowed `rate_limit` updates, on credential/scope change, or on expiry.
+   - `ObservedQuotaStore` reconciles bidirectionally: `reconcileFetched` caches exhausted fetched windows (`source: "fetched"`) until their earliest active `resetsAt` (or `OBSERVED_QUOTA_FALLBACK_TTL_MS`) so `hub models` stays accurate past `FETCHED_QUOTA_FRESH_MS` (60s), and clears any active limit immediately when `probedAt > observedAt` and all active fetched windows are non-exhausted. At daemon startup, `hydrateFromRateLimits` seeds unexpired `rejected` session limits from `agent_sessions.rate_limit` with `observedAt = session.updatedAt` so still-limited vendors are protected immediately while the startup `quota.get()` (`probedAt > session.updatedAt`) clears any vendor that reset during downtime. Entries also clear on turn success, window-verified `allowed` `rate_limit` updates, credential/scope change, or expiry.
 2. **Upper bounds**:
    - `ModelCatalogs` remains bounded to `AGENT_VENDORS.length` (`8`) slots and `MAX_CATALOG_MODELS` (`50`) models per vendor.
-   - `ObservedQuotaStore` remains bounded to `OBSERVED_QUOTA_CACHE_MAX` (`16`) entries and `MAX_QUOTA_REASON_CHARS` (`160`) per reason.
+   - `ObservedQuotaStore` remains bounded to `OBSERVED_QUOTA_CACHE_MAX` (`16`) entries and `MAX_QUOTA_REASON_CHARS` (`160`) per reason across turn errors, fetched exhaustion caching, and startup hydration.
    - `readCodexModelsCacheFallback` bounds file reads via `MAX_CODEX_MODELS_CACHE_BYTES` (`4 MiB`) using `fstatSync` before reading, preventing memory spikes on corrupt or huge files.
    - `queryCodexAppServer` stderr buffer remains bounded to `STDERR_TAIL_CHARS` (`500` chars) for crash reporting, while checking each stderr chunk/line with a streaming boolean flag (`remoteRefreshFailed`) so zero unbounded stderr strings accumulate.
 3. **Stable front-end references**:
@@ -164,14 +172,14 @@ Every affected cache satisfies all four rules in `AGENTS.md`:
 
 | Vendor | Catalog discovery | Degraded catalog handling | Fetched quota probe | Observed quota reconciliation |
 | --- | --- | --- | --- | --- |
-| `codex` | `codex app-server` `model/list` + `account/read` | Detects `failed to refresh available models:` on stderr, falls back to bounded `models_cache.json` for ChatGPT accounts with priority default, sets `degraded: true` -> shared `ModelCatalogs` retry/preserve logic | `account/rateLimits/read` via `codex/quota.ts` | Reconciles via `probedAt > observedAt` on `/api/quota` and `hub models --refresh`; clears on scope/input change; parses `"try again at ..."` |
-| `claude` | `claude -p` `initialize` + `auth status` | Uses shared `ModelCatalogs` `isDegraded` slot logic (default `false`; opt-in anytime) | `get_usage` via `claude/quota.ts` | Reconciles via `probedAt > observedAt` on `/api/quota` and `hub models --refresh`; clears on scope/input change |
-| `agy` | `agy --output-format json models` | Uses shared `ModelCatalogs` `isDegraded` slot logic | `agy -p /usage` via `fetched-quota.ts` | Reconciles via `probedAt > observedAt` on `/api/quota` and `hub models --refresh`; clears on scope/input change |
-| `cursor` | `cursor-agent models` + `status` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Clears via `onInputsChanged` on external credential/config change, turn success, `rate_limit`, or expiry |
-| `opencode` | `opencode models --standalone` + `auth list` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Clears via `onInputsChanged`, turn success, `rate_limit`, or expiry |
-| `pi` | `pi --offline --list-models` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Clears via `onInputsChanged`, turn success, `rate_limit`, or expiry |
-| `kimi` | Reads `config.toml` + `credentials/` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Clears via `onInputsChanged`, turn success, `rate_limit`, or expiry |
-| `deepseek` | Reads `.credentials.yaml` / `.env` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Clears via `onInputsChanged`, turn success, `rate_limit`, or expiry |
+| `codex` | `codex app-server` `model/list` + `account/read` | Detects `failed to refresh available models:` on stderr, falls back to bounded `models_cache.json` for ChatGPT accounts with priority default, sets `degraded: true` -> shared `ModelCatalogs` retry/preserve logic | `account/rateLimits/read` via `codex/quota.ts` (per-vendor deadline) | Bidirectional `reconcileFetched` (caches fetched exhaustion past 60s and clears on `probedAt > observedAt` all-allowed); window-aware `observeRateLimit`; startup hydration; clears on scope/input change; parses `"try again at ..."` |
+| `claude` | `claude -p` `initialize` + `auth status` | Uses shared `ModelCatalogs` `isDegraded` slot logic (default `false`; opt-in anytime) | `get_usage` via `claude/quota.ts` (per-vendor deadline) | Bidirectional `reconcileFetched`; expanded `COMMON_QUOTA_PATTERN` (`"hit your limit"`, `"reached your limit"`, `"out of extra usage"`, `"usage cap"`); window-aware `observeRateLimit`; startup hydration; clears on scope/input change |
+| `agy` | `agy --output-format json models` | Uses shared `ModelCatalogs` `isDegraded` slot logic | `agy -p /usage` via `fetched-quota.ts` (per-vendor deadline) | Bidirectional `reconcileFetched`; expanded `COMMON_QUOTA_PATTERN`; window-aware `observeRateLimit`; startup hydration; clears on scope/input change |
+| `cursor` | `cursor-agent models` + `status` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Expanded `COMMON_QUOTA_PATTERN`; window-aware `observeRateLimit`; startup hydration; clears via `onInputsChanged` on external credential/config change, turn success, or expiry |
+| `opencode` | `opencode models --standalone` + `auth list` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Expanded `COMMON_QUOTA_PATTERN`; window-aware `observeRateLimit`; startup hydration; clears via `onInputsChanged`, turn success, or expiry |
+| `pi` | `pi --offline --list-models` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Expanded `COMMON_QUOTA_PATTERN`; window-aware `observeRateLimit`; startup hydration; clears via `onInputsChanged`, turn success, or expiry |
+| `kimi` | Reads `config.toml` + `credentials/` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Expanded `COMMON_QUOTA_PATTERN`; window-aware `observeRateLimit`; startup hydration; clears via `onInputsChanged`, turn success, or expiry |
+| `deepseek` | Reads `.credentials.yaml` / `.env` | Uses shared `ModelCatalogs` `isDegraded` slot logic | None | Expanded `COMMON_QUOTA_PATTERN`; window-aware `observeRateLimit`; startup hydration; clears via `onInputsChanged`, turn success, or expiry |
 
 - **Single file a future vendor implements**: A future vendor only implements `src/vendors/<vendor>/catalog.ts` (optionally setting `isDegraded` on its `VendorCatalogProbe`) and, if the CLI exposes a quota API, `src/vendors/<vendor>/quota.ts` registered in `src/vendors/<vendor>/daemon.ts` and `spec.ts`. Degradation preservation, 30-second retry backoff, `probedAt` fencing, `hub models --refresh` quota invalidation, and external credential scope clearing all work automatically in `src/daemon/`.
 
@@ -188,9 +196,11 @@ Every affected cache satisfies all four rules in `AGENTS.md`:
 
 In the implementation PR, remove or replace these superseded behaviors in place so old and new paths never coexist:
 
-- Remove the unconditional `if (observed !== null && observed.expiresAt > at)` early return in `mergeVendorQuota` (`src/daemon/quota/observed-quota.ts:97-100`) that ignored newer non-exhausted `fetched` windows; replace it with timestamp-fenced reconciliation (`fetchedProbedAt > observed.observedAt`).
+- Remove the unconditional `if (observed !== null && observed.expiresAt > at)` early return in `mergeVendorQuota` (`src/daemon/quota/observed-quota.ts:106-109`) that ignored newer non-exhausted `fetched` windows; replace it with timestamp-fenced reconciliation (`fetchedProbedAt > observed.observedAt`).
+- Replace the top-level-only `isQuotaExhausted(info, at)` branch in `observeRateLimit` (`src/daemon/quota/observed-quota.ts:148-151`) with a window-aware exhaustion check that records exhausted `info.windows` entries and refuses to let older or same-millisecond `allowed` events clear an active limit.
+- Replace the duration-prefixed-only `COMMON_QUOTA_PATTERN` (`src/shared/vendors.ts:391`) in place so Claude and other vendor limit strings (`"hit your limit"`, `"reached your limit"`, `"out of extra usage"`, `"usage cap"`) classify directly as `"quota"` without maintaining a second pattern.
 - Remove the assumption in `createModelCatalogs` (`src/daemon/driver/model-catalog.ts:191-195`) that every non-null `parse()` result overwrites `slot.cached` and clears `slot.failedAt`.
-- Remove the `modelQuotas` path in `src/daemon/agent-api/server.ts:543-560` that ignored `body.refresh === true` and queried all vendors with a fixed 1,500 ms wait even on single-vendor `--refresh`.
+- Remove the all-or-nothing `Promise.race([quota.get(), timeout])` path in `modelQuotas` (`src/daemon/agent-api/server.ts:544-561`) that ignored `body.refresh === true` and dropped fast vendor probes whenever any sibling CLI exceeded 1,500 ms; replace it with `quota.getSnapshot({ vendor, refresh, timeoutMs })`.
 - Remove `parseCodexModels`'s `isDefault`-only default detection (`src/vendors/codex/catalog.ts:91-95`) in favor of `isDefault` with ascending-`priority` fallback.
 
 ---
@@ -200,15 +210,16 @@ In the implementation PR, remove or replace these superseded behaviors in place 
 - `docs/codex-catalog-and-quota-refresh-design.md`: This design document.
 - `docs/README.md`: Indexes this design document under Architecture and security.
 - `src/shared/limits.ts`: Defines `HUB_MODELS_REFRESH_QUOTA_WAIT_MS`, `MAX_CODEX_MODELS_CACHE_BYTES`, and `CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS`.
+- `src/shared/vendors.ts`: Keeps existing `COMMON_QUOTA_PATTERN` unmodified in the skeleton step so S15 acceptance assertions fail pre-implementation while existing `src/shared/vendors.test.ts` stays green.
 - `src/daemon/vendors/types.ts`: Adds optional `isDegraded?(raw: unknown): boolean` to `VendorCatalogProbe`.
 - `src/daemon/driver/model-catalog.ts`: Adds optional `isDegraded` on `VendorCatalogSource` and `onInputsChanged` on `ModelCatalogsOptions`.
 - `src/vendors/codex/catalog.ts`: Exports `CodexCatalogQueryResult`, `CodexModelsCacheFallbackOptions`, `isCodexRemoteRefreshFailure`, and `readCodexModelsCacheFallback` skeleton functions plus `codexCatalogProbe.isDegraded`.
 - `src/daemon/quota/fetched-quota.ts`: Exports `FetchedQuotaSnapshot`, adds `getSnapshot()` skeleton to `CachedQuota`, and adds `onFetched` / `onScopeChanged` options to `createFetchedQuota`.
-- `src/daemon/quota/provider-quota.ts`: Exports `ProviderQuotaSnapshot` and `ProviderQuotaOptions`, and adds `getSnapshot(options)` skeleton to `ProviderQuota`.
-- `src/daemon/quota/observed-quota.ts`: Adds `reconcileFetched(...)` skeleton to `ObservedQuotaStore` and optional `fetchedProbedAt?: number` parameter to `mergeVendorQuota`.
-- `src/daemon/agent-api/server.ts`: Extends `AgentApiOptions["quota"]` with optional `getSnapshot` hook for targeted refresh.
+- `src/daemon/quota/provider-quota.ts`: Exports `ProviderQuotaSnapshot` and `ProviderQuotaOptions`, and adds `getSnapshot({ vendor, refresh, timeoutMs })` skeleton to `ProviderQuota`.
+- `src/daemon/quota/observed-quota.ts`: Widens `VendorQuotaObservation["source"]` to `"observed" | "fetched" | "rate_limit"`, exports `QuotaReconcileOutcome` and `PersistedSessionRateLimit`, adds bidirectional `reconcileFetched(...)` and `hydrateFromRateLimits(...)` skeletons to `ObservedQuotaStore`, and adds optional `fetchedProbedAt?: number` to `mergeVendorQuota`.
+- `src/daemon/agent-api/server.ts`: Extends `AgentApiOptions["quota"]` with optional `getSnapshot` hook for targeted refresh and per-vendor deadlines.
 - `src/vendors/codex/catalog-degradation.acceptance.test.ts`: Runnable acceptance tests for Codex degraded fallback, priority sorting, and all-8-vendor `ModelCatalogs` degradation and input-change semantics.
-- `src/daemon/quota/quota-reconciliation.acceptance.test.ts`: Runnable acceptance tests for Codex reset parsing, `probedAt` fencing, `reconcileFetched`, `ProviderQuota.getSnapshot({ vendor, refresh })`, `hub models --refresh`, and all-8-vendor quota recovery.
+- `src/daemon/quota/quota-reconciliation.acceptance.test.ts`: Runnable acceptance tests for Codex reset parsing, Claude and Codex quota phrasing, `probedAt` fencing, bidirectional `reconcileFetched`, restart `hydrateFromRateLimits`, partial-window `observeRateLimit` protection, per-vendor `ProviderQuota.getSnapshot({ vendor, refresh, timeoutMs })`, `hub models` / `hub models --refresh`, and all-8-vendor quota recovery.
 
 ---
 
@@ -221,6 +232,7 @@ Mapping of quoted user sentences and settled rules to scenarios:
 - 「codex限额重置了」 -> Scenarios S1, S4, S5, S7, S12.
 - 「肯定要用6.2sol啊」 -> Scenarios S1, S2, S3, S9, S12.
 - 「现在就去查」 -> Scenarios S1, S2, S3, S4, S8, S10.
+- 「厂商限额状态反馈到 hub models：刚才 hub models 显示 Claude 和 Codex 都是“可用”，结果派出去立刻秒报限额，连续换了两次才切到 AGY。如果刚触发限额的厂商能在 hub models 里缓存标注“限额中（预计恢复时间）”，就能避免空派。」 -> Scenarios S4, S5, S6, S15, S16, S17.
 
 1. **S1. Codex degraded `model/list` recovers `gpt-6.2-sol` and `gpt-6.2-astra` from `models_cache.json` without 6-hour poisoning (also covers two consecutive turns).**
    - First: A ChatGPT-authenticated Codex environment has `$CODEX_HOME/models_cache.json` containing `gpt-6.2-sol` (`priority: 1`) and `gpt-6.2-astra` (`priority: 2`) while `codex app-server` `model/list` logs `ERROR codex_models_manager::manager: failed to refresh available models: request timed out` to `stderr` and returns the 9-model built-in static list.
@@ -248,9 +260,9 @@ Mapping of quoted user sentences and settled rules to scenarios:
    - Expected: Neither the pre-error probe (`probedAt = 1000 <= observedAt = 1200`), nor the exhausted probe, nor the empty/failed probe clears `ObservedQuotaStore`; `codex` stays `限额已用完`.
 
 6. **S6. Restart in the middle of the operation.**
-   - First: A daemon holds a degraded catalog in `ModelCatalogs` and a limited entry in `ObservedQuotaStore` while a probe is in flight.
-   - Next: Call `models.close()` and `quota.close()` (simulating daemon shutdown) and start fresh instances against the same config directory.
-   - Expected: All in-flight probe child processes abort and exit cleanly before `close()` resolves; after restart, `ObservedQuotaStore` starts empty (no persisted lockout) and fresh probes read the live catalog and quota.
+   - First: A daemon holds a degraded catalog in `ModelCatalogs` and active unexpired `rejected` rate limits on `agent_sessions.rate_limit` while a probe is in flight.
+   - Next: Call `models.close()` and `quota.close()` (simulating daemon shutdown), restart fresh instances, hydrate `ObservedQuotaStore` from unexpired session rate limits (`observedAt = session.updatedAt`), and run a startup `ProviderQuota` probe.
+   - Expected: All in-flight probe child processes abort and exit cleanly before `close()` resolves; after restart, still-exhausted vendors immediately show `限额已用完` (preventing post-restart empty dispatches), while any vendor whose quota reset during downtime is cleared as soon as the startup probe (`probedAt > session.updatedAt`) returns `allowed`.
 
 7. **S7. State or configuration change while work or a notice waits in a queue.**
    - First: A vendor (`codex`, `claude`, or an observed-only vendor such as `cursor`) is marked limited in `ObservedQuotaStore` and has a cached catalog while a queued check or user turn is pending.
@@ -262,7 +274,7 @@ Mapping of quoted user sentences and settled rules to scenarios:
    - **Caches key on identity, have a limit, and retry failures soon** (`src/daemon/driver/model-catalog.ts`, `src/daemon/quota/**`, `src/shared/limits.ts`): `CatalogFingerprint` and `quotaScope` keep `stat`-based `(dev, ino, mtime, ctime, size)` identity; all maps and caches stay bounded by `AGENT_VENDORS.length` and `OBSERVED_QUOTA_CACHE_MAX`; degraded catalogs and failed quota probes retry at `MODEL_CATALOG_RETRY_MS` / `FETCHED_QUOTA_RETRY_MS`; in-flight probes re-check fingerprints before caching.
    - **Growing data has a cap in limits.ts** (`src/shared/limits.ts`): All three new constants live in `src/shared/limits.ts` (`HUB_MODELS_REFRESH_QUOTA_WAIT_MS`, `MAX_CODEX_MODELS_CACHE_BYTES`, `CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS`), bounding wait latency, disk reads, and fallback age; neither `vitest.config.ts` nor `vite.config.ts` imports `src/shared/limits.ts`.
    - **Async work stops touching the ledger after shutdown starts** (`src/daemon/agent-api/**`, `src/daemon/daemon.ts`): `modelQuotas` checks `signal.aborted` via `unlessAborted` and clears its timeout in `finally`; `createFetchedQuota.close()` and `createProviderQuota.close()` abort active and invalidated draining probes and resolve only after settlement.
-   - **Restart recovery finishes what the last run left** (`src/daemon/daemon.ts`): Neither `ModelCatalogs` nor `ObservedQuotaStore` mints cross-restart durable work; restart cleanly re-probes current config and quota without carrying stale lockouts.
+   - **Restart recovery finishes what the last run left** (`src/daemon/daemon.ts`): `ModelCatalogs` re-probes cleanly after restart without carrying stale degraded lists, and `ObservedQuotaStore` hydrates unexpired `rejected` limits from existing `agent_sessions.rate_limit` with `observedAt = session.updatedAt` so still-limited vendors stay marked while startup `ProviderQuota` probes (`probedAt > session.updatedAt`) clear any vendor that reset during downtime.
    - **Child processes are tracked and gone before cleanup** (`src/daemon/driver/**`): Every Codex and quota child continues to spawn via `spawnOwnedProcess` + `trackChild` and settle via `closeAndWaitChild` / `killChildAndWait`.
    - **Detached child processes and temp dirs stay inside the session boundary** (`src/daemon/driver/**`): No new unmanaged temp dirs or untracked processes are introduced; isolated test fixtures live under `mkdtempSync` and wait for child exit before removal.
    - **Tests wait for events, not for time** (`**/*.test.ts`): All new acceptance tests use injectable clocks (`now`) or explicit deferred gates/events rather than fixed sleeps or wall-clock duration assertions.
@@ -299,6 +311,21 @@ Mapping of quoted user sentences and settled rules to scenarios:
     - Next: Verify Feishu and multi-computer mesh.
     - Expected: `hub` CLI and Web UI (wide and narrow) both display `gpt-6.2-sol` and refreshed `0%` quota consistently. Feishu settings cards call `models.list({ vendor, refresh: true })` (`src/daemon/feishu/card-actions.ts:144`) and multi-computer mesh proxies `/api/models` and `/api/quota` transparently with no wire-format break; live Feishu bot and multi-computer mesh E2E depend on the resident test bench and will be verified on the test bench or recorded as `not verified` with reason if unavailable locally.
 
+15. **S15. Triggered Claude and Codex limits immediately annotate `hub models` to prevent empty dispatches (two consecutive turns).**
+    - First: A Claude Worker fails with `"You've hit your limit · resets 7pm (Asia/Shanghai)"` and a Codex Worker fails with `"You’ve hit your usage limit... try again at Dec 2nd, 2026 10:19 AM."`, while AGY remains healthy.
+    - Next: The Project Manager runs `hub models` before dispatching the next Worker.
+    - Expected: Both `claude` and `codex` match `COMMON_QUOTA_PATTERN`, record parsed reset times in `ObservedQuotaStore`, and `hub models` reports `claude` and `codex` as `限额已用完（重置：...）` while `agy` reports `状态: 可用`, avoiding wasted dispatches.
+
+16. **S16. Per-vendor non-blocking deadline and fetched exhaustion caching prevent false "可用" when one CLI is slow or the 60s cache expires.**
+    - First: `ProviderQuota` probes `claude` (fast, 100% exhausted), `codex` (fast, 100% exhausted), and `agy` (slow, exceeds `timeoutMs`); then 65 seconds pass so `FETCHED_QUOTA_FRESH_MS` (60s) expires while `resetsAt` is still hours away.
+    - Next: Run `hub models` during the slow `agy` probe and again at 65 seconds.
+    - Expected: `ProviderQuota.getSnapshot({ timeoutMs })` returns the already-settled `claude` and `codex` results without waiting for `agy`, `reconcileFetched` caches both exhausted states in `ObservedQuotaStore` until `resetsAt`, and `hub models` continues to show `限额已用完（重置：...）` at 65 seconds instead of flashing `可用`.
+
+17. **S17. Partial-window `rate_limit` events never clobber an active exhausted window.**
+    - First: Claude emits a `rate_limit` event with `status: "allowed"` at top level while `windows.five_hour` has `utilization: 1, status: "rejected"`, OR emits an `allowed` sibling-window update at `at <= observedAt` right alongside a turn limit error.
+    - Next: Inspect `ObservedQuotaStore.getActive("claude")` and `hub models --vendor claude`.
+    - Expected: The exhausted window is recorded and preserved as `限额已用完` instead of being cleared to `可用`.
+
 ### Real-environment and real-CLI verification
 
 - **Real `codex 0.169.0` CLI (isolated local `CODEX_HOME` and isolated Bellwood `AGENT_HUB_HOME`)**: Run against the real installed `codex 0.169.0` binary in a temporary isolated `CODEX_HOME` (never modifying `~/.codex/` or touching `~/.agent-hub/state/`) covering: (a) fresh cache -> live `gpt-6.2-sol` & `gpt-6.2-astra`; (b) stale cache + simulated network/timeout failure -> stderr detection + `models_cache.json` fallback returning `gpt-6.2-sol` & `gpt-6.2-astra` with `degraded: true`; (c) real `account/rateLimits/read` quota probe clearing a seeded stale `observedQuota` on `hub models --vendor codex --refresh`.
@@ -314,7 +341,7 @@ Mapping of quoted user sentences and settled rules to scenarios:
   ```
 - Regression tests covering touched modules:
   ```sh
-  pnpm exec vitest run src/daemon/driver/model-catalog.test.ts src/daemon/driver/model-catalog-invalidation.test.ts src/daemon/quota/observed-quota.test.ts src/daemon/quota/fetched-quota.test.ts src/daemon/quota/provider-quota.test.ts src/daemon/agent-api/server.test.ts src/docs-guard.test.ts
+  pnpm exec vitest run src/shared/vendors.test.ts src/daemon/driver/model-catalog.test.ts src/daemon/driver/model-catalog-invalidation.test.ts src/daemon/quota/observed-quota.test.ts src/daemon/quota/fetched-quota.test.ts src/daemon/quota/provider-quota.test.ts src/daemon/agent-api/server.test.ts src/docs-guard.test.ts
   ```
 - Full local gate after implementation:
   ```sh

@@ -17,9 +17,9 @@ export interface ProviderQuotaOptions {
 export interface ProviderQuota {
   get(): Promise<QuotaResponse>;
   /**
-   * Postcondition: queries only options.vendor when specified (otherwise all quota-capable vendors), invalidating cached entries first when options.refresh is true, and returns groups alongside each vendor's probe-start timestamp.
+   * Postcondition: queries only options.vendor when specified (otherwise all quota-capable vendors), invalidating cached entries first when options.refresh is true; when options.timeoutMs is set, races each vendor independently against the deadline so already-settled vendors are never dropped when a sibling CLI is slow.
    */
-  getSnapshot(options?: { readonly vendor?: AgentVendor; readonly refresh?: boolean }): Promise<ProviderQuotaSnapshot>;
+  getSnapshot(options?: { readonly vendor?: AgentVendor; readonly refresh?: boolean; readonly timeoutMs?: number }): Promise<ProviderQuotaSnapshot>;
   refresh(vendor: AgentVendor): void;
   /**
    * Postcondition: prevents new quota probes, aborts all in-flight and draining vendor quota probes, and resolves only after every underlying child process has exited.
@@ -52,7 +52,7 @@ export function createProviderQuota(runtime: VendorRuntimeResolver, options?: Pr
   let closed = false;
   return {
     get: () => closed ? Promise.resolve({ groups: [] }) : merged.get(),
-    getSnapshot(_opts?: { readonly vendor?: AgentVendor; readonly refresh?: boolean }): Promise<ProviderQuotaSnapshot> {
+    getSnapshot(_opts?: { readonly vendor?: AgentVendor; readonly refresh?: boolean; readonly timeoutMs?: number }): Promise<ProviderQuotaSnapshot> {
       void _opts;
       throw new Error("Not implemented");
     },

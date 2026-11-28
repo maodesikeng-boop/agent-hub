@@ -9,11 +9,19 @@ import { QUOTA_WINDOWS, vendorFailureOf, type AgentVendor, type VendorAvailabili
 
 export interface VendorQuotaObservation {
   vendor: AgentVendor;
-  source: "observed" | "rate_limit";
+  source: "observed" | "fetched" | "rate_limit";
   resetsAt: number | null;
   observedAt: number;
   expiresAt: number;
   reason: string | null;
+}
+
+export type QuotaReconcileOutcome = "recorded" | "cleared" | "unchanged";
+
+export interface PersistedSessionRateLimit {
+  readonly vendor: AgentVendor;
+  readonly rateLimit: RateLimitInfo;
+  readonly updatedAt: number;
 }
 
 export interface ObservedQuotaStoreOptions {
@@ -28,9 +36,14 @@ export interface ObservedQuotaStore {
   observeTurnSuccess(vendor: AgentVendor): void;
   /**
    * Precondition: probedAt is the daemon timestamp when the upstream quota probe started.
-   * Postcondition: clears the active observation for vendor and returns true only when probedAt > active.observedAt and fetched contains at least one active non-exhausted window with zero exhausted windows for vendor.
+   * Postcondition: records an exhausted fetched window as source "fetched" (returning "recorded"), clears an active observation when probedAt > active.observedAt and all active fetched windows are non-exhausted (returning "cleared"), or leaves state unchanged (returning "unchanged").
    */
-  reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): boolean;
+  reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): QuotaReconcileOutcome;
+  /**
+   * Precondition: entries hold persisted session rate limits loaded at daemon startup with each session's updatedAt timestamp.
+   * Postcondition: seeds unexpired exhausted limits with observedAt = entry.updatedAt without overwriting fresher observations and returns the count of hydrated vendors.
+   */
+  hydrateFromRateLimits(entries: readonly PersistedSessionRateLimit[], at?: number): number;
   clearVendor(vendor: AgentVendor): void;
   getActive(vendor: AgentVendor, at?: number): VendorQuotaObservation | null;
   snapshot(at?: number): Partial<Record<AgentVendor, VendorQuotaObservation>>;
@@ -155,10 +168,15 @@ export function createObservedQuotaStore({
       return record(vendor, "observed", truncateChars(redactSecrets(errorMessage).trim().replace(/\s+/g, " "), MAX_QUOTA_REASON_CHARS), reset, at);
     },
     observeTurnSuccess: clear,
-    reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): boolean {
+    reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): QuotaReconcileOutcome {
       void vendor;
       void fetched;
       void probedAt;
+      void at;
+      throw new Error("Not implemented");
+    },
+    hydrateFromRateLimits(entries: readonly PersistedSessionRateLimit[], at?: number): number {
+      void entries;
       void at;
       throw new Error("Not implemented");
     },
