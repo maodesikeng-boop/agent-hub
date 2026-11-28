@@ -63,8 +63,8 @@ import {
   parseToolResults,
 } from "./protocol.ts";
 import { StreamingToolPreviewTracker, lineUuid } from "../../daemon/driver/protocol.ts";
+import { readonlySandboxUnavailableMessage } from "../../daemon/driver/kernel-readonly.ts";
 import {
-  WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   scanSecretGlobs,
   spawnInWriteScope,
   wrapInReadonlyOsSandbox,
@@ -392,16 +392,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       const exePath = this.#resolveClaudePath();
       launch = wrap({ command: exePath, args: claudeArgs }, roInput);
       if (!launch.osSandboxed) {
-        throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
-      }
-      if (launch.readonlyFallbackWarning) {
-        this.log(launch.readonlyFallbackWarning);
-        this.emit(st.id, {
-          type: "driver.warning",
-          uuid: randomUUID(),
-          message: launch.readonlyFallbackWarning,
-          at: Date.now(),
-        });
+        throw new DriverError("spawn_failed", readonlySandboxUnavailableMessage(this.#platform));
       }
       childEnv = { ...childEnv, TMPDIR: privateTmp, TEMP: privateTmp, TMP: privateTmp };
     } else {

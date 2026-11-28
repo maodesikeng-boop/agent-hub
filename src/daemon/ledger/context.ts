@@ -113,6 +113,7 @@ export interface LedgerContextOptions {
   changeBufferSize?: number;
   osSandboxed?: () => boolean;
   readonlyKernelSandboxed?: () => boolean;
+  workerPlatform?: NodeJS.Platform;
   deviceName?: () => string;
 }
 
@@ -234,7 +235,9 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     modelShortLabel: shortLabel,
     commandBlockReason,
     osSandboxed,
-    readonlyKernelSandboxed: options.readonlyKernelSandboxed ?? (() => osSandboxed() && kernelReadonlySandboxAvailable(process.platform, { available: true })),
+    readonlyKernelSandboxed:
+      options.readonlyKernelSandboxed ??
+      (() => osSandboxed() && kernelReadonlySandboxAvailable(options.workerPlatform ?? process.platform, { available: true })),
     deviceName: options.deviceName ?? (() => hostname()),
     writeGeneration: () => generation,
   };

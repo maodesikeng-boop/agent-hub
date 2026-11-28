@@ -80,8 +80,7 @@ export async function watchSandboxLaunch(
   await prepareOsSandboxForLaunch({ dataDir: options.dataDir, stateDir: options.stateDir, writeScope: null, readonly }, platform, { env });
   const shell = resolveSetupShell(job.command, env, undefined, platform);
   const launch = wrapInReadonlyOsSandbox({ command: shell.program, args: shell.args }, input, platform, wrapOptions);
-  // The Windows fallback leaves part of its boundary to a vendor tool layer, which a shell command does not have.
-  return launch.osSandboxed && launch.readonlyMode !== "fallback_write_restricted" ? { command: launch.command, args: launch.args } : null;
+  return launch.osSandboxed ? { command: launch.command, args: launch.args } : null;
 }
 
 export function createWatchCommandRunner(options: WatchLaunchOptions): (job: WatchRunJob) => Promise<WatchRunResult> {

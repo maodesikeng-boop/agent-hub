@@ -17,7 +17,6 @@ import {
   SECRET_SCAN_MAX_ENTRIES,
   SECRET_SCAN_MAX_MATCHES,
   SECRET_SCAN_MAX_MS,
-  WIN32_READONLY_FALLBACK_WARNING,
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   WRITE_SCOPE_ENFORCERS,
   WSL_ISOLATED_DIRS,
@@ -525,31 +524,15 @@ describe("readonlySeatbeltProfile", () => {
     expect(wrapInReadonlyOsSandbox(base, roInput, "freebsd")).toEqual({ ...base, osSandboxed: false });
   });
 
-  it("Windows 只读 Worker 回退与 MXC 切换：无 MXC 时自动回退为 4.4.2 受限令牌保底并带清晰降级告警；接入 MXC 后自动切到 MXC", () => {
+  it("Windows 只读 Worker 严格失败关闭与 MXC 切换：无 MXC 时返回 osSandboxed: false 不降级；接入 MXC 后自动切到 MXC", () => {
     resetOsSandboxCacheForTest();
-    const fallback = wrapInReadonlyOsSandbox(base, roInput, "win32", {
+    const unavailable = wrapInReadonlyOsSandbox(base, roInput, "win32", {
       available: true,
       disableWin32Mxc: true,
       winHelperPath: FUSA_RUN_EXE,
       stateDir: "C:\\Users\\u\\.agent-hub\\state",
     });
-    expect(fallback).toEqual({
-      command: FUSA_RUN_EXE,
-      args: [
-        "--sandbox",
-        "worker",
-        "--state-dir",
-        "C:\\Users\\u\\.agent-hub\\state",
-        "--readonly-fallback",
-        "--",
-        "/bin/agent",
-        "--x",
-        "y",
-      ],
-      osSandboxed: true,
-      readonlyMode: "fallback_write_restricted",
-      readonlyFallbackWarning: WIN32_READONLY_FALLBACK_WARNING,
-    });
+    expect(unavailable).toEqual({ ...base, osSandboxed: false });
 
     registerWin32MxcReadonlyProvider({
       available: () => true,

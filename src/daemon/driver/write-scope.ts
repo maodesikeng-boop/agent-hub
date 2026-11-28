@@ -40,12 +40,11 @@ export interface SpawnCommand {
   args: string[];
 }
 
-export type ReadonlyEnforcementMode = "native" | "mxc" | "fallback_write_restricted";
+export type ReadonlyEnforcementMode = "native" | "mxc";
 
 export interface ScopedSpawn extends SpawnCommand {
   osSandboxed: boolean;
   readonlyMode?: ReadonlyEnforcementMode;
-  readonlyFallbackWarning?: string;
 }
 
 export interface OsSandboxWrapOptions {
@@ -76,10 +75,6 @@ const BWRAP_PROBE_TIMEOUT_MS = 3_000;
 
 export const WORKER_NEEDS_OS_SANDBOX_MESSAGE =
   `${LOCAL_ERRORS.sandbox_unavailable.text}（Worker 需要 OS 沙箱强制限制可写与可读范围，不退回规则兜底）。${LOCAL_ERRORS.sandbox_unavailable.hint}。`;
-
-/** Without MXC on Windows, readonly Workers fall back to restricted tokens plus tool-level blocking instead of being refused. */
-export const WIN32_READONLY_FALLBACK_WARNING =
-  "当前 Windows 环境不支持 MXC ProcessContainer 只读容器（需 Windows 11 24H2+ 且启用容器支持），已自动回退为「受限令牌 + 受保护根拒写 ACL + 数据目录禁读 ACL + 工具层只读拦截」模式运行：数据目录与受保护 worktree 根仍由内核强制禁写、数据目录由内核强制禁读，其余目录写操作与主目录里的凭据读取由厂商工具权限规则拦截。";
 
 export interface Win32MxcReadonlyProvider {
   available(): boolean;
@@ -895,35 +890,6 @@ export function win32WorkerSandboxArgs(
   };
 }
 
-export function win32ReadonlyFallbackSandboxArgs(
-  base: SpawnCommand,
-  input: ReadonlySandboxInput,
-  options?: OsSandboxWrapOptions,
-): SpawnCommand {
-  const helper =
-    options?.winHelperPath ??
-    findWinHelperBinary("fusa-run.exe", { env: options?.env }) ??
-    FUSA_RUN_EXE;
-  const stateDir = inferStateDirFromReadonlyInput(input, options);
-  const reader = win32ReaderKeyOf(input.dataDirScope);
-  const ownSandboxOffArgs = options?.ownSandboxOffArgs ?? [];
-
-  return {
-    command: helper,
-    args: [
-      "--sandbox",
-      "worker",
-      "--state-dir",
-      stateDir,
-      "--readonly-fallback",
-      ...(reader === null ? [] : ["--reader", reader]),
-      "--",
-      base.command,
-      ...prependMissingArgs(ownSandboxOffArgs, base.args),
-    ],
-  };
-}
-
 export interface OsSandboxLaunchPrep {
   dataDir: string;
   stateDir: string;
@@ -1000,7 +966,7 @@ const win32Backend: OsSandboxBackend = {
     if (mxc && win32MxcReadonlyAvailable(options)) {
       return mxc.wrapReadonly(base, input, options);
     }
-    return win32ReadonlyFallbackSandboxArgs(base, input, options);
+    throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
   },
 };
 
@@ -1052,12 +1018,7 @@ export function wrapInReadonlyOsSandbox(
         readonlyMode: "mxc",
       };
     }
-    return {
-      ...win32ReadonlyFallbackSandboxArgs(base, input, options),
-      osSandboxed: true,
-      readonlyMode: "fallback_write_restricted",
-      readonlyFallbackWarning: WIN32_READONLY_FALLBACK_WARNING,
-    };
+    return { ...base, osSandboxed: false };
   }
   return { ...backend.wrapReadonly(base, input, options), osSandboxed: true };
 }

@@ -117,9 +117,8 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
 
     let sandbox = SandboxMode::Worker {
         state_dir: probe_state,
-        worker_id: Some("probe".to_string()),
+        worker_id: "probe".to_string(),
         reader: None,
-        readonly_fallback: false,
     };
     let child_args = vec![
         "internal-probe-child".to_string(),

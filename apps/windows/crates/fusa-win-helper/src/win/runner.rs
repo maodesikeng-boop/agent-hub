@@ -311,12 +311,10 @@ pub fn run_session(spec: RunSessionSpec<'_>) -> io::Result<i32> {
             state_dir,
             worker_id,
             reader,
-            readonly_fallback,
         } => Some(create_worker_restricted_token(
             state_dir,
-            worker_id.as_deref(),
+            worker_id,
             reader.as_deref(),
-            *readonly_fallback,
         )?),
     };
 

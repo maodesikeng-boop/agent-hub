@@ -5,10 +5,9 @@ pub enum SandboxMode {
     None,
     Worker {
         state_dir: PathBuf,
-        worker_id: Option<String>,
+        worker_id: String,
         // Per-session reader key: the token also carries `FusaRead-<key>`, which is only ever granted read, never write.
         reader: Option<String>,
-        readonly_fallback: bool,
     },
 }
 
@@ -230,7 +229,6 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
     let mut state_dir: Option<PathBuf> = None;
     let mut worker_id: Option<String> = None;
     let mut reader: Option<String> = None;
-    let mut readonly_fallback = false;
     let mut ctrl_pipe: Option<String> = None;
     let mut cwd: Option<PathBuf> = None;
     let mut raw_tail: Option<String> = None;
@@ -242,7 +240,6 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             "--state-dir" => state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?)),
             "--worker" => worker_id = Some(next_val(&mut it, "--worker")?),
             "--reader" => reader = Some(next_val(&mut it, "--reader")?),
-            "--readonly-fallback" => readonly_fallback = true,
             "--ctrl-pipe" => ctrl_pipe = Some(next_val(&mut it, "--ctrl-pipe")?),
             "--cwd" => cwd = Some(PathBuf::from(next_val(&mut it, "--cwd")?)),
             "--raw-tail" => raw_tail = Some(next_val(&mut it, "--raw-tail")?),
@@ -255,16 +252,12 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
         "worker" => {
             let state_dir = state_dir
                 .ok_or_else(|| "--sandbox worker requires --state-dir <dir>".to_string())?;
-            if !readonly_fallback && worker_id.is_none() {
-                return Err(
-                    "--sandbox worker requires --worker <id> (or --readonly-fallback)".to_string(),
-                );
-            }
+            let worker_id =
+                worker_id.ok_or_else(|| "--sandbox worker requires --worker <id>".to_string())?;
             SandboxMode::Worker {
                 state_dir,
                 worker_id,
                 reader,
-                readonly_fallback,
             }
         }
         other => return Err(format!("unsupported --sandbox mode: {other}")),
@@ -312,9 +305,8 @@ mod tests {
             FusaRunCommand::Run {
                 sandbox: SandboxMode::Worker {
                     state_dir: PathBuf::from("C:\\Users\\u\\.agent-hub\\state"),
-                    worker_id: Some("524".to_string()),
+                    worker_id: "524".to_string(),
                     reader: Some("7".to_string()),
-                    readonly_fallback: false,
                 },
                 ctrl_pipe: Some("\\\\.\\pipe\\fusa-ctrl-1".to_string()),
                 cwd: None,
@@ -324,30 +316,26 @@ mod tests {
             }
         );
 
-        let ro = parse_fusa_run_args(&vec_s(&[
+        assert!(parse_fusa_run_args(&vec_s(&[
             "--sandbox",
             "worker",
             "--state-dir",
             "C:\\state",
             "--readonly-fallback",
-            "--reader",
-            "9",
             "--",
             "agy.exe",
         ]))
-        .expect("parse readonly fallback");
-        assert!(matches!(
-            ro,
-            FusaRunCommand::Run {
-                sandbox: SandboxMode::Worker {
-                    readonly_fallback: true,
-                    worker_id: None,
-                    reader: Some(_),
-                    ..
-                },
-                ..
-            }
-        ));
+        .is_err());
+
+        assert!(parse_fusa_run_args(&vec_s(&[
+            "--sandbox",
+            "worker",
+            "--state-dir",
+            "C:\\state",
+            "--",
+            "agy.exe",
+        ]))
+        .is_err());
 
         assert_eq!(
             parse_fusa_run_args(&vec_s(&["inspect", "--pid", "4321"])).expect("inspect"),

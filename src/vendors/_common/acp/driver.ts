@@ -14,8 +14,8 @@ import {
 } from "../../../daemon/driver/base-driver.ts";
 import { isNestedMacOsSandboxError } from "../../../shared/errors.ts";
 import { signalChild } from "../../../daemon/driver/process.ts";
+import { readonlySandboxUnavailableMessage } from "../../../daemon/driver/kernel-readonly.ts";
 import {
-  WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   spawnInWriteScope,
   wrapInReadonlyOsSandbox,
   type ReadonlySandboxInput,
@@ -531,16 +531,7 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       input,
     );
     if (!wrapped.osSandboxed) {
-      throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
-    }
-    if (wrapped.readonlyFallbackWarning) {
-      this.log(wrapped.readonlyFallbackWarning);
-      this.emit(st.id, {
-        type: "driver.warning",
-        uuid: randomUUID(),
-        message: wrapped.readonlyFallbackWarning,
-        at: Date.now(),
-      });
+      throw new DriverError("spawn_failed", readonlySandboxUnavailableMessage());
     }
     extraEnv.TMPDIR = input.tmpDir;
     if (process.platform === "win32") {
