@@ -151,6 +151,24 @@ export const CardBody = memo(function CardBody({
 
 const NOTE_MAX_HEIGHT_PX = 144;
 
+export interface CardNoteFormProps {
+  disabled: boolean;
+  pending: boolean;
+  value?: string;
+  onChange?: (value: string) => void;
+  onFocus?: () => void;
+  onSubmitNote: (rawNote: string) => void;
+  className?: string;
+  inputClassName?: string;
+  buttonSize?: "sm";
+  /** `row` is the last row of a decision card or reply popover: full-bleed with concentric bottom corners. */
+  variant?: "field" | "row";
+  label?: string;
+  placeholder?: string;
+  /** Why the note cannot be sent as typed; blocks sending and marks the field invalid. */
+  invalid?: string;
+}
+
 export function CardNoteForm({
   disabled,
   pending,
@@ -165,23 +183,7 @@ export function CardNoteForm({
   label = "Your reply",
   placeholder = "Reply or add a note…",
   invalid,
-}: {
-  disabled: boolean;
-  pending: boolean;
-  value?: string;
-  onChange?: (value: string) => void;
-  onFocus?: () => void;
-  onSubmitNote: (rawNote: string) => void;
-  className?: string;
-  inputClassName?: string;
-  buttonSize?: "sm";
-  /** `row` is the last row of a decision card's option list: no frame of its own, a pencil in the letter column. */
-  variant?: "field" | "row";
-  label?: string;
-  placeholder?: string;
-  /** Why the note cannot be sent as typed; blocks sending and marks the field invalid. */
-  invalid?: string;
-}) {
+}: CardNoteFormProps) {
   const id = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [localNote, setLocalNote] = useState("");
