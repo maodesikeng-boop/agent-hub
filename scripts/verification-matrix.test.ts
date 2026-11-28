@@ -14,12 +14,16 @@ import {
   VERIFICATION_FIELD_MAX_CHARS,
   VERIFICATION_MATRIX_MAX_BYTES,
   VERIFICATION_MAX_FALLBACK_TESTS,
+  VERIFICATION_MAX_RECORDED_RUNS,
   VERIFICATION_MAX_SURFACES,
   VERIFICATION_PLATFORMS,
   VERIFICATION_TIERS,
   ingestTesterRunRecord,
   packagedFeishuCommands,
   parseVerificationMatrix,
+  readPackagedFeishuLayout,
+  readWorkflowPlatforms,
+  readWorkflowRealCliPlatforms,
   readWorkflowRealCliVendors,
   renderVerificationMatrixMarkdown,
   runVerificationMatrixCli,
@@ -53,6 +57,11 @@ function mockSupportMap(): Record<AgentVendor, VendorEndpointSupport> {
   >;
 }
 
+const TEST_WIN_RUN_URL = "https://github.com/maodesikeng-boop/agent-hub/actions/runs/46132355360";
+const TEST_NIGHTLY_RUN_URL = "https://github.com/maodesikeng-boop/agent-hub/actions/runs/46132399999";
+const TEST_CHECK_RUN_URL = "https://github.com/maodesikeng-boop/agent-hub/actions/runs/46132355340";
+const TEST_MAC_RUN_URL = "https://github.com/maodesikeng-boop/agent-hub/actions/runs/46132388888";
+
 function buildValidMatrix(overrides: Partial<VerificationMatrix> = {}): VerificationMatrix {
   const cells: VerificationCell[] = [];
   for (const vendor of AGENT_VENDORS) {
@@ -65,7 +74,7 @@ function buildValidMatrix(overrides: Partial<VerificationMatrix> = {}): Verifica
           cliVersion: vendor === "codex" ? "0.169.0" : "1.5.2",
           workflow: "windows.yml",
           command: "BELLWOOD_REQUIRE_REAL_CLI=codex,pi pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
-          evidenceRef: ".github/workflows/windows.yml",
+          evidenceRef: TEST_WIN_RUN_URL,
           gapReason: "Mock LLM backend only; no resident Windows live-account bench exists.",
           fallbackTests: ["test/mock-llm/real-cli-e2e.test.ts", "src/vendors/contract.test.ts"],
         });
@@ -77,7 +86,7 @@ function buildValidMatrix(overrides: Partial<VerificationMatrix> = {}): Verifica
           cliVersion: vendor === "deepseek" ? "0.2.2-rc.1" : "latest",
           workflow: "nightly.yml",
           command: "BELLWOOD_REQUIRE_REAL_CLI=claude,codex,pi,deepseek pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
-          evidenceRef: ".github/workflows/nightly.yml",
+          evidenceRef: TEST_NIGHTLY_RUN_URL,
           gapReason: "Nightly Ubuntu CI runs real CLI against loopback mock LLM, not live model APIs.",
           fallbackTests: ["test/mock-llm/real-cli-e2e.test.ts", "src/vendors/contract.test.ts"],
         });
@@ -135,6 +144,55 @@ function buildValidMatrix(overrides: Partial<VerificationMatrix> = {}): Verifica
         scope: "Real Feishu, real relay, and real vendor turns on owner Mac and Tokyo Linux host.",
       },
     ],
+    recordedRuns: [
+      {
+        id: "gh-run:46132355340",
+        source: "check.yml",
+        platform: "linux",
+        kind: "fake_cli_offline",
+        commit: TEST_COMMIT,
+        urlOrRef: TEST_CHECK_RUN_URL,
+        completedAt: TEST_DATE,
+      },
+      {
+        id: "gh-run:46132388888",
+        source: "macos.yml",
+        platform: "macos",
+        kind: "fake_cli_offline",
+        commit: TEST_COMMIT,
+        urlOrRef: TEST_MAC_RUN_URL,
+        completedAt: TEST_DATE,
+      },
+      {
+        id: "gh-run:46132355360:core",
+        source: "windows.yml",
+        platform: "windows",
+        kind: "fake_cli_offline",
+        commit: TEST_COMMIT,
+        urlOrRef: TEST_WIN_RUN_URL,
+        completedAt: TEST_DATE,
+      },
+      {
+        id: "gh-run:46132355360:mock-llm",
+        source: "windows.yml",
+        platform: "windows",
+        kind: "real_cli_mock_llm",
+        commit: TEST_COMMIT,
+        urlOrRef: TEST_WIN_RUN_URL,
+        completedAt: TEST_DATE,
+        vendors: ["codex", "pi"],
+      },
+      {
+        id: "gh-run:46132399999:mock-llm",
+        source: "nightly.yml",
+        platform: "linux",
+        kind: "real_cli_mock_llm",
+        commit: TEST_COMMIT,
+        urlOrRef: TEST_NIGHTLY_RUN_URL,
+        completedAt: TEST_DATE,
+        vendors: ["claude", "codex", "pi", "deepseek"],
+      },
+    ],
     cells,
     ...overrides,
   };
@@ -147,6 +205,16 @@ function buildRepoFacts(overrides: Partial<RepoVerificationFacts> = {}): RepoVer
     workflowRealCliVendors: {
       "windows.yml": ["codex", "pi"],
       "nightly.yml": ["claude", "codex", "pi", "deepseek"],
+    },
+    workflowPlatforms: {
+      "check.yml": ["linux"],
+      "macos.yml": ["macos"],
+      "windows.yml": ["windows"],
+      "nightly.yml": ["linux"],
+    },
+    workflowRealCliPlatforms: {
+      "windows.yml": { windows: ["codex", "pi"] },
+      "nightly.yml": { linux: ["claude", "codex", "pi", "deepseek"] },
     },
     appVersion: "0.4.0",
     commitExists: (sha) => sha === TEST_COMMIT,
@@ -554,6 +622,183 @@ describe("regression: unchanged Feishu runtime, Settings UI, and CI workflow fac
       expect(runVerificationMatrixCli(["check"], { repoRoot: driftRoot })).toBe(1);
     } finally {
       rmSync(driftRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("regression: review blocker fixes (commit-bound runs, strict live_service, layout binding)", () => {
+  it("R5: distinguishes configured workflows from commit-bound run evidence and rejects cross-platform attribution", () => {
+    expect(VERIFICATION_MAX_RECORDED_RUNS).toBeGreaterThan(0);
+    const wfPlatforms = readWorkflowPlatforms(join(REPO_ROOT, ".github", "workflows"));
+    expect(wfPlatforms["windows.yml"]).toEqual(["windows"]);
+    expect(wfPlatforms["check.yml"]).toEqual(["linux"]);
+    expect(wfPlatforms["macos.yml"]).toEqual(["macos"]);
+    const wfRealCliPlatforms = readWorkflowRealCliPlatforms(join(REPO_ROOT, ".github", "workflows"));
+    expect(wfRealCliPlatforms["windows.yml"]).toEqual({ windows: ["codex", "pi"] });
+    expect(wfRealCliPlatforms["nightly.yml"]).toEqual({ linux: ["claude", "codex", "deepseek", "pi"] });
+
+    const base = buildValidMatrix();
+    const facts = buildRepoFacts();
+
+    const staticEvidence = buildValidMatrix({
+      cells: base.cells.map((cell) =>
+        cell.vendor === "codex" && cell.platform === "windows" && cell.tier === "real_cli_mock_llm"
+          ? { ...cell, evidenceRef: ".github/workflows/windows.yml" }
+          : cell,
+      ),
+    });
+    expect(validateVerificationMatrix(staticEvidence, facts).some((p) => p.code === "unverified_run_evidence")).toBe(true);
+
+    const wrongCommitRun = buildValidMatrix({
+      recordedRuns: base.recordedRuns.map((run) => (run.source === "nightly.yml" ? { ...run, commit: "1bd1d2a3" } : run)),
+    });
+    expect(validateVerificationMatrix(wrongCommitRun, facts).some((p) => p.code === "unverified_run_evidence")).toBe(true);
+
+    const missingMacRun = buildValidMatrix({
+      recordedRuns: base.recordedRuns.filter((run) => run.platform !== "macos"),
+    });
+    expect(validateVerificationMatrix(missingMacRun, facts).some((p) => p.code === "unverified_run_evidence")).toBe(true);
+
+    const crossPlatform = buildValidMatrix({
+      cells: base.cells.map((cell) =>
+        cell.vendor === "claude" && cell.platform === "windows"
+          ? {
+              vendor: "claude",
+              platform: "windows",
+              tier: "real_cli_mock_llm",
+              cliVersion: "2.1.332",
+              workflow: "nightly.yml",
+              command: "BELLWOOD_REQUIRE_REAL_CLI=claude,codex,pi,deepseek pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+              evidenceRef: TEST_WIN_RUN_URL,
+              gapReason: "Cross-platform misattribution test",
+              fallbackTests: ["test/mock-llm/real-cli-e2e.test.ts"],
+            }
+          : cell,
+      ),
+    });
+    const crossProblems = validateVerificationMatrix(crossPlatform, facts);
+    expect(crossProblems.some((p) => p.code === "platform_mismatch")).toBe(true);
+    expect(crossProblems.some((p) => p.code === "unverified_run_evidence")).toBe(true);
+
+    const repoMatrix = parseVerificationMatrix(
+      JSON.parse(readFileSync(join(REPO_ROOT, "docs", "verification-matrix.json"), "utf8")) as unknown,
+    );
+    for (const cell of repoMatrix.cells) {
+      if (cell.tier === "real_cli_mock_llm" || cell.tier === "live_service") {
+        expect(cell.evidenceRef, `${cell.vendor}@${cell.platform} must not cite static workflow config`).not.toMatch(
+          /^\.github\/workflows\//,
+        );
+      }
+      if (cell.tier === "fake_cli_offline") {
+        expect(cell.evidenceRef, `${cell.vendor}@${cell.platform} should record commit-bound run URL`).toBeDefined();
+        expect(cell.evidenceRef).not.toMatch(/^\.github\/workflows\//);
+      }
+    }
+    expect(repoMatrix.cells.filter((c) => c.platform === "macos").every((c) => c.tier === "unverified")).toBe(true);
+    expect(repoMatrix.cells.filter((c) => c.platform === "linux").every((c) => c.tier === "fake_cli_offline")).toBe(true);
+  });
+
+  it("R6: requires per-instance commit match, concrete non-unknown CLI version, and non-empty evidence for live_service", () => {
+    const base = buildValidMatrix();
+    const opts = { platformByInstance: { local: "macos", remote: "linux" }, recordedAt: TEST_DATE } as const;
+
+    const missingRemoteCommit = buildSampleTesterRunRecord();
+    delete missingRemoteCommit.commits.remote;
+    expect(() => ingestTesterRunRecord(base, missingRemoteCommit, opts)).toThrow(/commit/i);
+
+    const customKeyRecord = buildSampleTesterRunRecord();
+    customKeyRecord.commits = { mac: customKeyRecord.commits.local!, tokyo: customKeyRecord.commits.remote! };
+    expect(() => ingestTesterRunRecord(base, customKeyRecord, opts)).toThrow(/commit/i);
+    const customIngested = ingestTesterRunRecord(base, customKeyRecord, {
+      ...opts,
+      commitKeyByInstance: { local: "mac", remote: "tokyo" },
+    });
+    expect(validateVerificationMatrix(customIngested, buildRepoFacts())).toEqual([]);
+
+    const unknownVersion = buildSampleTesterRunRecord();
+    unknownVersion.preflight.coverage = unknownVersion.preflight.coverage.map((entry) =>
+      entry.vendor === "claude" && entry.instance === "local" ? { ...entry, version: null } : entry,
+    );
+    expect(() => ingestTesterRunRecord(base, unknownVersion, opts)).toThrow(/version/i);
+
+    const literalUnknownVersion = buildSampleTesterRunRecord();
+    literalUnknownVersion.preflight.coverage = literalUnknownVersion.preflight.coverage.map((entry) =>
+      entry.vendor === "codex" && entry.instance === "local" ? { ...entry, version: "unknown" } : entry,
+    );
+    expect(() => ingestTesterRunRecord(base, literalUnknownVersion, opts)).toThrow(/version/i);
+
+    const emptyEvidence = buildSampleTesterRunRecord();
+    emptyEvidence.results = emptyEvidence.results.map((r) => (r.id === "model.turn.claude@local" ? { ...r, evidence: [] } : r));
+    expect(() => ingestTesterRunRecord(base, emptyEvidence, opts)).toThrow(/evidence/i);
+
+    const invalidLiveCell = buildValidMatrix({
+      cells: base.cells.map((cell) =>
+        cell.vendor === "claude" && cell.platform === "macos"
+          ? {
+              vendor: "claude",
+              platform: "macos",
+              tier: "live_service",
+              cliVersion: "unknown",
+              model: "claude-sonnet-4-6",
+              evidenceRef: "tester:20261128T100000Z-nightly:model.turn.claude@local",
+              verifiedAt: TEST_DATE,
+            }
+          : cell,
+      ),
+    });
+    const liveProblems = validateVerificationMatrix(invalidLiveCell, buildRepoFacts());
+    expect(liveProblems.some((p) => p.code === "invalid_cli_version")).toBe(true);
+    expect(liveProblems.some((p) => p.code === "unverified_run_evidence")).toBe(true);
+  });
+
+  it("R7: binds packaged Feishu quick-start guard directly to real packaging configs and scripts", () => {
+    expect(readPackagedFeishuLayout(REPO_ROOT)).toEqual(DEFAULT_FEISHU_LAYOUT);
+    const copyFiles = [
+      "README.md",
+      "README.zh-CN.md",
+      "docs/verification-matrix.json",
+      "docs/verification-matrix.md",
+      "apps/windows/Cargo.toml",
+      "apps/windows/crates/fusa-desktop/tauri.conf.json",
+      "apps/windows/crates/fusa-desktop/tauri.bundle.conf.json",
+      "scripts/build-mac-app.sh",
+      "scripts/stage-mac-runtime.ts",
+      "scripts/stage-win-runtime.ts",
+      "scripts/stage-runtime-common.ts",
+      "src/feishu/main.ts",
+      ".github/workflows/check.yml",
+      ".github/workflows/macos.yml",
+      ".github/workflows/windows.yml",
+      ".github/workflows/nightly.yml",
+    ];
+    const tmpRoot = mkdtempSync(join(tmpdir(), "bellwood-feishu-layout-"));
+    try {
+      for (const rel of copyFiles) {
+        const dst = join(tmpRoot, rel);
+        mkdirSync(join(dst, ".."), { recursive: true });
+        writeFileSync(dst, readFileSync(join(REPO_ROOT, rel)));
+      }
+      expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(0);
+
+      const macBuildPath = join(tmpRoot, "scripts", "build-mac-app.sh");
+      const origMacBuild = readFileSync(macBuildPath, "utf8");
+      writeFileSync(macBuildPath, origMacBuild.replace('APP_NAME="Bellwood.app"', 'APP_NAME="BellwoodAlt.app"'));
+      expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
+      writeFileSync(macBuildPath, origMacBuild);
+
+      const tauriConfPath = join(tmpRoot, "apps", "windows", "crates", "fusa-desktop", "tauri.conf.json");
+      const origTauriConf = readFileSync(tauriConfPath, "utf8");
+      writeFileSync(tauriConfPath, origTauriConf.replace('"productName": "Bellwood"', '"productName": "BellwoodAlt"'));
+      expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
+      writeFileSync(tauriConfPath, origTauriConf);
+
+      const bundlePath = join(tmpRoot, "apps", "windows", "crates", "fusa-desktop", "tauri.bundle.conf.json");
+      const origBundle = readFileSync(bundlePath, "utf8");
+      writeFileSync(bundlePath, origBundle.replace('"staged-runtime/daemon": "daemon"', '"staged-runtime/daemon": "alt-daemon"'));
+      expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
+      writeFileSync(bundlePath, origBundle);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
 });

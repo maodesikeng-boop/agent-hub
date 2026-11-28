@@ -132,8 +132,28 @@ export function isTagPushOf(tag: string, env: NodeJS.ProcessEnv = process.env): 
   return env["GITHUB_EVENT_NAME"] === "push" && env["GITHUB_REF_TYPE"] === "tag" && env["GITHUB_REF_NAME"] === tag;
 }
 
-export function composeReleaseNotes(changelog: string, downloads: string, version: string): string {
-  return `${releaseNotesFor(changelog, version)}\n\n${downloads.trim()}\n`;
+export function composeReleaseNotes(
+  changelog: string,
+  downloads: string,
+  version: string,
+  opts?: { ref?: string; repo?: string },
+): string {
+  const ref = (opts?.ref ?? `v${version}`).trim();
+  const repo = (opts?.repo ?? UPDATE_RELEASE_REPO).trim();
+  if (!ref || /^(?:main|master|HEAD)$/i.test(ref)) {
+    throw new Error(`Release notes ref must be a release tag or commit SHA, got "${ref}"`);
+  }
+  const renderedDownloads = downloads
+    .replaceAll("{{RELEASE_REPO}}", repo)
+    .replaceAll("{{RELEASE_REF}}", ref)
+    .trim();
+  if (/\/blob\/(?:main|master|HEAD)\/docs\/verification-matrix\.md\b/.test(renderedDownloads)) {
+    throw new Error("Release downloads template must not link docs/verification-matrix.md to a floating branch");
+  }
+  if (/\{\{RELEASE_(?:REPO|REF)\}\}/.test(renderedDownloads)) {
+    throw new Error("Release downloads template contains unresolved placeholders");
+  }
+  return `${releaseNotesFor(changelog, version)}\n\n${renderedDownloads}\n`;
 }
 
 function readChangelog(): string {
@@ -193,7 +213,7 @@ function runPublish(flags: Map<string, string>): void {
   try {
     const notesFile = join(notesDir, "notes.md");
     const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
-    writeFileSync(notesFile, composeReleaseNotes(readChangelog(), downloads, plan.version));
+    writeFileSync(notesFile, composeReleaseNotes(readChangelog(), downloads, plan.version, { ref: plan.tag, repo: ctx.repo }));
     publishRelease(plan, { assetsDir: resolve(requireFlag(flags, "assets-dir")), notesFile }, ctx);
   } finally {
     rmSync(notesDir, { recursive: true, force: true });
@@ -220,7 +240,8 @@ function main(): void {
   if (command === "check") {
     const appVersion = readDesktopAppVersion();
     assertVersionSourcesMatch(REPO_ROOT, appVersion);
-    releaseNotesFor(readChangelog(), appVersion);
+    const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
+    composeReleaseNotes(readChangelog(), downloads, appVersion, { ref: `v${appVersion}` });
     assertVerificationMatrixValid(REPO_ROOT, appVersion);
     console.log(`version=${appVersion}: version sources, CHANGELOG.md, and verification matrix agree`);
     setGithubOutput("version", appVersion);

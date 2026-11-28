@@ -1,289 +1,121 @@
 // Invariant: every registered vendor in AGENT_VENDORS x every platform in VERIFICATION_PLATFORMS has exactly one cell;
-// mock-LLM or fake-CLI coverage is never promoted to live_service, and rendered Markdown matches JSON byte-for-byte.
+// static workflow configs never substitute for commit-bound run records, and rendered Markdown matches JSON byte-for-byte.
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import writeFileAtomic from "write-file-atomic";
 import { parse as parseYaml } from "yaml";
-import { z } from "zod";
-import { AGENT_VENDORS, isAgentVendor, vendorLabel, type AgentVendor } from "../src/shared/vendors.ts";
+import { AGENT_VENDORS, isAgentVendor, type AgentVendor } from "../src/shared/vendors.ts";
 import type { VendorEndpointSupport } from "../test/mock-llm/types.ts";
 import { VENDOR_MOCK_ADAPTERS } from "../test/mock-llm/vendors.ts";
 import type { InstanceRole, RunRecord } from "../test/tester/types.ts";
 import { VENDOR_BENCH } from "../test/tester/vendors.ts";
 import { REPO_ROOT, readDesktopAppVersion } from "./stage-runtime-common.ts";
+import {
+  packagedFeishuCommands,
+  readPackagedFeishuLayout,
+  validateFeishuQuickStartDocs,
+  type PackagedFeishuCommands,
+  type PackagedFeishuLayout,
+} from "./verification-matrix-feishu.ts";
+import {
+  COMMIT_SHA_RE,
+  FORBIDDEN_REFERENCE_RE,
+  PLACEHOLDER_VALUE_RE,
+  VERIFICATION_FIELD_MAX_CHARS,
+  VERIFICATION_MATRIX_MAX_BYTES,
+  VERIFICATION_MAX_FALLBACK_TESTS,
+  VERIFICATION_MAX_RECORDED_RUNS,
+  VERIFICATION_MAX_SURFACES,
+  VERIFICATION_PLATFORMS,
+  VERIFICATION_TIERS,
+  commitsAlign,
+  containsSecret,
+  isValidConcreteCliVersion,
+  isValidIsoDate,
+  parseVerificationMatrix,
+  redactText,
+  renderVerificationMatrixMarkdown,
+  type FakeCliOfflineCell,
+  type GapCell,
+  type LiveServiceCell,
+  type MatrixValidationCode,
+  type MatrixValidationProblem,
+  type RealCliMockLlmCell,
+  type RepoVerificationFacts,
+  type VerificationCell,
+  type VerificationCellBase,
+  type VerificationMatrix,
+  type VerificationPlatform,
+  type VerificationRunRecord,
+  type VerificationSurfaceSummary,
+  type VerificationTier,
+  type WorkflowRealCliPlatformMap,
+} from "./verification-matrix-model.ts";
 
-export const VERIFICATION_PLATFORMS = ["macos", "windows", "linux"] as const;
-export type VerificationPlatform = (typeof VERIFICATION_PLATFORMS)[number];
-
-export const VERIFICATION_TIERS = [
-  "live_service",
-  "real_cli_mock_llm",
-  "fake_cli_offline",
-  "unverified",
-  "not_applicable",
-] as const;
-export type VerificationTier = (typeof VERIFICATION_TIERS)[number];
-
-export const VERIFICATION_MATRIX_MAX_BYTES = 256 * 1024;
-export const VERIFICATION_FIELD_MAX_CHARS = 400;
-export const VERIFICATION_MAX_FALLBACK_TESTS = 16;
-export const VERIFICATION_MAX_SURFACES = 16;
-
-export interface VerificationCellBase {
-  vendor: AgentVendor;
-  platform: VerificationPlatform;
-}
-
-export interface LiveServiceCell extends VerificationCellBase {
-  tier: "live_service";
-  cliVersion: string;
-  model: string;
-  evidenceRef: string;
-  verifiedAt: string;
-  note?: string;
-}
-
-export interface RealCliMockLlmCell extends VerificationCellBase {
-  tier: "real_cli_mock_llm";
-  cliVersion: string;
-  workflow: string;
-  command: string;
-  evidenceRef: string;
-  gapReason: string;
-  fallbackTests: readonly string[];
-}
-
-export interface FakeCliOfflineCell extends VerificationCellBase {
-  tier: "fake_cli_offline";
-  gapReason: string;
-  fallbackTests: readonly string[];
-}
-
-export interface GapCell extends VerificationCellBase {
-  tier: "unverified" | "not_applicable";
-  gapReason: string;
-  fallbackTests: readonly string[];
-}
-
-export type VerificationCell = LiveServiceCell | RealCliMockLlmCell | FakeCliOfflineCell | GapCell;
-
-export interface VerificationSurfaceSummary {
-  id: string;
-  label: string;
-  platform: VerificationPlatform | "multi";
-  cliKind: "fake" | "real";
-  modelBackend: "fake" | "mock_llm" | "live_service";
-  workflowOrCommand: string;
-  scope: string;
-}
-
-export interface VerificationMatrix {
-  schemaVersion: 1;
-  releaseVersion: string;
-  commit: string;
-  recordedAt: string;
-  surfaces: readonly VerificationSurfaceSummary[];
-  cells: readonly VerificationCell[];
-}
-
-export interface RepoVerificationFacts {
-  vendors: readonly AgentVendor[];
-  mockSupportByVendor: Readonly<Record<AgentVendor, VendorEndpointSupport>>;
-  workflowRealCliVendors: Readonly<Record<string, readonly AgentVendor[]>>;
-  appVersion: string;
-  commitExists?: (sha: string) => boolean;
-}
-
-export type MatrixValidationCode =
-  | "invalid_schema"
-  | "missing_cell"
-  | "duplicate_cell"
-  | "unknown_vendor"
-  | "unknown_platform"
-  | "invalid_commit"
-  | "unknown_commit"
-  | "invalid_date"
-  | "version_mismatch"
-  | "unsupported_mock_vendor"
-  | "workflow_mismatch"
-  | "missing_evidence"
-  | "secret_detected"
-  | "forbidden_reference_name"
-  | "markdown_drift";
-
-export interface MatrixValidationProblem {
-  path: string;
-  code: MatrixValidationCode;
-  message: string;
-}
-
-export interface PackagedFeishuLayout {
-  macAppPath: string;
-  macRuntimeRelativeDir: string;
-  macNodeRelativePath: string;
-  macFeishuEntryRelativePath: string;
-  winInstallDirEnv: string;
-  winNodeRelativePath: string;
-  winFeishuEntryRelativePath: string;
-  sourceFeishuEntryRelativePath: string;
-}
-
-export interface PackagedFeishuCommands {
-  macConnect: string;
-  macStatus: string;
-  winConnectPowerShell: string;
-  winStatusPowerShell: string;
-  sourceConnect: string;
-  sourceStatus: string;
-}
-
-const DEFAULT_FEISHU_LAYOUT: PackagedFeishuLayout = {
-  macAppPath: "/Applications/Bellwood.app",
-  macRuntimeRelativeDir: "Contents/Resources/runtime",
-  macNodeRelativePath: "node/bin/node",
-  macFeishuEntryRelativePath: "daemon/src/feishu/main.ts",
-  winInstallDirEnv: "$env:LOCALAPPDATA\\Bellwood",
-  winNodeRelativePath: "node\\node.exe",
-  winFeishuEntryRelativePath: "daemon\\src\\feishu\\main.ts",
-  sourceFeishuEntryRelativePath: "src/feishu/main.ts",
+export {
+  VERIFICATION_FIELD_MAX_CHARS,
+  VERIFICATION_MATRIX_MAX_BYTES,
+  VERIFICATION_MAX_FALLBACK_TESTS,
+  VERIFICATION_MAX_RECORDED_RUNS,
+  VERIFICATION_MAX_SURFACES,
+  VERIFICATION_PLATFORMS,
+  VERIFICATION_TIERS,
+  packagedFeishuCommands,
+  parseVerificationMatrix,
+  readPackagedFeishuLayout,
+  renderVerificationMatrixMarkdown,
+  validateFeishuQuickStartDocs,
+  type FakeCliOfflineCell,
+  type GapCell,
+  type LiveServiceCell,
+  type MatrixValidationCode,
+  type MatrixValidationProblem,
+  type PackagedFeishuCommands,
+  type PackagedFeishuLayout,
+  type RealCliMockLlmCell,
+  type RepoVerificationFacts,
+  type VerificationCell,
+  type VerificationCellBase,
+  type VerificationMatrix,
+  type VerificationPlatform,
+  type VerificationRunRecord,
+  type VerificationSurfaceSummary,
+  type VerificationTier,
+  type WorkflowRealCliPlatformMap,
 };
 
-const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/;
+const STATIC_WORKFLOW_PATH_RE = /^(?:\.?\/)?\.github\/workflows\/|^[^/:\\]+\.ya?ml$/i;
+const GITHUB_RUN_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/\d+(?:\/job\/\d+)?$/;
+const TESTER_CELL_REF_RE = /^tester:([^:\s]+):model\.turn\.([a-z0-9_-]+)@(local|remote)#([^\s#]+)$/;
+const TESTER_RUN_ID_RE = /^tester:([^:\s]+)@(local|remote)$/;
+const TRACEABLE_LIVE_REF_RE = /^(?:https:\/\/\S+|tester:[^:\s]+:model\.turn\.[a-z0-9_-]+@(?:local|remote)#[^\s#]+|tester:[^:\s]+@(?:local|remote)|local-run:\S+)$/;
 
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /\b(?:t|u|a)-[A-Za-z0-9._-]{20,}/g,
-  /\bsk-ant-[A-Za-z0-9_-]{16,}/g,
-  /\bsk-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[opsu]_[A-Za-z0-9]{20,}/g,
-  /token=[A-Za-z0-9_-]+/g,
-];
+const isStaticWorkflowPath = (ref: string): boolean => STATIC_WORKFLOW_PATH_RE.test(ref.trim());
+const isWorkflowFilename = (source: string): boolean => /\.ya?ml$/i.test(source.trim());
 
-const FORBIDDEN_REFERENCE_RE = new RegExp(`\\b(?:${["open", "claw"].join("")}|${["mag", "pie"].join("")})\\b`, "i");
-
-const PLATFORM_LABELS: Readonly<Record<VerificationPlatform, string>> = {
-  macos: "macOS",
-  windows: "Windows",
-  linux: "Linux",
-};
-
-const TIER_LEGEND: readonly { tier: VerificationTier; meaning: string }[] = [
-  { tier: "live_service", meaning: "Real vendor CLI completed a real upstream model turn recorded for this commit." },
-  { tier: "real_cli_mock_llm", meaning: "Real vendor CLI ran end-to-end against Bellwood's loopback mock LLM server (non-live model backend)." },
-  { tier: "fake_cli_offline", meaning: "Covered by fake CLI smoke or offline driver protocol and contract unit tests on this platform." },
-  { tier: "unverified", meaning: "No real-CLI or platform-specific vendor driver test ran on this platform for this commit." },
-  { tier: "not_applicable", meaning: "This vendor CLI does not support or ship on this platform." },
-];
-
-function isValidIsoDate(value: string): boolean {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return false;
-  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
-}
-
-function containsSecret(text: string): boolean {
-  return SECRET_PATTERNS.some((pattern) => {
-    pattern.lastIndex = 0;
-    return pattern.test(text);
-  });
-}
-
-function redactText(text: string, maxChars: number = VERIFICATION_FIELD_MAX_CHARS): string {
-  let out = text.replace(/\s+/g, " ").trim();
-  for (const pattern of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    out = out.replace(pattern, "[redacted]");
-  }
-  return out.length > maxChars ? `${out.slice(0, maxChars - 3)}...` : out;
-}
-
-const boundedText = z.string().trim().min(1).max(VERIFICATION_FIELD_MAX_CHARS);
-const isoDateSchema = z.string().refine(isValidIsoDate, { message: "Expected valid YYYY-MM-DD date" });
-const vendorSchema = z.enum(AGENT_VENDORS);
-const platformSchema = z.enum(VERIFICATION_PLATFORMS);
-
-const surfaceSchema = z
-  .object({
-    id: boundedText,
-    label: boundedText,
-    platform: z.enum([...VERIFICATION_PLATFORMS, "multi"]),
-    cliKind: z.enum(["fake", "real"]),
-    modelBackend: z.enum(["fake", "mock_llm", "live_service"]),
-    workflowOrCommand: boundedText,
-    scope: boundedText,
-  })
-  .strict();
-
-const cellSchema = z.discriminatedUnion("tier", [
-  z.object({
-    vendor: vendorSchema,
-    platform: platformSchema,
-    tier: z.literal("live_service"),
-    cliVersion: boundedText,
-    model: boundedText,
-    evidenceRef: boundedText,
-    verifiedAt: isoDateSchema,
-    note: boundedText.optional(),
-  }).strict(),
-  z.object({
-    vendor: vendorSchema,
-    platform: platformSchema,
-    tier: z.literal("real_cli_mock_llm"),
-    cliVersion: boundedText,
-    workflow: boundedText,
-    command: boundedText,
-    evidenceRef: boundedText,
-    gapReason: boundedText,
-    fallbackTests: z.array(boundedText).min(1).max(VERIFICATION_MAX_FALLBACK_TESTS),
-  }).strict(),
-  z.object({
-    vendor: vendorSchema,
-    platform: platformSchema,
-    tier: z.literal("fake_cli_offline"),
-    gapReason: boundedText,
-    fallbackTests: z.array(boundedText).min(1).max(VERIFICATION_MAX_FALLBACK_TESTS),
-  }).strict(),
-  z.object({
-    vendor: vendorSchema,
-    platform: platformSchema,
-    tier: z.enum(["unverified", "not_applicable"]),
-    gapReason: boundedText,
-    fallbackTests: z.array(boundedText).max(VERIFICATION_MAX_FALLBACK_TESTS),
-  }).strict(),
-]);
-
-const verificationMatrixSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    releaseVersion: boundedText,
-    commit: z.string().regex(COMMIT_SHA_RE, "Expected 7-40 lowercase hex commit SHA"),
-    recordedAt: isoDateSchema,
-    surfaces: z.array(surfaceSchema).min(1).max(VERIFICATION_MAX_SURFACES),
-    cells: z.array(cellSchema).min(1),
-  })
-  .strict();
-
-export function parseVerificationMatrix(raw: unknown): VerificationMatrix {
-  const serialized = JSON.stringify(raw);
-  if (serialized === undefined) throw new Error("Verification matrix input is not JSON-serializable");
-  const bytes = Buffer.byteLength(serialized, "utf8");
-  if (bytes > VERIFICATION_MATRIX_MAX_BYTES) {
-    throw new Error(`Verification matrix size (${bytes} bytes) exceeds ${VERIFICATION_MATRIX_MAX_BYTES} bytes`);
-  }
-  const parsed = verificationMatrixSchema.safeParse(raw);
-  if (!parsed.success) {
-    const details = parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ");
-    throw new Error(`Invalid verification matrix: ${details}`);
-  }
-  return parsed.data;
+interface ParsedWorkflowJob {
+  "runs-on"?: string | string[];
+  env?: Record<string, unknown>;
+  steps?: Array<{ env?: Record<string, unknown> }>;
 }
 
 interface ParsedWorkflow {
   env?: Record<string, unknown>;
-  jobs?: Record<string, { env?: Record<string, unknown>; steps?: Array<{ env?: Record<string, unknown> }> }>;
+  jobs?: Record<string, ParsedWorkflowJob>;
+}
+
+function platformsFromRunsOn(runsOn: string | string[] | undefined): VerificationPlatform[] {
+  const labels = Array.isArray(runsOn) ? runsOn : typeof runsOn === "string" ? [runsOn] : [];
+  const found = new Set<VerificationPlatform>();
+  for (const label of labels) {
+    const lower = label.toLowerCase();
+    if (lower.startsWith("ubuntu") || lower.includes("linux")) found.add("linux");
+    else if (lower.startsWith("windows")) found.add("windows");
+    else if (lower.startsWith("macos")) found.add("macos");
+  }
+  return [...found].sort();
 }
 
 function collectEnvRealCli(env: Record<string, unknown> | undefined, target: Set<AgentVendor>, file: string): void {
@@ -299,22 +131,60 @@ function collectEnvRealCli(env: Record<string, unknown> | undefined, target: Set
   }
 }
 
-export function readWorkflowRealCliVendors(workflowsDir: string): Readonly<Record<string, readonly AgentVendor[]>> {
-  const result: Record<string, readonly AgentVendor[]> = {};
+function scanWorkflows(workflowsDir: string): {
+  realCliVendors: Record<string, readonly AgentVendor[]>;
+  platforms: Record<string, readonly VerificationPlatform[]>;
+  realCliPlatforms: Record<string, Partial<Record<VerificationPlatform, readonly AgentVendor[]>>>;
+} {
+  const realCliVendors: Record<string, readonly AgentVendor[]> = {};
+  const platforms: Record<string, readonly VerificationPlatform[]> = {};
+  const realCliPlatforms: Record<string, Partial<Record<VerificationPlatform, readonly AgentVendor[]>>> = {};
   const files = readdirSync(workflowsDir).filter((n) => n.endsWith(".yml") || n.endsWith(".yaml")).sort();
   for (const file of files) {
     const parsed = parseYaml(readFileSync(join(workflowsDir, file), "utf8")) as ParsedWorkflow | null;
     if (!parsed || typeof parsed !== "object") continue;
-    const found = new Set<AgentVendor>();
-    collectEnvRealCli(parsed.env, found, file);
+    const wfVendors = new Set<AgentVendor>();
+    const wfPlatforms = new Set<VerificationPlatform>();
+    const byPlatform: Partial<Record<VerificationPlatform, Set<AgentVendor>>> = {};
+    const topEnvVendors = new Set<AgentVendor>();
+    collectEnvRealCli(parsed.env, topEnvVendors, file);
+    for (const v of topEnvVendors) wfVendors.add(v);
+
     for (const job of Object.values(parsed.jobs ?? {})) {
       if (!job || typeof job !== "object") continue;
-      collectEnvRealCli(job.env, found, file);
-      for (const step of job.steps ?? []) collectEnvRealCli(step?.env, found, file);
+      const jobPlatforms = platformsFromRunsOn(job["runs-on"]);
+      for (const p of jobPlatforms) wfPlatforms.add(p);
+      const jobVendors = new Set<AgentVendor>(topEnvVendors);
+      collectEnvRealCli(job.env, jobVendors, file);
+      for (const step of job.steps ?? []) collectEnvRealCli(step?.env, jobVendors, file);
+      for (const v of jobVendors) wfVendors.add(v);
+      if (jobVendors.size > 0) {
+        for (const p of jobPlatforms) {
+          byPlatform[p] ??= new Set<AgentVendor>();
+          for (const v of jobVendors) byPlatform[p]!.add(v);
+        }
+      }
     }
-    if (found.size > 0) result[file] = [...found].sort();
+    if (wfPlatforms.size > 0) platforms[file] = [...wfPlatforms].sort();
+    if (wfVendors.size > 0) realCliVendors[file] = [...wfVendors].sort();
+    const mapped = Object.fromEntries(
+      Object.entries(byPlatform).map(([p, set]) => [p, [...set!].sort()]),
+    ) as Partial<Record<VerificationPlatform, readonly AgentVendor[]>>;
+    if (Object.keys(mapped).length > 0) realCliPlatforms[file] = mapped;
   }
-  return result;
+  return { realCliVendors, platforms, realCliPlatforms };
+}
+
+export function readWorkflowRealCliVendors(workflowsDir: string): Readonly<Record<string, readonly AgentVendor[]>> {
+  return scanWorkflows(workflowsDir).realCliVendors;
+}
+
+export function readWorkflowPlatforms(workflowsDir: string): Readonly<Record<string, readonly VerificationPlatform[]>> {
+  return scanWorkflows(workflowsDir).platforms;
+}
+
+export function readWorkflowRealCliPlatforms(workflowsDir: string): WorkflowRealCliPlatformMap {
+  return scanWorkflows(workflowsDir).realCliPlatforms;
 }
 
 function addProblem(problems: MatrixValidationProblem[], path: string, code: MatrixValidationCode, message: string): void {
@@ -337,45 +207,270 @@ function checkRequiredText(path: string, value: string | undefined, label: strin
   else checkTextField(path, value, problems);
 }
 
+function matchesTesterCellRef(cell: LiveServiceCell, run: VerificationRunRecord): boolean {
+  const runMatch = TESTER_RUN_ID_RE.exec(run.id);
+  const cellMatch = TESTER_CELL_REF_RE.exec(cell.evidenceRef);
+  if (!runMatch || !cellMatch) return false;
+  return runMatch[1] === cellMatch[1] && cellMatch[2] === cell.vendor && runMatch[2] === cellMatch[3];
+}
+
+function validateRecordedRuns(
+  matrix: VerificationMatrix,
+  facts: RepoVerificationFacts,
+  problems: MatrixValidationProblem[],
+): VerificationRunRecord[] {
+  const runs = matrix.recordedRuns ?? [];
+  if (runs.length > VERIFICATION_MAX_RECORDED_RUNS) {
+    addProblem(problems, "recordedRuns", "invalid_schema", `recordedRuns exceeds max length ${VERIFICATION_MAX_RECORDED_RUNS}`);
+  }
+  const seenIds = new Set<string>();
+  const validRuns: VerificationRunRecord[] = [];
+  for (let idx = 0; idx < runs.length; idx += 1) {
+    const run = runs[idx]!;
+    const path = `recordedRuns[${idx}]`;
+    const before = problems.length;
+    checkRequiredText(`${path}.id`, run.id, "recordedRun id", problems);
+    checkRequiredText(`${path}.source`, run.source, "recordedRun source", problems);
+    checkRequiredText(`${path}.urlOrRef`, run.urlOrRef, "recordedRun urlOrRef", problems);
+    if (seenIds.has(run.id)) addProblem(problems, `${path}.id`, "invalid_schema", `Duplicate recordedRun id "${run.id}"`);
+    seenIds.add(run.id);
+    if (!VERIFICATION_PLATFORMS.includes(run.platform)) {
+      addProblem(problems, `${path}.platform`, "unknown_platform", `Unknown platform "${String(run.platform)}"`);
+    }
+    if (!isValidIsoDate(run.completedAt)) {
+      addProblem(problems, `${path}.completedAt`, "invalid_date", `Invalid ISO date "${run.completedAt}"`);
+    }
+    if (!commitsAlign(run.commit, matrix.commit)) {
+      addProblem(
+        problems,
+        `${path}.commit`,
+        "unverified_run_evidence",
+        `Recorded run "${run.id}" commit "${run.commit}" does not match matrix commit "${matrix.commit}"`,
+      );
+    }
+    if (isStaticWorkflowPath(run.urlOrRef)) {
+      addProblem(
+        problems,
+        `${path}.urlOrRef`,
+        "unverified_run_evidence",
+        `Recorded run "${run.id}" urlOrRef "${run.urlOrRef}" points to a static workflow config instead of a concrete run`,
+      );
+    }
+    if (isWorkflowFilename(run.source)) {
+      if (!GITHUB_RUN_URL_RE.test(run.urlOrRef)) {
+        addProblem(
+          problems,
+          `${path}.urlOrRef`,
+          "unverified_run_evidence",
+          `Workflow run "${run.id}" must reference a GitHub Actions run URL, got "${run.urlOrRef}"`,
+        );
+      }
+      const wfPlatforms = facts.workflowPlatforms?.[run.source];
+      if (wfPlatforms && !wfPlatforms.includes(run.platform)) {
+        addProblem(
+          problems,
+          `${path}.platform`,
+          "platform_mismatch",
+          `Workflow "${run.source}" runs on [${wfPlatforms.join(", ")}], not "${run.platform}"`,
+        );
+      }
+      if (run.kind === "real_cli_mock_llm") {
+        const configured = facts.workflowRealCliPlatforms?.[run.source]?.[run.platform] ?? facts.workflowRealCliVendors[run.source] ?? [];
+        if (configured.length === 0) {
+          addProblem(
+            problems,
+            `${path}.source`,
+            "workflow_mismatch",
+            `Workflow "${run.source}" does not configure real-CLI mock-LLM coverage on "${run.platform}"`,
+          );
+        }
+        for (const vendor of run.vendors ?? []) {
+          if (!configured.includes(vendor)) {
+            addProblem(
+              problems,
+              `${path}.vendors`,
+              "workflow_mismatch",
+              `Workflow "${run.source}" on "${run.platform}" does not configure vendor "${vendor}"`,
+            );
+          }
+        }
+      }
+    } else if (!TRACEABLE_LIVE_REF_RE.test(run.urlOrRef)) {
+      addProblem(
+        problems,
+        `${path}.urlOrRef`,
+        "unverified_run_evidence",
+        `Recorded run "${run.id}" urlOrRef "${run.urlOrRef}" is not a traceable run reference`,
+      );
+    }
+    if (problems.length === before) validRuns.push(run);
+  }
+  return validRuns;
+}
+
+function surfacePlatformForWorkflow(matrix: VerificationMatrix, workflow: string): VerificationPlatform | undefined {
+  const hit = matrix.surfaces.find((s) => s.workflowOrCommand === workflow || s.workflowOrCommand.endsWith(`/${workflow}`));
+  return hit && hit.platform !== "multi" ? hit.platform : undefined;
+}
+
+function validateLiveCell(
+  cell: LiveServiceCell,
+  path: string,
+  validRuns: readonly VerificationRunRecord[],
+  problems: MatrixValidationProblem[],
+): void {
+  for (const key of ["cliVersion", "model", "evidenceRef", "verifiedAt"] as const) {
+    checkRequiredText(`${path}.${key}`, cell[key], `live_service ${key}`, problems);
+  }
+  if (!isValidConcreteCliVersion(cell.cliVersion)) {
+    addProblem(problems, `${path}.cliVersion`, "invalid_cli_version", `live_service cliVersion must be a concrete non-unknown version, got "${cell.cliVersion}"`);
+  }
+  if (PLACEHOLDER_VALUE_RE.test(cell.model.trim())) {
+    addProblem(problems, `${path}.model`, "missing_evidence", `live_service model must not be a placeholder ("${cell.model}")`);
+  }
+  if (cell.verifiedAt && !isValidIsoDate(cell.verifiedAt)) {
+    addProblem(problems, `${path}.verifiedAt`, "invalid_date", `Invalid ISO date "${cell.verifiedAt}"`);
+  }
+  if (isStaticWorkflowPath(cell.evidenceRef) || !TRACEABLE_LIVE_REF_RE.test(cell.evidenceRef.trim())) {
+    addProblem(problems, `${path}.evidenceRef`, "unverified_run_evidence", `live_service evidenceRef "${cell.evidenceRef}" must be a traceable run artifact`);
+  } else {
+    const matched = validRuns.some(
+      (run) =>
+        run.kind === "live_service" &&
+        run.platform === cell.platform &&
+        (!run.vendors || run.vendors.includes(cell.vendor)) &&
+        (cell.evidenceRef === run.urlOrRef || cell.evidenceRef === run.id || matchesTesterCellRef(cell, run)),
+    );
+    if (!matched) {
+      addProblem(
+        problems,
+        `${path}.evidenceRef`,
+        "unverified_run_evidence",
+        `live_service cell ${cell.vendor}@${cell.platform} lacks a matching same-commit live_service recordedRun`,
+      );
+    }
+  }
+  checkTextField(`${path}.note`, cell.note, problems);
+}
+
+function validateMockCell(
+  cell: RealCliMockLlmCell,
+  path: string,
+  matrix: VerificationMatrix,
+  facts: RepoVerificationFacts,
+  validRuns: readonly VerificationRunRecord[],
+  problems: MatrixValidationProblem[],
+): void {
+  for (const key of ["cliVersion", "workflow", "command", "evidenceRef", "gapReason"] as const) {
+    checkRequiredText(`${path}.${key}`, cell[key], `real_cli_mock_llm ${key}`, problems);
+  }
+  if (facts.mockSupportByVendor[cell.vendor] !== "full") {
+    addProblem(
+      problems,
+      `${path}.tier`,
+      "unsupported_mock_vendor",
+      `Vendor "${cell.vendor}" does not have full mock-LLM support (${facts.mockSupportByVendor[cell.vendor]})`,
+    );
+  }
+  const configuredAnyPlatform = facts.workflowRealCliVendors[cell.workflow] ?? [];
+  if (!configuredAnyPlatform.includes(cell.vendor)) {
+    addProblem(
+      problems,
+      `${path}.workflow`,
+      "workflow_mismatch",
+      `Workflow "${cell.workflow}" does not declare "${cell.vendor}" in BELLWOOD_REQUIRE_REAL_CLI`,
+    );
+  } else {
+    const byPlatform = facts.workflowRealCliPlatforms?.[cell.workflow];
+    const surfacePlatform = surfacePlatformForWorkflow(matrix, cell.workflow);
+    if (byPlatform && !(byPlatform[cell.platform] ?? []).includes(cell.vendor)) {
+      addProblem(
+        problems,
+        `${path}.platform`,
+        "platform_mismatch",
+        `Workflow "${cell.workflow}" does not run real CLI "${cell.vendor}" on platform "${cell.platform}"`,
+      );
+    } else if (!byPlatform && surfacePlatform && surfacePlatform !== cell.platform) {
+      addProblem(
+        problems,
+        `${path}.platform`,
+        "platform_mismatch",
+        `Workflow "${cell.workflow}" targets "${surfacePlatform}", not "${cell.platform}"`,
+      );
+    }
+  }
+
+  if (isStaticWorkflowPath(cell.evidenceRef)) {
+    addProblem(
+      problems,
+      `${path}.evidenceRef`,
+      "unverified_run_evidence",
+      `real_cli_mock_llm evidenceRef "${cell.evidenceRef}" points to a static workflow config instead of a commit-bound run`,
+    );
+  } else {
+    const matched = validRuns.some(
+      (run) =>
+        run.kind === "real_cli_mock_llm" &&
+        run.source === cell.workflow &&
+        run.platform === cell.platform &&
+        (!run.vendors || run.vendors.includes(cell.vendor)) &&
+        (run.urlOrRef === cell.evidenceRef || run.id === cell.evidenceRef),
+    );
+    if (!matched) {
+      addProblem(
+        problems,
+        `${path}.evidenceRef`,
+        "unverified_run_evidence",
+        `real_cli_mock_llm cell ${cell.vendor}@${cell.platform} lacks a matching same-commit recordedRun for ${cell.workflow}`,
+      );
+    }
+  }
+}
+
 function validateCellFields(
   cell: VerificationCell,
   path: string,
+  matrix: VerificationMatrix,
   facts: RepoVerificationFacts,
+  validRuns: readonly VerificationRunRecord[],
   problems: MatrixValidationProblem[],
 ): void {
   if (cell.tier === "live_service") {
-    for (const key of ["cliVersion", "model", "evidenceRef", "verifiedAt"] as const) {
-      checkRequiredText(`${path}.${key}`, cell[key], `live_service ${key}`, problems);
-    }
-    if (cell.verifiedAt && !isValidIsoDate(cell.verifiedAt)) {
-      addProblem(problems, `${path}.verifiedAt`, "invalid_date", `Invalid ISO date "${cell.verifiedAt}"`);
-    }
-    checkTextField(`${path}.note`, cell.note, problems);
+    validateLiveCell(cell, path, validRuns, problems);
     return;
   }
 
   if (cell.tier === "real_cli_mock_llm") {
-    for (const key of ["cliVersion", "workflow", "command", "evidenceRef", "gapReason"] as const) {
-      checkRequiredText(`${path}.${key}`, cell[key], `real_cli_mock_llm ${key}`, problems);
-    }
-    if (facts.mockSupportByVendor[cell.vendor] !== "full") {
-      addProblem(
-        problems,
-        `${path}.tier`,
-        "unsupported_mock_vendor",
-        `Vendor "${cell.vendor}" does not have full mock-LLM support (${facts.mockSupportByVendor[cell.vendor]})`,
-      );
-    }
-    if (!(facts.workflowRealCliVendors[cell.workflow] ?? []).includes(cell.vendor)) {
-      addProblem(
-        problems,
-        `${path}.workflow`,
-        "workflow_mismatch",
-        `Workflow "${cell.workflow}" does not declare "${cell.vendor}" in BELLWOOD_REQUIRE_REAL_CLI`,
-      );
-    }
+    validateMockCell(cell, path, matrix, facts, validRuns, problems);
   } else {
     checkRequiredText(`${path}.gapReason`, cell.gapReason, `${cell.tier} gapReason`, problems);
+    if (cell.tier === "fake_cli_offline") {
+      checkTextField(`${path}.evidenceRef`, cell.evidenceRef, problems);
+      if (cell.evidenceRef && isStaticWorkflowPath(cell.evidenceRef)) {
+        addProblem(
+          problems,
+          `${path}.evidenceRef`,
+          "unverified_run_evidence",
+          `fake_cli_offline evidenceRef "${cell.evidenceRef}" must reference a commit-bound run, not a static workflow file`,
+        );
+      } else {
+        const matched = validRuns.some(
+          (run) =>
+            run.kind === "fake_cli_offline" &&
+            run.platform === cell.platform &&
+            (!run.vendors || run.vendors.includes(cell.vendor)) &&
+            (!cell.evidenceRef || run.urlOrRef === cell.evidenceRef || run.id === cell.evidenceRef),
+        );
+        if (!matched) {
+          addProblem(
+            problems,
+            path,
+            "unverified_run_evidence",
+            `fake_cli_offline cell ${cell.vendor}@${cell.platform} lacks a matching same-commit recordedRun on ${cell.platform}`,
+          );
+        }
+      }
+    }
   }
 
   if (cell.fallbackTests.length > VERIFICATION_MAX_FALLBACK_TESTS) {
@@ -423,8 +518,21 @@ export function validateVerificationMatrix(
     for (const key of ["id", "label", "workflowOrCommand", "scope"] as const) {
       checkTextField(`surfaces[${idx}].${key}`, surface[key], problems);
     }
+    const wfMatch = /^\.github\/workflows\/([^/\s]+\.ya?ml)$/.exec(surface.workflowOrCommand);
+    if (wfMatch && surface.platform !== "multi" && facts.workflowPlatforms?.[wfMatch[1]!]) {
+      const wfPlatforms = facts.workflowPlatforms[wfMatch[1]!]!;
+      if (!wfPlatforms.includes(surface.platform)) {
+        addProblem(
+          problems,
+          `surfaces[${idx}].platform`,
+          "platform_mismatch",
+          `Surface "${surface.id}" maps ${wfMatch[1]} to "${surface.platform}", but workflow runs on [${wfPlatforms.join(", ")}]`,
+        );
+      }
+    }
   });
 
+  const validRuns = validateRecordedRuns(matrix, facts, problems);
   const allowedVendors = new Set<string>(facts.vendors);
   const allowedPlatforms = new Set<string>(VERIFICATION_PLATFORMS);
   const seenCells = new Set<string>();
@@ -439,7 +547,7 @@ export function validateVerificationMatrix(
       const key = `${cell.vendor}:${cell.platform}`;
       if (seenCells.has(key)) addProblem(problems, path, "duplicate_cell", `Duplicate cell for ${cell.vendor} on ${cell.platform}`);
       seenCells.add(key);
-      validateCellFields(cell, path, facts, problems);
+      validateCellFields(cell, path, matrix, facts, validRuns, problems);
     }
   });
 
@@ -454,16 +562,14 @@ export function validateVerificationMatrix(
   return problems;
 }
 
-function commitsAlign(a: string, b: string): boolean {
-  const [left, right] = [a.trim().toLowerCase(), b.trim().toLowerCase()];
-  if (!COMMIT_SHA_RE.test(left) || !COMMIT_SHA_RE.test(right)) return false;
-  return left.startsWith(right) || right.startsWith(left);
-}
-
 export function ingestTesterRunRecord(
   matrix: VerificationMatrix,
   record: RunRecord,
-  opts: { platformByInstance: Readonly<Record<InstanceRole, VerificationPlatform>>; recordedAt: string },
+  opts: {
+    platformByInstance: Readonly<Record<InstanceRole, VerificationPlatform>>;
+    recordedAt: string;
+    commitKeyByInstance?: Partial<Record<InstanceRole, string>>;
+  },
 ): VerificationMatrix {
   if (!isValidIsoDate(opts.recordedAt)) throw new Error(`Invalid recordedAt date "${opts.recordedAt}"`);
   if (!record || typeof record !== "object" || typeof record.runId !== "string" || record.runId.trim() === "") {
@@ -472,7 +578,8 @@ export function ingestTesterRunRecord(
   if (!Array.isArray(record.results) || !record.preflight || !Array.isArray(record.preflight.coverage)) {
     throw new Error("Invalid RunRecord: missing results or preflight coverage");
   }
-  const recordedCommits = Object.entries(record.commits ?? {}).filter(([, sha]) => typeof sha === "string" && sha.trim() !== "");
+  const commits = record.commits ?? {};
+  const recordedCommits = Object.entries(commits).filter(([, sha]) => typeof sha === "string" && sha.trim() !== "");
   if (recordedCommits.length === 0) throw new Error("RunRecord commit mismatch: no commit recorded in RunRecord");
   for (const [role, sha] of recordedCommits) {
     if (!commitsAlign(sha, matrix.commit)) {
@@ -491,12 +598,43 @@ export function ingestTesterRunRecord(
     turnUpdates.set(`${vendor}:${opts.platformByInstance[instance]}`, { vendor, instance, result });
   }
 
+  const liveRunsByInstance = new Map<InstanceRole, { platform: VerificationPlatform; commit: string; vendors: Set<AgentVendor> }>();
+
   const nextCells: VerificationCell[] = matrix.cells.map((cell) => {
     const hit = turnUpdates.get(`${cell.vendor}:${cell.platform}`);
     if (!hit) return cell;
     const { vendor, instance, result } = hit;
     if (result.verdict === "pass") {
+      const commitKey = opts.commitKeyByInstance?.[instance] ?? instance;
+      const instanceCommit = commits[commitKey];
+      if (typeof instanceCommit !== "string" || !commitsAlign(instanceCommit, matrix.commit)) {
+        throw new Error(
+          `RunRecord commit mismatch for instance "${instance}" (key "${commitKey}"): ${String(instanceCommit ?? "missing")} does not match matrix commit ${matrix.commit}`,
+        );
+      }
       const readiness = coverageByKey.get(`${vendor}:${instance}`);
+      if (!readiness || !isValidConcreteCliVersion(readiness.version)) {
+        throw new Error(
+          `RunRecord missing valid non-unknown CLI version for ${vendor}@${instance} (got ${JSON.stringify(readiness?.version ?? null)})`,
+        );
+      }
+      const evidenceItems = (Array.isArray(result.evidence) ? result.evidence : [])
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => item !== "");
+      if (evidenceItems.length === 0) {
+        throw new Error(`RunRecord missing traceable evidence artifacts for passing turn ${result.id}`);
+      }
+      if (Array.isArray(result.checks) && result.checks.some((check) => !check.ok)) {
+        throw new Error(`RunRecord passing turn ${result.id} contains a failing check`);
+      }
+
+      let liveRun = liveRunsByInstance.get(instance);
+      if (!liveRun) {
+        liveRun = { platform: cell.platform, commit: instanceCommit.trim().toLowerCase(), vendors: new Set() };
+        liveRunsByInstance.set(instance, liveRun);
+      }
+      liveRun.vendors.add(vendor);
+
       const recipe = VENDOR_BENCH[vendor][instance];
       const model = recipe.coverage === "turn" && recipe.model ? recipe.model : "vendor default";
       const note = result.reason ? redactText(`Run ${record.runId} (${record.cadence}): ${result.reason}`) : undefined;
@@ -504,9 +642,9 @@ export function ingestTesterRunRecord(
         vendor,
         platform: cell.platform,
         tier: "live_service",
-        cliVersion: redactText(readiness?.version ?? "unknown"),
+        cliVersion: redactText(readiness.version),
         model: redactText(model),
-        evidenceRef: redactText(`tester:${record.runId}:${result.id}`),
+        evidenceRef: redactText(`tester:${record.runId}:${result.id}#${evidenceItems[0]}`),
         verifiedAt: opts.recordedAt,
         ...(note ? { note } : {}),
       };
@@ -521,206 +659,22 @@ export function ingestTesterRunRecord(
     return { ...cell, gapReason: redactText(`${safeReason} | ${cell.gapReason}`) };
   });
 
-  return { ...matrix, recordedAt: opts.recordedAt, cells: nextCells };
-}
-
-function escapeCell(text: string): string {
-  return text.replace(/—/g, "-").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
-}
-
-function formatSummaryCell(cell: VerificationCell | undefined): string {
-  if (!cell) return "`unverified`";
-  if (cell.tier === "live_service") return `\`live_service\` (${escapeCell(cell.model)}, CLI ${escapeCell(cell.cliVersion)})`;
-  if (cell.tier === "real_cli_mock_llm") return `\`real_cli_mock_llm\` (${escapeCell(cell.workflow)}, CLI ${escapeCell(cell.cliVersion)})`;
-  return `\`${cell.tier}\``;
-}
-
-function formatDetailColumns(cell: VerificationCell): { runtime: string; evidence: string; gap: string } {
-  if (cell.tier === "live_service") {
-    return {
-      runtime: `CLI ${escapeCell(cell.cliVersion)} / ${escapeCell(cell.model)}`,
-      evidence: `${escapeCell(cell.evidenceRef)} (${cell.verifiedAt})`,
-      gap: cell.note ? escapeCell(cell.note) : "Live upstream turn passed.",
-    };
-  }
-  const fallback =
-    cell.fallbackTests.length > 0 ? ` Fallback: ${cell.fallbackTests.map((t) => `\`${escapeCell(t)}\``).join(", ")}.` : "";
-  if (cell.tier === "real_cli_mock_llm") {
-    return {
-      runtime: `CLI ${escapeCell(cell.cliVersion)} via \`${escapeCell(cell.workflow)}\``,
-      evidence: `\`${escapeCell(cell.evidenceRef)}\``,
-      gap: `${escapeCell(cell.gapReason)}${fallback}`,
-    };
-  }
-  return { runtime: "-", evidence: "-", gap: `${escapeCell(cell.gapReason)}${fallback}` };
-}
-
-export function renderVerificationMatrixMarkdown(matrix: VerificationMatrix): string {
-  const cellMap = new Map(matrix.cells.map((cell) => [`${cell.vendor}:${cell.platform}`, cell]));
-  const lines: string[] = [
-    "# Verification matrix",
-    "",
-    `> Snapshot: ${matrix.recordedAt} (commit \`${matrix.commit}\`)`,
-    "",
-    `Commit-bound verification status for Bellwood **v${escapeCell(matrix.releaseVersion)}** across all ${AGENT_VENDORS.length} registered agent CLIs and ${VERIFICATION_PLATFORMS.length} platforms. Generated from [\`docs/verification-matrix.json\`](verification-matrix.json); do not edit by hand.`,
-    "",
-    "## Verification tiers",
-    "",
-    "| Tier | Meaning |",
-    "| --- | --- |",
-    ...TIER_LEGEND.map((item) => `| \`${item.tier}\` | ${escapeCell(item.meaning)} |`),
-    "",
-    "## Verification surfaces",
-    "",
-    "| Surface | Platform | CLI | Model backend | Workflow or command | Scope |",
-    "| --- | --- | --- | --- | --- | --- |",
-    ...matrix.surfaces.map(
-      (s) =>
-        `| ${escapeCell(s.label)} | \`${s.platform}\` | \`${s.cliKind}\` | \`${s.modelBackend}\` | \`${escapeCell(s.workflowOrCommand)}\` | ${escapeCell(s.scope)} |`,
-    ),
-    "",
-    "## Vendor x platform matrix",
-    "",
-    `| Vendor | ${VERIFICATION_PLATFORMS.map((p) => PLATFORM_LABELS[p]).join(" | ")} |`,
-    `| --- | ${VERIFICATION_PLATFORMS.map(() => "---").join(" | ")} |`,
-    ...AGENT_VENDORS.map((vendor) => {
-      const row = VERIFICATION_PLATFORMS.map((platform) => formatSummaryCell(cellMap.get(`${vendor}:${platform}`)));
-      return `| **${escapeCell(vendorLabel(vendor))}** (\`${vendor}\`) | ${row.join(" | ")} |`;
-    }),
-    "",
-    "## Detailed coverage and gaps",
-    "",
-    "| Vendor | Platform | Tier | CLI / Model / Workflow | Evidence | Coverage notes and fallback tests |",
-    "| --- | --- | --- | --- | --- | --- |",
-  ];
-
-  for (const vendor of AGENT_VENDORS) {
-    for (const platform of VERIFICATION_PLATFORMS) {
-      const cell = cellMap.get(`${vendor}:${platform}`);
-      if (!cell) continue;
-      const d = formatDetailColumns(cell);
-      lines.push(`| \`${vendor}\` | ${PLATFORM_LABELS[platform]} | \`${cell.tier}\` | ${d.runtime} | ${d.evidence} | ${d.gap} |`);
-    }
+  const runsById = new Map((matrix.recordedRuns ?? []).map((run) => [run.id, run]));
+  for (const [instance, info] of liveRunsByInstance) {
+    const id = redactText(`tester:${record.runId}@${instance}`);
+    runsById.set(id, {
+      id,
+      source: "pnpm tester",
+      platform: info.platform,
+      kind: "live_service",
+      commit: info.commit,
+      urlOrRef: id,
+      completedAt: opts.recordedAt,
+      vendors: [...info.vendors].sort(),
+    });
   }
 
-  lines.push(
-    "",
-    "## Reproduce and update",
-    "",
-    "```sh",
-    "node scripts/verification-matrix.ts check",
-    "node scripts/verification-matrix.ts render --write",
-    "node scripts/verification-matrix.ts ingest-tester --run <run-record.json> --write",
-    "```",
-    "",
-  );
-
-  return lines.join("\n");
-}
-
-const joinPosix = (...parts: string[]) =>
-  parts.map((p, idx) => (idx === 0 ? p.replace(/\/+$/, "") : p.replace(/^\/+|\/+$/g, ""))).join("/");
-const joinWin = (...parts: string[]) =>
-  parts.map((p, idx) => (idx === 0 ? p.replace(/\\+$/, "") : p.replace(/^\\+|\\+$/g, ""))).join("\\");
-
-export function packagedFeishuCommands(layout: PackagedFeishuLayout): PackagedFeishuCommands {
-  const macRuntime = joinPosix(layout.macAppPath, layout.macRuntimeRelativeDir);
-  const macNode = joinPosix(macRuntime, layout.macNodeRelativePath);
-  const macEntry = joinPosix(macRuntime, layout.macFeishuEntryRelativePath);
-  const winNode = joinWin(layout.winInstallDirEnv, layout.winNodeRelativePath);
-  const winEntry = joinWin(layout.winInstallDirEnv, layout.winFeishuEntryRelativePath);
-  const sourceEntry = layout.sourceFeishuEntryRelativePath.replace(/^\/+/, "");
-  return {
-    macConnect: `${macNode} ${macEntry} connect`,
-    macStatus: `${macNode} ${macEntry} status`,
-    winConnectPowerShell: `& "${winNode}" "${winEntry}" connect`,
-    winStatusPowerShell: `& "${winNode}" "${winEntry}" status`,
-    sourceConnect: `node ${sourceEntry} connect`,
-    sourceStatus: `node ${sourceEntry} status`,
-  };
-}
-
-function extractSection(markdown: string, startHeading: RegExp, endHeading: RegExp): string {
-  const startMatch = startHeading.exec(markdown);
-  if (!startMatch) return "";
-  const rest = markdown.slice(startMatch.index);
-  const nextMatch = endHeading.exec(rest.slice(startMatch[0].length));
-  return nextMatch ? rest.slice(0, startMatch[0].length + nextMatch.index) : rest;
-}
-
-function checkReadmeFeishuQuickStart(opts: {
-  label: string;
-  markdown: string;
-  step4Heading: RegExp;
-  feishuSectionHeading: RegExp;
-  sourceScopePattern: RegExp;
-  cliOnlyDisclosurePattern: RegExp;
-  commands: PackagedFeishuCommands;
-  problems: string[];
-}): void {
-  const { label, markdown, step4Heading, feishuSectionHeading, sourceScopePattern, cliOnlyDisclosurePattern, commands, problems } =
-    opts;
-  if (!markdown.includes("docs/verification-matrix.md")) problems.push(`${label}: missing link to docs/verification-matrix.md`);
-
-  const step4 = extractSection(markdown, step4Heading, /^(?:### |## |<details>)/m);
-  if (!step4) {
-    problems.push(`${label}: missing Quick start step 4 section`);
-    return;
-  }
-
-  for (const [name, cmd] of Object.entries(commands)) {
-    if (!step4.includes(cmd)) problems.push(`${label}: Quick start step 4 missing ${name} command`);
-  }
-  if (!cliOnlyDisclosurePattern.test(step4)) {
-    problems.push(`${label}: Quick start step 4 must disclose that Feishu setup uses the bundled CLI rather than an in-app Settings tab`);
-  }
-  if (!step4.includes("Settings → Computers") && !step4.includes("Settings -> Computers")) {
-    problems.push(`${label}: Quick start step 4 must reference Settings -> Computers for bot host status`);
-  }
-
-  const sourceLines = step4.split(/\r?\n/).filter((line) => line.includes(commands.sourceConnect));
-  if (sourceLines.length === 0 || sourceLines.some((line) => !sourceScopePattern.test(line))) {
-    problems.push(`${label}: Quick start step 4 must scope "${commands.sourceConnect}" to Linux or source checkouts`);
-  }
-
-  const feishuSection = extractSection(markdown, feishuSectionHeading, /^## /m);
-  if (!feishuSection) {
-    problems.push(`${label}: missing Feishu overview section`);
-    return;
-  }
-  const bareLines = feishuSection.split(/\r?\n/).filter((line) => line.includes(commands.sourceConnect) && !sourceScopePattern.test(line));
-  if (bareLines.length > 0) {
-    problems.push(`${label}: Feishu section uses unqualified "${commands.sourceConnect}" without Linux/source scoping`);
-  }
-}
-
-export function validateFeishuQuickStartDocs(input: {
-  readmeEn: string;
-  readmeZh: string;
-  commands: PackagedFeishuCommands;
-}): string[] {
-  const problems: string[] = [];
-  checkReadmeFeishuQuickStart({
-    label: "README.md",
-    markdown: input.readmeEn,
-    step4Heading: /^### 4\. Connect Feishu/m,
-    feishuSectionHeading: /^## Feishu on mobile and in team groups$/m,
-    sourceScopePattern: /linux|source/i,
-    cliOnlyDisclosurePattern: /(?:bundled|terminal)?\s*CLI[\s\S]{0,120}(?:no in-app|rather than an in-app|not yet in-app|in-app)/i,
-    commands: input.commands,
-    problems,
-  });
-  checkReadmeFeishuQuickStart({
-    label: "README.zh-CN.md",
-    markdown: input.readmeZh,
-    step4Heading: /^### 4\. 接入飞书/m,
-    feishuSectionHeading: /^## 飞书入口$/m,
-    sourceScopePattern: /linux|源码/i,
-    cliOnlyDisclosurePattern: /(?:内置命令行|命令行)[\s\S]{0,60}(?:暂未提供应用内|暂无应用内|非应用内|没有应用内)/,
-    commands: input.commands,
-    problems,
-  });
-  return problems;
+  return { ...matrix, recordedAt: opts.recordedAt, recordedRuns: [...runsById.values()], cells: nextCells };
 }
 
 function fullHistoryCommitChecker(repoRoot: string): ((sha: string) => boolean) | undefined {
@@ -744,10 +698,13 @@ function collectRepoFacts(repoRoot: string, appVersionOverride?: string): RepoVe
   const mockSupportByVendor = Object.fromEntries(
     AGENT_VENDORS.map((vendor) => [vendor, VENDOR_MOCK_ADAPTERS[vendor].support]),
   ) as Record<AgentVendor, VendorEndpointSupport>;
+  const scanned = scanWorkflows(join(repoRoot, ".github", "workflows"));
   return {
     vendors: AGENT_VENDORS,
     mockSupportByVendor,
-    workflowRealCliVendors: readWorkflowRealCliVendors(join(repoRoot, ".github", "workflows")),
+    workflowRealCliVendors: scanned.realCliVendors,
+    workflowPlatforms: scanned.platforms,
+    workflowRealCliPlatforms: scanned.realCliPlatforms,
     appVersion: appVersionOverride ?? readDesktopAppVersion(repoRoot),
     commitExists: fullHistoryCommitChecker(repoRoot),
   };
@@ -779,12 +736,30 @@ export function validateRepoVerificationMatrix(repoRoot: string, appVersionOverr
 
   const [readmeEnPath, readmeZhPath] = [join(repoRoot, "README.md"), join(repoRoot, "README.zh-CN.md")];
   if (existsSync(readmeEnPath) && existsSync(readmeZhPath)) {
-    const docProblems = validateFeishuQuickStartDocs({
-      readmeEn: readFileSync(readmeEnPath, "utf8"),
-      readmeZh: readFileSync(readmeZhPath, "utf8"),
-      commands: packagedFeishuCommands(DEFAULT_FEISHU_LAYOUT),
-    });
-    for (const msg of docProblems) addProblem(problems, "README", "missing_evidence", msg);
+    try {
+      const layout = readPackagedFeishuLayout(repoRoot);
+      const docProblems = validateFeishuQuickStartDocs({
+        readmeEn: readFileSync(readmeEnPath, "utf8"),
+        readmeZh: readFileSync(readmeZhPath, "utf8"),
+        commands: packagedFeishuCommands(layout),
+      });
+      for (const msg of docProblems) addProblem(problems, "README", "missing_evidence", msg);
+    } catch (error) {
+      addProblem(problems, "packaging", "missing_evidence", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const releaseDownloadsPath = join(repoRoot, ".github", "release-downloads.md");
+  if (existsSync(releaseDownloadsPath)) {
+    const downloads = readFileSync(releaseDownloadsPath, "utf8");
+    if (/\/blob\/(?:main|master|HEAD)\/docs\/verification-matrix\.md\b/.test(downloads)) {
+      addProblem(
+        problems,
+        ".github/release-downloads.md",
+        "unverified_run_evidence",
+        "Release downloads template must pin docs/verification-matrix.md to the release tag instead of a floating branch",
+      );
+    }
   }
 
   return problems;
@@ -809,7 +784,7 @@ function parseCliFlags(args: readonly string[]): Map<string, string> {
 const CLI_USAGE = [
   "Usage: node scripts/verification-matrix.ts check",
   "  | render [--write]",
-  "  | ingest-tester --run <run-record.json> [--date YYYY-MM-DD] [--write]",
+  "  | ingest-tester --run <run-record.json> [--date YYYY-MM-DD] [--local-commit-key <name>] [--remote-commit-key <name>] [--write]",
 ].join("\n");
 
 export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoRoot?: string }): number {
@@ -843,7 +818,16 @@ export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoR
       const matrix = parseVerificationMatrix(JSON.parse(readFileSync(jsonPath, "utf8")) as unknown);
       const record = JSON.parse(readFileSync(resolve(repoRoot, runFile), "utf8")) as RunRecord;
       const recordedAt = flags.get("date") ?? (typeof record.finishedAt === "string" ? record.finishedAt.slice(0, 10) : matrix.recordedAt);
-      const updated = ingestTesterRunRecord(matrix, record, { platformByInstance: { local: "macos", remote: "linux" }, recordedAt });
+      const commitKeyByInstance: Partial<Record<InstanceRole, string>> = {};
+      const localKey = flags.get("local-commit-key");
+      const remoteKey = flags.get("remote-commit-key");
+      if (localKey && localKey !== "true") commitKeyByInstance.local = localKey;
+      if (remoteKey && remoteKey !== "true") commitKeyByInstance.remote = remoteKey;
+      const updated = ingestTesterRunRecord(matrix, record, {
+        platformByInstance: { local: "macos", remote: "linux" },
+        recordedAt,
+        ...(Object.keys(commitKeyByInstance).length > 0 ? { commitKeyByInstance } : {}),
+      });
       const problems = validateVerificationMatrix(updated, collectRepoFacts(repoRoot));
       if (problems.length > 0) {
         for (const p of problems) console.error(`[${p.code}] ${p.path}: ${redactText(p.message)}`);

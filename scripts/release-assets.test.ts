@@ -44,7 +44,27 @@ describe("scripts/release-assets.ts", () => {
     const notes = composeReleaseNotes(readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8"), downloads, "0.3.0");
     expect(notes.startsWith("- ")).toBe(true);
     expect(notes).toContain("### English");
-    expect(notes.endsWith(`${downloads.trim()}\n`)).toBe(true);
+    expect(downloads).not.toContain("/blob/main/");
+    expect(notes).toContain("https://github.com/maodesikeng-boop/agent-hub/blob/v0.3.0/docs/verification-matrix.md");
+    expect(notes).not.toContain("/blob/main/docs/verification-matrix.md");
+
+    const rcNotes = composeReleaseNotes(readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8"), downloads, "0.4.0", {
+      ref: "v0.4.0-rc.1",
+      repo: "example-org/agent-hub",
+    });
+    expect(rcNotes).toContain("https://github.com/example-org/agent-hub/blob/v0.4.0-rc.1/docs/verification-matrix.md");
+    expect(rcNotes).not.toContain("{{RELEASE_");
+
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "main" })).toThrow(/release tag or commit SHA/i);
+    expect(() => composeReleaseNotes("## v0.4.0\n- x\n", downloads, "0.4.0", { ref: "HEAD" })).toThrow(/release tag or commit SHA/i);
+    expect(() =>
+      composeReleaseNotes(
+        "## v0.4.0\n- x\n",
+        "[matrix](https://github.com/maodesikeng-boop/agent-hub/blob/main/docs/verification-matrix.md)",
+        "0.4.0",
+      ),
+    ).toThrow(/floating branch/i);
+
     for (const name of Object.values(RELEASE_INSTALLER_FILES)) expect(downloads).toContain(`\`${name}.sha256\``);
     expect(() => composeReleaseNotes("## v0.3.0\n- x\n", downloads, "9.9.9")).toThrow('no "## v9.9.9" section');
   });
