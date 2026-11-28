@@ -1,8 +1,10 @@
 // 数据库空间维护（maintenance.ts）：老库重建成增量回收模式（先备份）、新库本来就是、空闲页分批还给文件系统。
+import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import { openDatabase } from "./db.ts";
@@ -179,6 +181,78 @@ describe("auto_vacuum 模式", () => {
     expect(ok.converted).toBe(true);
     const finalBackups = readdirSync(dir).filter((n) => n.startsWith("hub.sqlite.bak-")).sort();
     expect(finalBackups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS);
+  });
+
+  it("bounds same-version backups and preserves older rollback versions across 5 subprocess crashes right after VACUUM INTO and right before VACUUM rebuild", () => {
+    legacyDb(); // user_version 3, auto_vacuum = NONE
+    const olderBak = `${file}.bak-2-20251128T000000Z`;
+    const olderRaw = new DatabaseSync(olderBak);
+    olderRaw.exec("PRAGMA user_version = 2");
+    olderRaw.close();
+
+    const dbModuleUrl = pathToFileURL(join(import.meta.dirname, "db.ts")).href;
+    const maintenanceModuleUrl = pathToFileURL(join(import.meta.dirname, "maintenance.ts")).href;
+    const crashScript = [
+      `const { openDatabase } = await import(${JSON.stringify(dbModuleUrl)});`,
+      `const { ensureIncrementalVacuum } = await import(${JSON.stringify(maintenanceModuleUrl)});`,
+      `const [mode, dbPath, tick] = process.argv.slice(1);`,
+      `const d = openDatabase(dbPath);`,
+      `if (mode === "after-vacuum-into") {`,
+      `  const origRun = d.run.bind(d);`,
+      `  d.run = (sql, ...params) => { const out = origRun(sql, ...params); if (sql === "VACUUM INTO ?") process.exit(77); return out; };`,
+      `} else {`,
+      `  const origExec = d.exec.bind(d);`,
+      `  d.exec = (sql) => { if (sql.startsWith("PRAGMA auto_vacuum =")) process.exit(77); return origExec(sql); };`,
+      `}`,
+      `ensureIncrementalVacuum(d, { now: () => Number(tick) });`,
+      `process.exit(78);`,
+    ].join("\n");
+
+    let clock = Date.UTC(2026, 10, 28, 13, 0, 0);
+    const tick = () => (clock += 60_000);
+
+    // 5 crashes immediately after VACUUM INTO before backup publishing / same-version pruning.
+    for (let i = 0; i < 5; i++) {
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", crashScript, "after-vacuum-into", file, String(tick())], {
+        encoding: "utf8",
+      });
+      expect(child.status, child.stderr).toBe(77);
+      const entries = readdirSync(dir);
+      const backups = entries.filter((n) => n.startsWith("hub.sqlite.bak-")).sort();
+      const staging = entries.filter((n) => n.startsWith("hub.sqlite.backup"));
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-2-"))).toHaveLength(1);
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-3-")).length).toBeLessThanOrEqual(1);
+      expect(backups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS + 1);
+      expect(staging.length).toBeLessThanOrEqual(1);
+    }
+
+    // 5 crashes right after backup publishing before VACUUM rebuild runs.
+    for (let i = 0; i < 5; i++) {
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", crashScript, "before-rebuild", file, String(tick())], {
+        encoding: "utf8",
+      });
+      expect(child.status, child.stderr).toBe(77);
+      const entries = readdirSync(dir);
+      const backups = entries.filter((n) => n.startsWith("hub.sqlite.bak-")).sort();
+      const staging = entries.filter((n) => n.startsWith("hub.sqlite.backup"));
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-2-"))).toHaveLength(1);
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-3-"))).toHaveLength(1);
+      expect(backups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS + 1);
+      expect(staging).toEqual([]);
+    }
+
+    // Recovery succeeds cleanly, removes any staging file, and respects MAX_DB_BACKUPS.
+    db = openDatabase(file);
+    expect(autoVacuumMode(db)).toBe(0);
+    const ok = ensureIncrementalVacuum(db, { now: tick });
+    expect(ok.converted).toBe(true);
+    expect(autoVacuumMode(db)).toBe(2);
+    const finalEntries = readdirSync(dir);
+    expect(finalEntries.filter((n) => n.startsWith("hub.sqlite.backup"))).toEqual([]);
+    const finalBackups = finalEntries.filter((n) => n.startsWith("hub.sqlite.bak-")).sort();
+    expect(finalBackups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS);
+    expect(finalBackups.filter((n) => n.startsWith("hub.sqlite.bak-2-"))).toHaveLength(1);
+    expect(finalBackups.filter((n) => n.startsWith("hub.sqlite.bak-3-"))).toHaveLength(1);
   });
 });
 

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAX_DB_BACKUPS } from "../../shared/limits.ts";
+import { readMigrationAnchor } from "./backup-rotation.ts";
 import { openDatabase } from "./db.ts";
 import type { Db } from "./db.ts";
 import { DEFAULT_MIGRATIONS_DIR, MIGRATION_MANIFEST, loadMigrations, migrate, migrationChecksum, userVersion } from "./migrate.ts";
@@ -315,6 +317,81 @@ describe("pre-upgrade backup preservation across repeated migration failures", (
       ]);
     } finally {
       freshBackup.close();
+    }
+  });
+
+  it("bounds same-version backups and preserves older rollback backups across 5 subprocess crashes right after VACUUM INTO before anchor write", () => {
+    const dbFile = join(dir, "hub.sqlite");
+    const migV1 = join(dir, "mig-v1-pre-anchor");
+    writeMigration(migV1, "0001_init.sql", "CREATE TABLE seed (name TEXT NOT NULL);");
+    db = openDatabase(dbFile);
+    migrate(db, migV1);
+    db.run("INSERT INTO seed (name) VALUES ('pre-upgrade-data')");
+    db.close();
+    db = undefined;
+
+    // Seed an older rollback backup that must never be evicted across crash-looping restarts.
+    writeFileSync(join(dir, "hub.sqlite.bak-0-20251128T000000Z"), "v0-rollback");
+
+    const migV4 = join(dir, "mig-v4-pre-anchor");
+    writeMigration(migV4, "0001_init.sql", "CREATE TABLE seed (name TEXT NOT NULL);");
+    writeMigration(migV4, "0002_step2.sql", "CREATE TABLE step2 (id INTEGER PRIMARY KEY);");
+    writeMigration(migV4, "0003_step3.sql", "CREATE TABLE step3 (id INTEGER PRIMARY KEY);");
+    writeMigration(migV4, "0004_step4.sql", "CREATE TABLE step4 (id INTEGER PRIMARY KEY);");
+
+    const dbModuleUrl = pathToFileURL(join(import.meta.dirname, "db.ts")).href;
+    const migrateModuleUrl = pathToFileURL(join(import.meta.dirname, "migrate.ts")).href;
+    const crashScript = [
+      `const { openDatabase } = await import(${JSON.stringify(dbModuleUrl)});`,
+      `const { migrate } = await import(${JSON.stringify(migrateModuleUrl)});`,
+      `const [dbPath, migrationsDir, tick] = process.argv.slice(1);`,
+      `const d = openDatabase(dbPath);`,
+      `const origRun = d.run.bind(d);`,
+      `d.run = (sql, ...params) => { const out = origRun(sql, ...params); if (sql === "VACUUM INTO ?") process.exit(77); return out; };`,
+      `migrate(d, migrationsDir, { now: () => Number(tick) });`,
+      `process.exit(78);`,
+    ].join("\n");
+
+    let clock = Date.UTC(2026, 10, 28, 12, 0, 0);
+    const tick = () => (clock += 60_000);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", crashScript, dbFile, migV4, String(tick())], {
+        encoding: "utf8",
+      });
+      expect(child.status, child.stderr).toBe(77);
+      const checkDb = openDatabase(dbFile);
+      try {
+        expect(userVersion(checkDb)).toBe(1);
+      } finally {
+        checkDb.close();
+      }
+      expect(readMigrationAnchor(dbFile)).toBeNull();
+      const entries = readdirSync(dir);
+      const backups = entries.filter((name) => name.startsWith("hub.sqlite.bak-")).sort();
+      const staging = entries.filter((name) => name.startsWith("hub.sqlite.backup"));
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-0-"))).toHaveLength(1);
+      expect(backups.filter((n) => n.startsWith("hub.sqlite.bak-1-")).length).toBeLessThanOrEqual(1);
+      expect(backups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS + 1);
+      expect(staging.length).toBeLessThanOrEqual(1);
+    }
+
+    // Recovery finishes cleanly, removes any staging file, and preserves the v1 rollback backup.
+    db = openDatabase(dbFile);
+    const result = migrate(db, migV4, { now: tick });
+    expect(result.to).toBe(4);
+    const finalEntries = readdirSync(dir);
+    expect(finalEntries.filter((name) => name.startsWith("hub.sqlite.backup"))).toEqual([]);
+    const finalBackups = finalEntries.filter((name) => name.startsWith("hub.sqlite.bak-")).sort();
+    expect(finalBackups.length).toBeLessThanOrEqual(MAX_DB_BACKUPS);
+    const v1Bak = finalBackups.find((n) => n.startsWith("hub.sqlite.bak-1-"));
+    expect(v1Bak).toBeDefined();
+    const rollback = openDatabase(join(dir, v1Bak!));
+    try {
+      expect(userVersion(rollback)).toBe(1);
+      expect(rollback.all<{ name: string }>("SELECT name FROM seed")).toEqual([{ name: "pre-upgrade-data" }]);
+    } finally {
+      rollback.close();
     }
   });
 });

@@ -190,19 +190,40 @@ export function planMigrationBackup(
 }
 
 /**
- * Precondition: dbFile is the path to the main SQLite database file, version is a positive integer, and keep is the newly created backup path for version.
- * Postcondition: removes older duplicate backups of the same source version while leaving keep, any anchored rollback backup, and all other schema versions untouched.
+ * Precondition: dbFile is the absolute path to the main SQLite database file.
+ * Postcondition: returns the fixed staging file path adjacent to dbFile used during VACUUM INTO before atomic publish.
  */
-export function pruneSameVersionBackups(dbFile: string, version: number, keep: string): void {
+export function backupStagingPath(dbFile: string): string {
+  return `${dbFile}.backup-tmp`;
+}
+
+/**
+ * Precondition: dbFile is the absolute path to the main SQLite database file.
+ * Postcondition: removes any leftover staging file adjacent to dbFile without throwing when absent.
+ */
+export function clearBackupStaging(dbFile: string): void {
+  try {
+    rmSync(backupStagingPath(dbFile), { force: true });
+  } catch {
+  }
+}
+
+/**
+ * Precondition: dbFile is the path to the main SQLite database file and version is a positive integer.
+ * Postcondition: removes duplicate backups of the same source version while leaving keep (if given), any anchored rollback backup (unless explicitly named in allowDelete), and all other schema versions untouched.
+ */
+export function pruneSameVersionBackups(dbFile: string, version: number, keep?: string, allowDelete?: string): void {
   const dir = dirname(dbFile);
-  const keepCanonical = canonicalFilePath(keep);
+  const keepCanonical = keep !== undefined ? canonicalFilePath(keep) : undefined;
+  const allowDeleteCanonical = allowDelete !== undefined ? canonicalFilePath(allowDelete) : undefined;
   const anchor = readMigrationAnchor(dbFile);
   const anchorCanonical = anchor !== null ? canonicalFilePath(anchor.backupFile) : undefined;
   for (const name of readdirSync(dir)) {
     const entry = parseBackupEntry(dbFile, name);
     if (entry === null || entry.version !== version) continue;
     const entryCanonical = canonicalFilePath(entry.fullPath);
-    if (entryCanonical === keepCanonical || entryCanonical === anchorCanonical) continue;
+    if (keepCanonical !== undefined && entryCanonical === keepCanonical) continue;
+    if (entryCanonical === anchorCanonical && entryCanonical !== allowDeleteCanonical) continue;
     try {
       rmSync(entry.fullPath, { force: true });
     } catch {

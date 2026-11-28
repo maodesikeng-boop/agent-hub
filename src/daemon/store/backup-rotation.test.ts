@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  backupStagingPath,
+  clearBackupStaging,
   clearMigrationAnchor,
   migrationAnchorPath,
   planMigrationBackup,
@@ -161,5 +163,26 @@ describe("migration backup rotation contracts", () => {
       "hub.sqlite.bak-10-20261128T080000Z",
       "hub.sqlite.bak-11-20261128T080200Z",
     ]);
+
+    // Without keep, pruneSameVersionBackups removes unanchored duplicates while protecting anchored backups unless allowDelete names them.
+    writeMigrationAnchor(dbFile, { fromVersion: 11, lastVersion: 11, backupFile: bak11New });
+    writeFileSync(bak11Old, "unanchored-dup");
+    pruneSameVersionBackups(dbFile, 11);
+    expect(readdirSync(dir).filter((f) => f.includes(".bak-")).sort()).toEqual([
+      "hub.sqlite.bak-10-20261128T080000Z",
+      "hub.sqlite.bak-11-20261128T080200Z",
+    ]);
+    pruneSameVersionBackups(dbFile, 11, undefined, bak11New);
+    expect(readdirSync(dir).filter((f) => f.includes(".bak-")).sort()).toEqual([
+      "hub.sqlite.bak-10-20261128T080000Z",
+    ]);
+
+    // Staging file helper removes leftover staging files without throwing when absent.
+    const staging = backupStagingPath(dbFile);
+    writeFileSync(staging, "partial");
+    expect(existsSync(staging)).toBe(true);
+    clearBackupStaging(dbFile);
+    expect(existsSync(staging)).toBe(false);
+    clearBackupStaging(dbFile);
   });
 });

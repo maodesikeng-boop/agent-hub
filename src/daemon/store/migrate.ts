@@ -1,13 +1,16 @@
 // Foreign keys can only be toggled outside a transaction, so each migration runs with them off and foreign_key_check runs before commit. That lets migrations rebuild referenced tables, and it is why this cannot run inside an outer transaction.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import {
+  backupStagingPath,
+  clearBackupStaging,
   clearMigrationAnchor,
   planMigrationBackup,
   pruneDatabaseBackups,
+  pruneSameVersionBackups,
   readMigrationAnchor,
   writeMigrationAnchor,
 } from "./backup-rotation.ts";
@@ -123,18 +126,34 @@ export function mainDbFile(db: Db): string | null {
   return file ? file : null;
 }
 
-export function backupDatabase(db: Db, from: number, now: () => number): string | undefined {
+export interface BackupDatabaseOptions {
+  replaceAnchored?: string;
+}
+
+export function backupDatabase(
+  db: Db,
+  from: number,
+  now: () => number,
+  options: BackupDatabaseOptions = {},
+): string | undefined {
   const file = mainDbFile(db);
   if (file === null) return undefined;
+  const staging = backupStagingPath(file);
+  clearBackupStaging(file);
+  try {
+    db.run("VACUUM INTO ?", staging);
+  } catch (error) {
+    clearBackupStaging(file);
+    throw error;
+  }
+  // Staging holds a complete snapshot, so dropping superseded same-version copies before publishing prevents unbounded growth across repeated crashes without leaving zero backups during VACUUM INTO.
+  pruneSameVersionBackups(file, from, undefined, options.replaceAnchored);
   let target = `${file}.bak-${from}-${backupStamp(now())}`;
   for (let n = 2; existsSync(target); n++) target = `${file}.bak-${from}-${backupStamp(now())}-${n}`;
   try {
-    db.run("VACUUM INTO ?", target);
+    renameSync(staging, target);
   } catch (error) {
-    try {
-      rmSync(target, { force: true });
-    } catch {
-    }
+    clearBackupStaging(file);
     throw error;
   }
   return target;
@@ -173,6 +192,7 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
   const dbFile = mainDbFile(db);
   if (pending.length === 0) {
     if (dbFile !== null) {
+      clearBackupStaging(dbFile);
       const existingAnchor = readMigrationAnchor(dbFile);
       clearMigrationAnchor(dbFile);
       if (
@@ -194,16 +214,12 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
       backupFile = plan.backupFile;
       anchorFromVersion = existingAnchor!.fromVersion;
     } else {
-      backupFile = backupDatabase(db, from, options.now ?? Date.now);
+      backupFile = backupDatabase(db, from, options.now ?? Date.now, {
+        ...(plan.replaceSameVersionBackup !== undefined ? { replaceAnchored: plan.replaceSameVersionBackup } : {}),
+      });
       if (backupFile !== undefined) {
         anchorFromVersion = from;
         writeMigrationAnchor(dbFile, { fromVersion: from, lastVersion: from, backupFile });
-        if (plan.replaceSameVersionBackup !== undefined && plan.replaceSameVersionBackup !== backupFile) {
-          try {
-            rmSync(plan.replaceSameVersionBackup, { force: true });
-          } catch {
-          }
-        }
       }
     }
   }
@@ -250,6 +266,7 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
     }
   }
   if (dbFile !== null) {
+    clearBackupStaging(dbFile);
     clearMigrationAnchor(dbFile);
     if (backupFile !== undefined) pruneDatabaseBackups(dbFile, backupFile, MAX_DB_BACKUPS);
   }
