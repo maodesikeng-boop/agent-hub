@@ -591,6 +591,7 @@ export interface RateLimitWindow {
   utilization: number;
   resetsAt: number;
   status: string;
+  observedAt?: number;
 }
 
 export interface RateLimitInfo {
@@ -642,7 +643,14 @@ export function clearRateLimitRejection(info: RateLimitInfo): RateLimitInfo | nu
   if (typeof rawWindows !== "object" || rawWindows === null || Array.isArray(rawWindows)) return null;
   const windows: Record<string, RateLimitWindow> = {};
   for (const [k, w] of Object.entries(rawWindows as Record<string, RateLimitWindow | null | undefined>)) {
-    if (w && typeof w === "object") windows[k] = w.status === RATE_LIMIT_REJECTED ? { ...w, status: "allowed" } : w;
+    if (w && typeof w === "object") {
+      if (w.status === RATE_LIMIT_REJECTED) {
+        const { observedAt: _ignored, ...rest } = w;
+        windows[k] = { ...rest, status: "allowed" };
+      } else {
+        windows[k] = w;
+      }
+    }
   }
   if (Object.keys(windows).length === 0) return null;
   return { ...info, status: "allowed", windows };

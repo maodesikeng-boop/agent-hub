@@ -91,12 +91,30 @@ function isWindowExhausted(w: RateLimitWindow): boolean {
   return w.utilization >= 1;
 }
 
+function validObservedAt(w: RateLimitWindow): number | null {
+  return typeof w.observedAt === "number" && Number.isFinite(w.observedAt) && w.observedAt > 0 ? w.observedAt : null;
+}
+
 function isWindowUnexpired(w: RateLimitWindow, parentResetsAt: number | null, prevUpdatedAt: number, nowMs: number): boolean {
   if (w.resetsAt > 0) return w.resetsAt * 1000 > nowMs;
   if (typeof parentResetsAt === "number" && Number.isFinite(parentResetsAt) && parentResetsAt > 0) {
     return parentResetsAt * 1000 > nowMs;
   }
-  return prevUpdatedAt + OBSERVED_QUOTA_FALLBACK_TTL_MS > nowMs;
+  return (validObservedAt(w) ?? prevUpdatedAt) + OBSERVED_QUOTA_FALLBACK_TTL_MS > nowMs;
+}
+
+function stampTimelessExhaustedWindows(info: RateLimitInfo, nowMs: number): RateLimitInfo {
+  const rawWindows = info.windows as unknown;
+  if (typeof rawWindows !== "object" || rawWindows === null || Array.isArray(rawWindows)) return info;
+  let stamped: Record<string, RateLimitWindow> | null = null;
+  for (const [key, value] of Object.entries(rawWindows as Record<string, unknown>)) {
+    if (!isValidRateLimitWindow(value) || !isWindowExhausted(value) || value.resetsAt > 0 || validObservedAt(value) !== null) {
+      continue;
+    }
+    stamped ??= { ...(rawWindows as Record<string, RateLimitWindow>) };
+    stamped[key] = { ...value, observedAt: nowMs };
+  }
+  return stamped === null ? info : { ...info, windows: stamped };
 }
 
 function parseStoredRateLimit(raw: string | null): RateLimitInfo | null {
@@ -117,22 +135,37 @@ function mergePersistedRateLimit(
   nowMs: number,
   prevUpdatedAt: number,
 ): RateLimitInfo {
-  if (prev === null) return next;
+  const stampedNext = stampTimelessExhaustedWindows(next, nowMs);
+  if (prev === null) return stampedNext;
   const rawPrevWindows = prev.windows as unknown;
-  if (typeof rawPrevWindows !== "object" || rawPrevWindows === null || Array.isArray(rawPrevWindows)) return next;
-  const rawNextWindows = next.windows as unknown;
+  if (typeof rawPrevWindows !== "object" || rawPrevWindows === null || Array.isArray(rawPrevWindows)) return stampedNext;
+  const rawNextWindows = stampedNext.windows as unknown;
   const nextWindows: Record<string, RateLimitWindow> =
     typeof rawNextWindows === "object" && rawNextWindows !== null && !Array.isArray(rawNextWindows)
       ? { ...(rawNextWindows as Record<string, RateLimitWindow>) }
       : {};
+  const prevResetFromOverwrittenWindow =
+    typeof prev.resetsAt === "number" &&
+    Number.isFinite(prev.resetsAt) &&
+    prev.resetsAt > 0 &&
+    Object.entries(rawPrevWindows as Record<string, unknown>).some(
+      ([key, value]) =>
+        Object.prototype.hasOwnProperty.call(nextWindows, key) &&
+        isValidRateLimitWindow(value) &&
+        value.resetsAt === prev.resetsAt,
+    );
+  const effectivePrevResetsAt = prevResetFromOverwrittenWindow ? null : prev.resetsAt;
   const carried: Array<[string, RateLimitWindow]> = [];
   for (const [key, value] of Object.entries(rawPrevWindows as Record<string, unknown>)) {
     if (Object.prototype.hasOwnProperty.call(nextWindows, key)) continue;
     if (!isValidRateLimitWindow(value) || !isWindowExhausted(value)) continue;
-    if (!isWindowUnexpired(value, prev.resetsAt, prevUpdatedAt, nowMs)) continue;
-    carried.push([key, value]);
+    if (!isWindowUnexpired(value, effectivePrevResetsAt, prevUpdatedAt, nowMs)) continue;
+    // Pin the original observation time when carrying a timestamp-less window so row updated_at bumps do not extend fallback TTL.
+    const carriedWindow =
+      value.resetsAt > 0 ? value : { ...value, observedAt: validObservedAt(value) ?? prevUpdatedAt };
+    carried.push([key, carriedWindow]);
   }
-  if (carried.length === 0) return next;
+  if (carried.length === 0) return stampedNext;
   for (const [key, value] of carried) nextWindows[key] = value;
   const resets: number[] = [];
   for (const w of Object.values(nextWindows)) {
@@ -140,16 +173,26 @@ function mergePersistedRateLimit(
       resets.push(w.resetsAt);
     }
   }
-  if (next.status === "rejected" && typeof next.resetsAt === "number" && Number.isFinite(next.resetsAt) && next.resetsAt * 1000 > nowMs) {
-    resets.push(next.resetsAt);
+  if (
+    stampedNext.status === "rejected" &&
+    typeof stampedNext.resetsAt === "number" &&
+    Number.isFinite(stampedNext.resetsAt) &&
+    stampedNext.resetsAt * 1000 > nowMs
+  ) {
+    resets.push(stampedNext.resetsAt);
   }
-  if (resets.length === 0 && typeof prev.resetsAt === "number" && Number.isFinite(prev.resetsAt) && prev.resetsAt * 1000 > nowMs) {
-    resets.push(prev.resetsAt);
+  if (
+    resets.length === 0 &&
+    typeof effectivePrevResetsAt === "number" &&
+    Number.isFinite(effectivePrevResetsAt) &&
+    effectivePrevResetsAt * 1000 > nowMs
+  ) {
+    resets.push(effectivePrevResetsAt);
   }
   return {
-    ...next,
+    ...stampedNext,
     status: "rejected",
-    resetsAt: resets.length > 0 ? Math.max(...resets) : (prev.resetsAt ?? next.resetsAt),
+    resetsAt: resets.length > 0 ? Math.max(...resets) : null,
     windows: nextWindows,
   };
 }

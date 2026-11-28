@@ -188,6 +188,12 @@ function isRateLimitWindowConfirmedAllowed(window: RateLimitWindow): boolean {
   return window.status !== "rejected" && Number.isFinite(window.utilization) && window.utilization < 1;
 }
 
+function windowObservedAt(window: RateLimitWindow, fallbackMs: number): number {
+  return typeof window.observedAt === "number" && Number.isFinite(window.observedAt) && window.observedAt > 0
+    ? Math.min(window.observedAt, fallbackMs)
+    : fallbackMs;
+}
+
 interface ActiveFetchedWindow {
   readonly id: string;
   readonly windowKey: string;
@@ -503,13 +509,14 @@ export function createObservedQuotaStore({
           const allowedMap = latestAllowedByVendor.get(entry.vendor);
           let changed = false;
           for (const [key, w] of exhaustedWindows) {
-            if ((allowedMap?.get(key) ?? -Infinity) > entry.updatedAt) continue;
+            const observedAt = windowObservedAt(w, entry.updatedAt);
+            if ((allowedMap?.get(key) ?? -Infinity) > observedAt) continue;
             const resetsAt = futureSeconds(w.resetsAt, at) ?? infoFallbackReset;
-            const expiresAt = resetsAt === null ? entry.updatedAt + fallbackTtlMs : resetsAt * 1000;
+            const expiresAt = resetsAt === null ? observedAt + fallbackTtlMs : resetsAt * 1000;
             if (expiresAt <= at) continue;
             const existing = state.windows.get(key);
-            if (existing !== undefined && existing.observedAt >= entry.updatedAt) continue;
-            state.windows.set(key, { source: "rate_limit", resetsAt, observedAt: entry.updatedAt, expiresAt });
+            if (existing !== undefined && existing.observedAt >= observedAt) continue;
+            state.windows.set(key, { source: "rate_limit", resetsAt, observedAt, expiresAt });
             changed = true;
           }
           if (changed) {
@@ -580,10 +587,13 @@ function clearPersistedRateLimitJson(
   if (info === null) return { changed: false, next: null };
   const nextWindows: Record<string, RateLimitWindow> = { ...info.windows };
   let changed = false;
+  let clearedOwnedTopReset = false;
   for (const [k, w] of Object.entries(info.windows)) {
     if (!isRateLimitWindowExhausted(w)) continue;
     if (spec.clearAll === true || spec.clearedWindows?.has(k) === true) {
-      nextWindows[k] = { ...w, status: "allowed" };
+      if (w.resetsAt > 0 && w.resetsAt === info.resetsAt) clearedOwnedTopReset = true;
+      const { observedAt: _ignored, ...rest } = w;
+      nextWindows[k] = { ...rest, status: "allowed" };
       changed = true;
     }
   }
@@ -593,7 +603,12 @@ function clearPersistedRateLimitJson(
     const resets = remainingExhausted.map((w) => w.resetsAt).filter((r) => Number.isFinite(r) && r > 0);
     return {
       changed: true,
-      next: { ...info, status: "rejected", resetsAt: resets.length > 0 ? Math.max(...resets) : info.resetsAt, windows: nextWindows },
+      next: {
+        ...info,
+        status: "rejected",
+        resetsAt: resets.length > 0 ? Math.max(...resets) : (clearedOwnedTopReset ? null : info.resetsAt),
+        windows: nextWindows,
+      },
     };
   }
   const clearTopLevel = changed || (info.status === "rejected" && (spec.clearAll === true || spec.clearUnscoped === true));

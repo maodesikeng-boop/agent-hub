@@ -369,6 +369,105 @@ describe("hub models quota inventory", () => {
     const afterClearVendor = createObservedQuotaStore({ now: () => t + 1_000, db: f.db });
     expect(afterClearVendor.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), t + 1_000)).toBe(0);
   });
+
+  it("preserves original fallback expiry across restart for carried timestamp-less rejections and does not leak allowed resetsAt", () => {
+    const FIVE_HOUR_RESET = Date.parse("2026-11-25T14:00:00Z") / 1000;
+    const t0 = NOW;
+    let t = t0;
+    const sessions = createSessionStore(f.db, { now: () => t });
+    const insertCodex = (tag: string, at: number) =>
+      Number(
+        f.db.run(
+          `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+           VALUES ('worker', 'codex', ?, ?, '[]', 1, 'idle', ?, ?)`,
+          tag, f.folder, at, at,
+        ).lastInsertRowid,
+      );
+
+    // Case 1: partial 5h allowed update at t0 + 10m carries timestamp-less 7d window.
+    const s1 = insertCodex("codex-notimestamp-carry", t0);
+    sessions.update(s1, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: null,
+        windows: {
+          five_hour: { utilization: 1, resetsAt: 0, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: 0, status: "rejected" },
+        },
+      },
+    });
+    t = t0 + 10 * 60_000;
+    sessions.update(s1, {
+      rateLimit: {
+        status: "allowed",
+        resetsAt: FIVE_HOUR_RESET,
+        windows: {
+          five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" },
+        },
+      },
+    });
+
+    // Restart before original 15m TTL keeps 7d active with resetsAt: null and original deadline t0 + 15m.
+    const beforeOriginalExpiry = t + 1_000;
+    const restartedEarly = createObservedQuotaStore({ now: () => beforeOriginalExpiry, db: f.db });
+    expect(restartedEarly.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), beforeOriginalExpiry)).toBe(1);
+    expect(restartedEarly.getActive("codex", beforeOriginalExpiry)).toMatchObject({
+      vendor: "codex",
+      resetsAt: null,
+      observedAt: t0,
+      expiresAt: t0 + OBSERVED_QUOTA_FALLBACK_TTL_MS,
+      rejectedWindows: ["seven_day"],
+    });
+
+    // Restart after original 15m TTL (still < t1 + 15m and < FIVE_HOUR_RESET) must NOT resurrect 7d.
+    const afterOriginalExpiry = t0 + OBSERVED_QUOTA_FALLBACK_TTL_MS + 1_000;
+    const restartedLate = createObservedQuotaStore({ now: () => afterOriginalExpiry, db: f.db });
+    expect(restartedLate.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
+    expect(restartedLate.getActive("codex", afterOriginalExpiry)).toBeNull();
+
+    // Case 2: non-rateLimit row update (e.g. session exit) at t0 + 10m must NOT extend fallback TTL either.
+    const s2 = insertCodex("codex-notimestamp-exit", t0);
+    t = t0;
+    sessions.update(s2, {
+      rateLimit: {
+        status: "rejected",
+        resetsAt: null,
+        windows: { seven_day: { utilization: 1, resetsAt: 0, status: "rejected" } },
+      },
+    });
+    t = t0 + 10 * 60_000;
+    sessions.update(s2, { pid: null, status: "ended" });
+    const afterExitRestart = createObservedQuotaStore({ now: () => afterOriginalExpiry, db: f.db });
+    expect(afterExitRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
+    expect(afterExitRestart.getActive("codex", afterOriginalExpiry)).toBeNull();
+
+    // Case 3: legacy SQLite row without window.observedAt still preserves prevUpdatedAt (t0) on carry-over.
+    const s3 = insertCodex("codex-legacy-row", t0);
+    f.db.run(
+      "UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify({
+        status: "rejected",
+        resetsAt: null,
+        windows: {
+          five_hour: { utilization: 1, resetsAt: 0, status: "rejected" },
+          seven_day: { utilization: 1, resetsAt: 0, status: "rejected" },
+        },
+      }),
+      t0,
+      s3,
+    );
+    t = t0 + 10 * 60_000;
+    sessions.update(s3, {
+      rateLimit: {
+        status: "allowed",
+        resetsAt: FIVE_HOUR_RESET,
+        windows: { five_hour: { utilization: 0, resetsAt: FIVE_HOUR_RESET, status: "allowed" } },
+      },
+    });
+    const afterLegacyRestart = createObservedQuotaStore({ now: () => afterOriginalExpiry, db: f.db });
+    expect(afterLegacyRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
+    expect(afterLegacyRestart.getActive("codex", afterOriginalExpiry)).toBeNull();
+  });
 });
 
 describe("multi-window rate-limit preservation", () => {
