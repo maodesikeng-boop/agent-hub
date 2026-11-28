@@ -14,7 +14,8 @@ import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, G
 import type { AgentChecklistEvent, DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import type { HubChecklistRequest } from "../../shared/hub-checklist.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
-import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
+import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult, StopId } from "../../shared/ledger.ts";
+import { shouldApplyLiveDelivery, shouldApplyLiveToolStart } from "./stop-settlement.ts";
 import { DELIVERABLES_PER_CARD_MAX, MESSAGE_PAGE_SIZE, REWIND_SCAN_LIMIT } from "../../shared/limits.ts";
 import { findRewindableMessage } from "../../shared/rewind.ts";
 import type { AgentTextMeta, SentFile } from "../../shared/sent-files.ts";
@@ -72,6 +73,7 @@ export interface LedgerMessagesOptions {
   stopTakenInput?: (p: Pending, id: MessageId, source: StopSource | null) => boolean;
   ownsInput?: (id: MessageId) => boolean;
   requestTurnStop?: (p: Pending, id: SessionId, source: StopSource) => void;
+  nextStopId?: () => StopId;
   onHubChecklist?: (p: Pending, session: AgentSessionRow, event: AgentChecklistEvent) => void;
 }
 
@@ -148,6 +150,43 @@ function userMessageMetaOf(input: PostUserMessageInput, sentWhileBusy: boolean):
     ...(sentWhileBusy ? { sentWhileBusy: true } : {}),
   };
   return Object.keys(meta).length === 0 ? null : meta;
+}
+
+function stopSessionIn(
+  deps: {
+    db: Db;
+    sessions: Pick<LedgerSessions, "liveOf" | "updateLive" | "cancelStreamTimer">;
+    transition: (p: Pending, id: MessageId, to: MessageStatus) => unknown;
+    options: Pick<LedgerMessagesOptions, "nextStopId" | "requestTurnStop">;
+  },
+  p: Pending,
+  session: AgentSessionRow & { conversationId: ConversationId },
+  source: StopSource = "user",
+): { stopped: boolean; stopId: StopId | null } {
+  const { db, sessions, transition, options } = deps;
+  const working = sessions.liveOf(session.id).activity !== "idle";
+  const leftover =
+    !working &&
+    db.get(
+      `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
+      session.id,
+    ) !== undefined;
+  const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
+  if (!working && !leftover && queued.length === 0) return { stopped: false, stopId: null };
+  for (const { id } of queued) transition(p, id, "cancelled");
+  const stopId = options.nextStopId?.();
+  if (working) {
+    sessions.updateLive(p, session.id, (l) => {
+      l.activity = "stopping";
+      if (stopId !== undefined) l.stopId = stopId;
+      clearStreaming(l);
+    });
+  } else {
+    p.after.push(() => sessions.cancelStreamTimer(session.id));
+  }
+  options.requestTurnStop?.(p, session.id, source);
+  p.stops.push({ conversationId: session.conversationId, sessionId: session.id, ...(stopId !== undefined ? { stopId } : {}) });
+  return { stopped: true, stopId: working ? (stopId ?? null) : null };
 }
 
 export function createLedgerMessages(
@@ -338,11 +377,15 @@ export function createLedgerMessages(
       case "message.delivered":
       case "message.processing": {
         let onlyWaitingInputs = event.type === "message.delivered" && event.messageIds.length > 0;
+        let transitioned = 0;
         if (event.type === "message.delivered") {
           for (const id of event.messageIds) {
             const updated = transition(p, id, "delivered", null, sessionId);
+            if (updated !== undefined) transitioned++;
             onlyWaitingInputs &&= updated !== undefined && (isVisibleSystemInput(updated) || isChecklistReminder(updated));
           }
+          const hasActive = transitioned > 0 || db.get(`SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`, sessionId) !== undefined;
+          if (!shouldApplyLiveDelivery(event.messageIds.length, transitioned, hasActive)) return;
         }
         dropCarriedRateLimit(p, sessionId);
         if (!onlyWaitingInputs) updateLive(p, sessionId, working(event.at, liveOf(sessionId).currentTool));
@@ -390,11 +433,13 @@ export function createLedgerMessages(
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : textMeta;
-        insertAgentMessage(ctx, p, session, { kind: "text", text: event.text, meta, dedupeKey });
-        updateLive(p, sessionId, (l) => {
-          if (event.parentToolUseId === undefined) clearStreaming(l);
-          working(event.at, null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
-        });
+        const inserted = insertAgentMessage(ctx, p, session, { kind: "text", text: event.text, meta, dedupeKey });
+        if (shouldApplyLiveToolStart(inserted, liveOf(sessionId).activity)) {
+          updateLive(p, sessionId, (l) => {
+            if (event.parentToolUseId === undefined) clearStreaming(l);
+            working(event.at, null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
+          });
+        }
         return;
       }
       case "agent.tool": {
@@ -404,14 +449,16 @@ export function createLedgerMessages(
           meta: { toolUseId: event.toolUseId, name: event.name },
           dedupeKey: agentMessageDedupeKey(sessionId, event.uuid, event.toolUseId),
         });
-        updateLive(p, sessionId, (l) => {
-          if (event.parentToolUseId === undefined) {
-            clearStreaming(l);
-            toolStarted(event.toolUseId, stepOfTool(event.name, event.input), event.pending ? null : event.startedAt ?? event.at)(l);
-          } else {
-            working(event.at, event.name)(l);
-          }
-        });
+        if (shouldApplyLiveToolStart(inserted, liveOf(sessionId).activity)) {
+          updateLive(p, sessionId, (l) => {
+            if (event.parentToolUseId === undefined) {
+              clearStreaming(l);
+              toolStarted(event.toolUseId, stepOfTool(event.name, event.input), event.pending ? null : event.startedAt ?? event.at)(l);
+            } else {
+              working(event.at, event.name)(l);
+            }
+          });
+        }
         return inserted ? undefined : "duplicate_tool";
       }
       case "background.changed":
@@ -552,37 +599,15 @@ export function createLedgerMessages(
       return inFlight.some((message) => !resumesAfterShutdown(session, message)) ? [{ sessionId, role: session.role }] : [];
     });
 
-  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }, source: StopSource = "user"): boolean => {
-    const working = liveOf(session.id).activity !== "idle";
-    const leftover =
-      !working &&
-      db.get(
-        `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
-        session.id,
-      ) !== undefined;
-    const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
-    if (!working && !leftover && queued.length === 0) return false;
-    for (const { id } of queued) transition(p, id, "cancelled");
-    if (working) {
-      updateLive(p, session.id, (l) => {
-        l.activity = "stopping";
-        clearStreaming(l);
-      });
-    } else {
-      p.after.push(() => sessions.cancelStreamTimer(session.id));
-    }
-    options.requestTurnStop?.(p, session.id, source);
-    p.stops.push({ conversationId: session.conversationId, sessionId: session.id });
-    return true;
-  };
+  const stopDeps = { db, sessions, transition, options };
+  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }, source: StopSource = "user"): boolean =>
+    stopSessionIn(stopDeps, p, session, source).stopped;
 
-  const requestStop = (conversationId: ConversationId) => {
+  const requestStop = (conversationId: ConversationId): StopId | null => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     const session = currentSession(conversationId);
-    if (session === null) return;
-    write((p) => {
-      stopIn(p, { ...session, conversationId });
-    });
+    if (session === null) return null;
+    return write((p) => stopSessionIn(stopDeps, p, { ...session, conversationId }).stopId);
   };
 
   const rewindLastUserMessage = (conversationId: ConversationId): Message | null => {

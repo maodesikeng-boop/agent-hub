@@ -13,6 +13,30 @@ import {
 } from "./protocol.ts";
 import type { AcpTrackedToolCall } from "./types.ts";
 
+export const ACP_TURN_SCOPED_SESSION_UPDATES: ReadonlySet<string> = new Set([
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "plan",
+  "compaction_update",
+]);
+
+/**
+ * Precondition: input describes a session/update notification that has passed sessionId matching.
+ * Postcondition: returns false for turn-scoped updates once initSeen is true and no turn is active (busy is false), and returns true for session-level metadata updates or updates during an active turn or unswallowed pre-init replay.
+ */
+export function shouldProcessTurnSessionUpdate(input: {
+  readonly sessionUpdate: string;
+  readonly busy: boolean;
+  readonly initSeen: boolean;
+  readonly swallowingReplay: boolean;
+}): boolean {
+  if (input.swallowingReplay && REPLAYED_HISTORY_SESSION_UPDATES.has(input.sessionUpdate)) return false;
+  if (!ACP_TURN_SCOPED_SESSION_UPDATES.has(input.sessionUpdate)) return true;
+  return !input.initSeen || input.busy;
+}
+
 export function resetTurnBuffers(st: AcpSessionState, proc: AcpProc): void {
   proc.turnSeq += 1;
   proc.textSegmentSeq = 0;
@@ -225,7 +249,14 @@ export function handleSessionUpdate(
   const { update } = notification;
   if (notification.sessionId !== proc.acpSessionId && proc.initSeen) return;
 
-  if (proc.swallowingReplay && REPLAYED_HISTORY_SESSION_UPDATES.has(update.sessionUpdate)) {
+  if (
+    !shouldProcessTurnSessionUpdate({
+      sessionUpdate: update.sessionUpdate,
+      busy: host.busy(st),
+      initSeen: proc.initSeen,
+      swallowingReplay: proc.swallowingReplay,
+    })
+  ) {
     return;
   }
 

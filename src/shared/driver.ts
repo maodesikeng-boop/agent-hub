@@ -365,6 +365,7 @@ export interface DriverOptions {
   idleCloseMs?: number;
   backgroundHoldMaxMs?: number;
   interruptGraceMs?: number;
+  interruptPostAckGraceMs?: number;
   commandsTimeoutMs?: number;
   startTimeoutMs?: number;
   shutdownGraceMs?: number;

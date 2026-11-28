@@ -194,29 +194,27 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     steer.resolve("queued");
   }
 
-  async interrupt(sessionId: SessionId): Promise<void> {
-    const st = this.sessions.get(sessionId);
-    if (!st) return;
-    this.dropPendingUsers(st);
-    const proc = st.proc;
-    if (!proc || !this.busy(st) || proc.closing) return;
-    st.stopRequested = true;
-    st.turnInterrupted = true;
+  protected override markMidTurnBatchesStopped(st: SessionState): void {
     for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
-    const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
-    if (st.interruptRequestId === null) {
-      const reqId = ++this.requestSeq;
-      st.interruptRequestId = reqId;
-      if (proc.threadId && st.activeTurnId) {
-        proc.pendingRpcs.set(reqId, "turn_interrupt");
-        proc.child.stdin.write(buildTurnInterruptRequest(reqId, proc.threadId, st.activeTurnId) + "\n");
-      }
-      st.interruptTimer = setTimeout(() => {
-        st.interruptTimer = null;
-        this.sigintForInterrupt(st, proc, "killTimer");
-      }, this.opts.interruptGraceMs);
+  }
+
+  protected override sendInterrupt(st: SessionState, proc: Proc): void {
+    st.turnInterrupted = true;
+    if (st.interruptRequestId !== null) return;
+    const reqId = ++this.requestSeq;
+    st.interruptRequestId = reqId;
+    if (!proc.initSeen) {
+      this.sigintForInterrupt(st, proc);
+      return;
     }
-    return done;
+    if (proc.threadId && st.activeTurnId) {
+      proc.pendingRpcs.set(reqId, "turn_interrupt");
+      proc.child.stdin.write(buildTurnInterruptRequest(reqId, proc.threadId, st.activeTurnId) + "\n");
+    }
+    st.interruptTimer = setTimeout(() => {
+      st.interruptTimer = null;
+      this.sigintForInterrupt(st, proc);
+    }, this.opts.interruptGraceMs);
   }
 
   protected override filterStaleRow(row: AgentSessionRow): boolean {
@@ -250,6 +248,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
+    if (this.consumeStoppedBatch(st, batch, proc)) return;
     const combinedText = batch.includeDeliverySuffix !== true ? batch.combinedText : this.withDeliverySuffix(st, batch, batch.combinedText);
     const problem = checkCodexTurnText(combinedText);
     if (problem) {
@@ -327,13 +326,17 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
 
   protected startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
     st.inFlight = [batch];
-    st.turnInterrupted = false;
-    st.stopRequested = false;
     const run = async () => {
       try {
         const resume = existing?.resume ?? this.resumeFor(st);
-        const proc = existing ?? (await this.#spawn(st, resume, files));
+        let proc = existing;
+        if (!proc) {
+          const resolved = files ?? (await this.resolveLaunchFiles(st, null)).files;
+          if (this.consumeStoppedBatch(st, batch)) return;
+          proc = await this.#spawn(st, resume, resolved);
+        }
         this.abortIfStopped(st, proc);
+        if (this.consumeStoppedBatch(st, batch, proc)) return;
         this.clearTimer(st, "idleTimer");
         st.inFlight = [batch];
         this.armStartTimer(st, proc);
@@ -344,6 +347,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
             if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
             return;
           }
+          if (this.consumeStoppedBatch(st, batch, proc)) return;
           await this.writeBatch(st, proc, batch);
           return;
         }
@@ -495,7 +499,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       case "turn_interrupt": {
         if (errorObj) {
           this.clearTimer(st, "interruptTimer");
-          this.sigintForInterrupt(st, proc, "killTimer");
+          this.sigintForInterrupt(st, proc);
         }
         return;
       }
@@ -507,6 +511,9 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
     for (const batch of batches) this.markProcessing(st, batch, at);
     this.forgetWritten(st, batches);
     const errMsg = typeof errorObj.message === "string" ? errorObj.message : "turn/start failed";
+    this.clearTimer(st, "interruptTimer");
+    st.stopRequested = false;
+    st.turnInterrupted = false;
     this.emit(st.id, {
       type: "turn.ended",
       ok: false,
@@ -516,6 +523,7 @@ export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> 
       error: { subtype: "turn_start_error", message: errMsg },
       at,
     });
+    this.resolveInterrupt(st);
     this.afterTurn(st, proc);
     this.settled(st);
   }

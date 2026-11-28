@@ -1,4 +1,5 @@
 import { untakenReleaseCause } from "../../daemon/driver/stop-untaken.ts";
+import { armPostAckInterruptEscalation } from "../../daemon/driver/stop-coordination.ts";
 import { claudeChecklistFromToolResult, claudeChecklistFromToolUse, createClaudeChecklistState } from "./checklist.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
@@ -205,31 +206,19 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return { kind: "written" };
   }
 
-  async interrupt(sessionId: SessionId): Promise<void> {
-    const st = this.sessions.get(sessionId);
-    if (!st) return;
-    this.dropPendingUsers(st);
-    const proc = st.proc;
-    if (!proc || proc.closing) return;
-    const stopBg = this.stopIdleBackgroundTasks(st, proc);
-    if (stopBg) {
-      await stopBg;
-      return;
-    }
-    if (!this.busy(st)) return;
-    st.stopRequested = true;
+  protected override markMidTurnBatchesStopped(st: SessionState): void {
     for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
-    const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
-    if (st.interruptRequestId === null) {
-      const requestId = `interrupt-${++this.requestSeq}`;
-      st.interruptRequestId = requestId;
-      proc.child.stdin.write(buildInterruptLine(requestId, proc.capabilities.has("interrupt_cancel_queued_v1")) + "\n");
-      st.interruptTimer = setTimeout(() => {
-        st.interruptTimer = null;
-        this.sigintForInterrupt(st, proc);
-      }, this.opts.interruptGraceMs);
-    }
-    return done;
+  }
+
+  protected override sendInterrupt(st: SessionState, proc: Proc): void {
+    if (st.interruptRequestId !== null) return;
+    const requestId = `interrupt-${++this.requestSeq}`;
+    st.interruptRequestId = requestId;
+    proc.child.stdin.write(buildInterruptLine(requestId, proc.capabilities.has("interrupt_cancel_queued_v1")) + "\n");
+    st.interruptTimer = setTimeout(() => {
+      st.interruptTimer = null;
+      this.sigintForInterrupt(st, proc);
+    }, this.opts.interruptGraceMs);
   }
 
   override queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null> {
@@ -283,6 +272,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
+    if (this.consumeStoppedBatch(st, batch, proc)) return;
     const line = this.#lineForWrite(st, batch);
     const problem = checkUserLine(line);
     if (problem) {
@@ -312,18 +302,23 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
   protected startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
     st.inFlight = [batch];
-    st.turnInterrupted = false;
-    st.stopRequested = false;
     const run = async () => {
       let proc = existing;
       try {
         let resume = proc?.resume ?? this.resumeFor(st);
         for (let attempt = 0; ; attempt++) {
-          if (!proc) proc = await this.#spawn(st, resume, files);
+          if (!proc) {
+            const resolved = files ?? (await this.resolveLaunchFiles(st, null)).files;
+            if (this.consumeStoppedBatch(st, batch)) return;
+            proc = await this.#spawn(st, resume, resolved);
+          }
           this.abortIfStopped(st, proc);
+          if (this.consumeStoppedBatch(st, batch, proc)) return;
           if (this.discardStaleSystemBatch(st, proc, batch)) return;
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
+          st.turnInterrupted = false;
+          st.stopRequested = false;
           const line = this.#lineForWrite(st, batch);
           const problem = checkUserLine(line);
           if (problem) {
@@ -532,7 +527,22 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         if (response.subtype === "success") {
           const cancelled = new Set(interruptCancelled(response.response));
           this.#cancelBatches(st, proc, st.inFlight.filter((b) => !b.started && cancelled.has(b.uuid)), at);
-          this.resolveInterrupt(st);
+          // Wait for command_lifecycle(cancelled) when receiptWithoutCancelled omits cancelled uuids for unstarted batches.
+          const awaitingUnstartedCancel =
+            proc.capabilities.has("msg_lifecycle_v1") &&
+            !st.selfTurn &&
+            st.inFlight.length > 0 &&
+            st.inFlight.every((b) => !b.started);
+          if (this.busy(st)) {
+            armPostAckInterruptEscalation(
+              st,
+              proc,
+              this.opts.interruptPostAckGraceMs,
+              (s, p) => this.sigintForInterrupt(s, p),
+              (s) => this.busy(s) && s.stopRequested,
+            );
+          }
+          if (!awaitingUnstartedCancel) this.resolveInterrupt(st);
         } else this.sigintForInterrupt(st, proc);
         return;
       }
@@ -586,6 +596,10 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.inFlight = st.inFlight.filter((b) => !batches.includes(b));
     this.releaseUntaken(st, batches, untakenReleaseCause(proc.closing, true), at);
     if (!this.busy(st)) {
+      this.clearTimer(st, "interruptTimer");
+      st.stopRequested = false;
+      st.turnInterrupted = false;
+      this.resolveInterrupt(st);
       this.afterTurn(st, proc);
       this.settled(st);
     }
