@@ -353,6 +353,8 @@ export interface SetupJob {
 export interface SetupRunner {
   start(job: SetupJob): boolean;
   cancel(sessionId: SessionId): void;
+  /** True while a setup command process is still active for sessionId. */
+  isRunning?(sessionId: SessionId): boolean;
   /** Shutdown kills setups without calling onDone so they rerun after restart. */
   shutdown(): Promise<void>;
 }
