@@ -1,9 +1,16 @@
 // Foreign keys can only be toggled outside a transaction, so each migration runs with them off and foreign_key_check runs before commit. That lets migrations rebuild referenced tables, and it is why this cannot run inside an outer transaction.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
+import {
+  clearMigrationAnchor,
+  planMigrationBackup,
+  pruneDatabaseBackups,
+  readMigrationAnchor,
+  writeMigrationAnchor,
+} from "./backup-rotation.ts";
 import type { Db } from "./db.ts";
 
 export const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
@@ -130,31 +137,7 @@ export function backupDatabase(db: Db, from: number, now: () => number): string 
     }
     throw error;
   }
-  pruneBackups(file, target);
   return target;
-}
-
-function backupSortKey(dbName: string, name: string): [string, number] | null {
-  if (!name.startsWith(`${dbName}.bak-`)) return null;
-  const match = /^\d+-(\d{8}T\d{6}Z)(?:-(\d+))?$/.exec(name.slice(dbName.length + 5));
-  return match === null ? null : [match[1]!, match[2] === undefined ? 1 : Number(match[2])];
-}
-
-function pruneBackups(dbFile: string, keep: string): void {
-  const dbName = basename(dbFile);
-  const dir = dirname(dbFile);
-  const backups: { name: string; key: [string, number] }[] = [];
-  for (const name of readdirSync(dir)) {
-    const key = backupSortKey(dbName, name);
-    if (key !== null && join(dir, name) !== keep) backups.push({ name, key });
-  }
-  backups.sort((a, b) => (a.key[0] < b.key[0] ? -1 : a.key[0] > b.key[0] ? 1 : a.key[1] - b.key[1]));
-  for (const { name } of backups.slice(0, Math.max(0, backups.length - (MAX_DB_BACKUPS - 1)))) {
-    try {
-      rmSync(join(dir, name), { force: true });
-    } catch {
-    }
-  }
 }
 
 function checkForeignKeys(db: Db): void {
@@ -187,14 +170,40 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
     throw new Error(`database user_version ${from} is newer than the latest migration ${latest}`);
   }
   const pending = migrations.filter((m) => m.version > from);
-  const backupFile = from > 0 && pending.length > 0 ? backupDatabase(db, from, options.now ?? Date.now) : undefined;
+  const dbFile = mainDbFile(db);
+  if (pending.length === 0) {
+    if (dbFile !== null) clearMigrationAnchor(dbFile);
+    return { from, to: from, applied: [] };
+  }
+  let backupFile: string | undefined;
+  let anchorFromVersion: number | undefined;
+  if (from > 0 && dbFile !== null) {
+    const existingAnchor = readMigrationAnchor(dbFile);
+    const plan = planMigrationBackup(dbFile, from, existingAnchor);
+    if (plan.action === "reuse") {
+      backupFile = plan.backupFile;
+      anchorFromVersion = existingAnchor!.fromVersion;
+    } else {
+      backupFile = backupDatabase(db, from, options.now ?? Date.now);
+      if (backupFile !== undefined) {
+        anchorFromVersion = from;
+        writeMigrationAnchor(dbFile, { fromVersion: from, lastVersion: from, backupFile });
+        if (plan.replaceSameVersionBackup !== undefined && plan.replaceSameVersionBackup !== backupFile) {
+          try {
+            rmSync(plan.replaceSameVersionBackup, { force: true });
+          } catch {
+          }
+        }
+      }
+    }
+  }
   const freeBefore =
-    pending.length > 0 && db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")?.auto_vacuum === AUTO_VACUUM_INCREMENTAL
+    db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")?.auto_vacuum === AUTO_VACUUM_INCREMENTAL
       ? freelistCount(db)
       : undefined;
   const applied: number[] = [];
   // A code-built trigger may read tables an older migration rebuilds, and SQLite refuses that rename while the trigger exists.
-  if (pending.length > 0) dropCodeTriggers(db);
+  dropCodeTriggers(db);
   for (const { version, file, sql } of pending) {
     const foreignKeys = db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys === 1;
     if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
@@ -210,6 +219,13 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
       if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
     }
     applied.push(version);
+    if (dbFile !== null && backupFile !== undefined && anchorFromVersion !== undefined) {
+      writeMigrationAnchor(dbFile, { fromVersion: anchorFromVersion, lastVersion: version, backupFile });
+    }
+  }
+  if (dbFile !== null) {
+    clearMigrationAnchor(dbFile);
+    if (backupFile !== undefined) pruneDatabaseBackups(dbFile, backupFile, MAX_DB_BACKUPS);
   }
   if (freeBefore !== undefined) {
     const addedFree = Math.min(freelistCount(db) - freeBefore, DB_INCREMENTAL_VACUUM_PAGES);

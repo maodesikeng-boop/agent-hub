@@ -1,4 +1,6 @@
 // Invariant: pre-upgrade rollback backups survive repeated failed migration restarts, backup count stays bounded under crash loops, and rotation only evicts old versions after a migration or rebuild finishes.
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface MigrationBackupAnchor {
   readonly fromVersion: number;
@@ -10,36 +12,116 @@ export type MigrationBackupPlan =
   | { readonly action: "reuse"; readonly backupFile: string }
   | { readonly action: "create"; readonly replaceSameVersionBackup?: string };
 
+interface ParsedBackupEntry {
+  readonly name: string;
+  readonly fullPath: string;
+  readonly version: number;
+  readonly timestamp: string;
+  readonly seq: number;
+}
+
+const BACKUP_SUFFIX_RE = /^(\d+)-(\d{8}T\d{6}Z)(?:-(\d+))?$/;
+const ANCHOR_FILE_MODE = 0o600;
+
+function parseBackupEntry(dbFile: string, name: string): ParsedBackupEntry | null {
+  const dbName = basename(dbFile);
+  const prefix = `${dbName}.bak-`;
+  if (!name.startsWith(prefix)) return null;
+  const match = BACKUP_SUFFIX_RE.exec(name.slice(prefix.length));
+  if (match === null) return null;
+  const version = Number(match[1]);
+  const seq = match[3] === undefined ? 1 : Number(match[3]);
+  if (!Number.isSafeInteger(version) || !Number.isSafeInteger(seq)) return null;
+  return {
+    name,
+    fullPath: join(dirname(dbFile), name),
+    version,
+    timestamp: match[2]!,
+    seq,
+  };
+}
+
+function validateBackupPathInDbDir(dbFile: string, candidate: string): ParsedBackupEntry | null {
+  if (candidate === "") return null;
+  const dbDir = resolve(dirname(dbFile));
+  const resolvedCandidate = resolve(candidate);
+  if (dirname(resolvedCandidate) !== dbDir) return null;
+  return parseBackupEntry(dbFile, basename(resolvedCandidate));
+}
+
+function compareBackupAge(a: ParsedBackupEntry, b: ParsedBackupEntry): number {
+  if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+  return a.seq - b.seq;
+}
+
 /**
  * Precondition: dbFile is the absolute path to the main SQLite database file.
  * Postcondition: returns the path of the migration anchor sidecar file adjacent to dbFile.
  */
-export function migrationAnchorPath(_dbFile: string): string {
-  throw new Error("Not implemented");
+export function migrationAnchorPath(dbFile: string): string {
+  return `${dbFile}.migrating`;
 }
 
 /**
  * Precondition: dbFile is the path to the main SQLite database file.
  * Postcondition: returns the validated MigrationBackupAnchor when the sidecar exists, parses cleanly, and references a backup file inside dirname(dbFile); returns null when absent, corrupt, or escaping dirname(dbFile).
  */
-export function readMigrationAnchor(_dbFile: string): MigrationBackupAnchor | null {
-  throw new Error("Not implemented");
+export function readMigrationAnchor(dbFile: string): MigrationBackupAnchor | null {
+  let rawText: string;
+  try {
+    rawText = readFileSync(migrationAnchorPath(dbFile), "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  const fromVersion = record.fromVersion;
+  const lastVersion = record.lastVersion;
+  const backupFile = record.backupFile;
+  if (
+    typeof fromVersion !== "number" ||
+    !Number.isInteger(fromVersion) ||
+    fromVersion <= 0 ||
+    typeof lastVersion !== "number" ||
+    !Number.isInteger(lastVersion) ||
+    lastVersion < fromVersion ||
+    typeof backupFile !== "string"
+  ) {
+    return null;
+  }
+  const entry = validateBackupPathInDbDir(dbFile, backupFile);
+  if (entry === null || entry.version !== fromVersion) return null;
+  return { fromVersion, lastVersion, backupFile: entry.fullPath };
 }
 
 /**
  * Precondition: dbFile is the path to the main SQLite database file and anchor.backupFile is a backup in dirname(dbFile).
  * Postcondition: persists anchor to migrationAnchorPath(dbFile) with owner-only permissions on POSIX platforms.
  */
-export function writeMigrationAnchor(_dbFile: string, _anchor: MigrationBackupAnchor): void {
-  throw new Error("Not implemented");
+export function writeMigrationAnchor(dbFile: string, anchor: MigrationBackupAnchor): void {
+  const payload = JSON.stringify({
+    fromVersion: anchor.fromVersion,
+    lastVersion: anchor.lastVersion,
+    backupFile: anchor.backupFile,
+  });
+  writeFileSync(migrationAnchorPath(dbFile), payload, { encoding: "utf8", mode: ANCHOR_FILE_MODE });
 }
 
 /**
  * Precondition: dbFile is the path to the main SQLite database file.
  * Postcondition: removes migrationAnchorPath(dbFile) if present and does not throw when absent.
  */
-export function clearMigrationAnchor(_dbFile: string): void {
-  throw new Error("Not implemented");
+export function clearMigrationAnchor(dbFile: string): void {
+  try {
+    rmSync(migrationAnchorPath(dbFile), { force: true });
+  } catch {
+  }
 }
 
 /**
@@ -47,17 +129,66 @@ export function clearMigrationAnchor(_dbFile: string): void {
  * Postcondition: reuses anchor.backupFile when anchor exists on disk and fromVersion > anchor.fromVersion and fromVersion === anchor.lastVersion; requests a fresh backup replacing the superseded same-version backup when anchor exists on disk and fromVersion === anchor.fromVersion && anchor.lastVersion === anchor.fromVersion; otherwise requests a fresh backup without deleting existing backups.
  */
 export function planMigrationBackup(
-  _dbFile: string,
-  _fromVersion: number,
-  _anchor: MigrationBackupAnchor | null,
+  dbFile: string,
+  fromVersion: number,
+  anchor: MigrationBackupAnchor | null,
 ): MigrationBackupPlan {
-  throw new Error("Not implemented");
+  if (anchor === null) return { action: "create" };
+  const entry = validateBackupPathInDbDir(dbFile, anchor.backupFile);
+  if (entry === null || !existsSync(entry.fullPath)) return { action: "create" };
+  if (fromVersion > anchor.fromVersion && fromVersion === anchor.lastVersion) {
+    return { action: "reuse", backupFile: entry.fullPath };
+  }
+  if (fromVersion === anchor.fromVersion && anchor.lastVersion === anchor.fromVersion) {
+    return { action: "create", replaceSameVersionBackup: entry.fullPath };
+  }
+  return { action: "create" };
 }
 
 /**
  * Precondition: dbFile is the path to the main SQLite database file and maxBackups is a positive integer.
  * Postcondition: prunes recognized `<dbName>.bak-<version>-<timestamp>[-<n>]` files in dirname(dbFile) down to at most maxBackups files, never deleting keep or unrecognized files, and evicting older duplicate backups of the same source version before evicting older distinct versions.
  */
-export function pruneDatabaseBackups(_dbFile: string, _keep: string | undefined, _maxBackups: number): void {
-  throw new Error("Not implemented");
+export function pruneDatabaseBackups(dbFile: string, keep: string | undefined, maxBackups: number): void {
+  const dir = dirname(dbFile);
+  const backups: ParsedBackupEntry[] = [];
+  for (const name of readdirSync(dir)) {
+    const entry = parseBackupEntry(dbFile, name);
+    if (entry !== null) backups.push(entry);
+  }
+  const excess = backups.length - maxBackups;
+  if (excess <= 0) return;
+
+  backups.sort(compareBackupAge);
+  const keepResolved = keep !== undefined ? resolve(keep) : undefined;
+  const byVersion = new Map<number, ParsedBackupEntry[]>();
+  for (const entry of backups) {
+    const group = byVersion.get(entry.version);
+    if (group === undefined) byVersion.set(entry.version, [entry]);
+    else group.push(entry);
+  }
+
+  const versionSurvivors = new Set<string>();
+  for (const group of byVersion.values()) {
+    const keptInGroup = group.find((item) => keepResolved !== undefined && resolve(item.fullPath) === keepResolved);
+    const survivor = keptInGroup ?? group[group.length - 1]!;
+    versionSurvivors.add(resolve(survivor.fullPath));
+  }
+
+  const duplicates: ParsedBackupEntry[] = [];
+  const distinctOld: ParsedBackupEntry[] = [];
+  for (const entry of backups) {
+    const resolved = resolve(entry.fullPath);
+    if (keepResolved !== undefined && resolved === keepResolved) continue;
+    if (versionSurvivors.has(resolved)) distinctOld.push(entry);
+    else duplicates.push(entry);
+  }
+
+  const toDelete = [...duplicates, ...distinctOld].slice(0, excess);
+  for (const entry of toDelete) {
+    try {
+      rmSync(entry.fullPath, { force: true });
+    } catch {
+    }
+  }
 }
