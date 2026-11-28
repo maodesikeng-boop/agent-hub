@@ -490,6 +490,7 @@ describe("createFeishuService：唤醒规则", () => {
   it.each([OWNER, GUEST])("acknowledges an empty context with one group reply and no PM turn (%s)", async (sender) => {
     await connect();
     const chat = chatOf(lin.pmId);
+    if (sender === GUEST) await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     join_(chat);
     await settle();
     const text = sender === OWNER ? "我在，直接 @我 后面说事就行。" : `<at user_id="${GUEST}"></at> 我在，直接 @我 后面说事就行。`;
@@ -633,7 +634,7 @@ describe("createFeishuService：访客权限", () => {
     const toCollab = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" };
     expect((await click(chat, post.messageId, toCollab, GUEST)).toast?.content).toBe("只有主人能改设置");
     await settle();
-    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("observer");
     expect(cardIdsCreated().filter((c) => c.data.includes("群设置"))).toHaveLength(1);
     expect((await click(chat, post.messageId, toCollab, OWNER)).toast?.type).toBe("success");
     await settle();
@@ -644,6 +645,7 @@ describe("createFeishuService：访客权限", () => {
   it("chat_only 档访客点拍板、停止只收到 toast，账本不变；发的文件不收", async () => {
     await connect();
     const chat = chatOf(lin.pmId);
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     join_(chat);
     await settle();
     const askId = await askInGroupFor(lin);
@@ -799,18 +801,18 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     say(chat, "/群设置");
     await settle();
     const fresh = policyPost()!;
-    const toObserver = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "observer" };
-    const stale = await click(chat, old.messageId, toObserver);
+    const toChatOnly = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "chat_only" };
+    const stale = await click(chat, old.messageId, toChatOnly);
     expect(stale.toast?.type).toBe("warning");
     expect(stale.toast?.content).toContain("/群设置");
     await settle();
-    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
-    expect((await click(chat, fresh.messageId, toObserver)).toast?.type).toBe("success");
-    await settle();
     expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("observer");
+    expect((await click(chat, fresh.messageId, toChatOnly)).toast?.type).toBe("success");
+    await settle();
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
     const update = fake.callsOf("card.update").findLast((u) => u.card_id === fresh.cardId)!;
     expect(update.sequence).toBeGreaterThan(fresh.sequence);
-    expect(update.card.data).toContain("✓ 只读");
+    expect(update.card.data).toContain("✓ 仅对话");
   });
 
   it("每发一张新卡就置顶它，并取消上一张设置卡的置顶", async () => {
@@ -867,6 +869,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     svc = makeService({ now: () => Date.now() + offset });
     await connect();
     const chat = chatOf(lin.pmId);
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     join_(chat);
     await settle();
     const joined = policyCards().length;
@@ -1055,6 +1058,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
 
     clock += FEISHU_POLICY_CARD_COOLDOWN_MS + 1_000;
     codexStatus = "signed_out";
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     say(chat, "看图", { sender: GUEST, mention: true, files: [{ type: "image", fileKey: "img_b1", fileName: null }] });
     await settle();
     expect(policyCards()).toHaveLength(2);
@@ -2432,6 +2436,7 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
   it("chat_only 档访客 @机器人 单发图片：图不收，回他一句，不往项目经理投空消息", async () => {
     await connect();
     const chat = chatOf(lin.pmId);
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     join_(chat);
     await settle();
     fake.resources.set("img_g", png());
@@ -2540,6 +2545,7 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
 
   it("仅对话档访客先单发图片再 @机器人：图不下载，回她一句怎么开（切到协作者）；被拒的旧图不补收，切到协作者后她重新发的图再 @ 才收下", async () => {
     const chat = await mentionOnlyGroupWithGuest();
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     fake.resources.set("img_y", png());
     say(chat, "![image](img_y)", { sender: GUEST, files: [{ type: "image", fileKey: "img_y", fileName: null }] });
     say(chat, "图里这种直给类的文案写一版", { sender: GUEST, mention: true });
@@ -2572,6 +2578,7 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
 
   it("仅对话档访客先发图再纯 @ 被拒后，改发纯文字 @：不再重复回“访客发的文件不收”", async () => {
     const chat = await mentionOnlyGroupWithGuest();
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "chat_only" });
     fake.resources.set("img_y", png());
     say(chat, "![image](img_y)", { sender: GUEST, files: [{ type: "image", fileKey: "img_y", fileName: null }] });
     await receiveText(chat, "@_user_1", { sender: GUEST });

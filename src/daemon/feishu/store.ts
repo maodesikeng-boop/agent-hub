@@ -12,7 +12,7 @@ import type {
   FeishuTriggerMode,
 } from "../../shared/feishu.ts";
 import { isOneOf } from "../../shared/domain.ts";
-import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES, parseFeishuChatId, parseFeishuMessageId } from "../../shared/feishu.ts";
+import { FEISHU_TRIGGER_MODES, parseFeishuChatId, parseFeishuMessageId, resolveFeishuGuestTier } from "../../shared/feishu.ts";
 import {
   FEISHU_DECISIONS_MAX_ROWS,
   FEISHU_INBOUND_CURSORS_MAX,
@@ -496,7 +496,7 @@ function toChat(row: ChatRow): FeishuChatBinding {
     label: row.label,
     avatarLook: row.avatar_fruit === null ? null : parseLookKey(row.avatar_fruit),
     triggerMode: isOneOf(FEISHU_TRIGGER_MODES, row.trigger_mode) ? row.trigger_mode : "auto",
-    guestTier: isOneOf(FEISHU_GUEST_TIERS, row.guest_tier) ? row.guest_tier : "chat_only",
+    guestTier: resolveFeishuGuestTier(row.guest_tier),
     archivedAt: row.archived_at,
     createdAt: row.created_at,
     lastMessageId: watermark(row.last_message_id),

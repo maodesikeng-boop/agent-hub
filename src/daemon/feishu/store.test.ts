@@ -104,9 +104,9 @@ describe("createFeishuStore", () => {
     expect(count("feishu_posts")).toBe(0);
   });
 
-  it("setChatPolicy 只改给了的字段，默认 auto / chat_only", () => {
+  it("setChatPolicy 只改给了的字段，默认 auto / observer", () => {
     fill();
-    expect(store.chatById(chat("a"))).toMatchObject({ triggerMode: "auto", guestTier: "chat_only" });
+    expect(store.chatById(chat("a"))).toMatchObject({ triggerMode: "auto", guestTier: "observer" });
     expect(store.setChatPolicy(pmA, { guestTier: "collaborator" }, 2)).toMatchObject({ triggerMode: "auto", guestTier: "collaborator" });
     expect(store.setChatPolicy(pmA, { triggerMode: "mention_only" }, 3)).toMatchObject({ triggerMode: "mention_only", guestTier: "collaborator" });
     expect(() => store.setChatPolicy(pmB, { guestTier: "observer" }, 4)).toThrow();

@@ -1,6 +1,6 @@
 import type { Attachment } from "../../shared/attachments.ts";
 import { userMessageDedupeKey, type PmId } from "../../shared/domain.ts";
-import { feishuDisplayName, type FeishuChatId, type FeishuChatMode, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
+import { feishuDisplayName, resolveFeishuGuestTier, type FeishuChatId, type FeishuChatMode, type FeishuChatTarget, type FeishuOpenId } from "../../shared/feishu.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
 import { FEISHU_CONTROL_RETRY_MS, FEISHU_INBOUND_HANDOFF_RETRIES, MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { sendText } from "./api.ts";
@@ -163,7 +163,7 @@ async function dispatchClaimedMessage(
     binding: message.chatType === "group" && target?.kind === "pm" ? { target, archived: false } : null,
     mode,
     triggerMode: chat?.triggerMode ?? "auto",
-    guestTier: chat?.guestTier ?? "chat_only",
+    guestTier: resolveFeishuGuestTier(chat?.guestTier),
     mentionOnlyForced: ctx.link.mentionOnly,
     speakerName: feishuDisplayName(speakerName),
     pendingContext: ctx.contexts.peek(message.chatId, t),

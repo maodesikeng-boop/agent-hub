@@ -71,27 +71,45 @@ export interface FeishuGuestTierPolicy {
   hostPrivilegeWarning: string | null;
 }
 
-/**
- * Precondition: raw is any persisted, wire, or runtime guest tier value.
- * Postcondition: returns raw when it is a valid FeishuGuestTier, or "observer" when missing or unrecognized.
- */
-export function resolveFeishuGuestTier(_raw: unknown): FeishuGuestTier {
-  throw new Error("Not implemented");
+const FEISHU_GUEST_TIER_ORDER: readonly FeishuGuestTier[] = ["observer", "chat_only", "collaborator"];
+
+const FEISHU_GUEST_HOST_PRIVILEGE_WARNING =
+  "项目经理以本机当前用户权限运行且无外层沙箱。「仅对话」与「协作者」允许访客触发项目经理对话并可能影响本机 shell 操作，仅对完全信任的成员开启。";
+
+const FEISHU_GUEST_TIER_POLICIES: Readonly<Record<FeishuGuestTier, FeishuGuestTierPolicy>> = {
+  observer: {
+    tier: "observer",
+    label: "只读",
+    description: "只旁听，@机器人 也不唤醒，仅在主人发言时作为背景",
+    wakesUnsandboxedPm: false,
+    hostPrivilegeWarning: null,
+  },
+  chat_only: {
+    tier: "chat_only",
+    label: "仅对话",
+    description: "可 @机器人 对话，不收文件、不能点拍板卡与停止",
+    wakesUnsandboxedPm: true,
+    hostPrivilegeWarning: FEISHU_GUEST_HOST_PRIVILEGE_WARNING,
+  },
+  collaborator: {
+    tier: "collaborator",
+    label: "协作者",
+    description: "可对话、发文件、点拍板卡与停止",
+    wakesUnsandboxedPm: true,
+    hostPrivilegeWarning: FEISHU_GUEST_HOST_PRIVILEGE_WARNING,
+  },
+};
+
+export function resolveFeishuGuestTier(raw: unknown): FeishuGuestTier {
+  return isOne(FEISHU_GUEST_TIERS, raw) ? raw : "observer";
 }
 
-/**
- * Postcondition: returns all FeishuGuestTier values ordered from least privileged ("observer") to most privileged ("collaborator").
- */
 export function feishuGuestTierOrder(): readonly FeishuGuestTier[] {
-  throw new Error("Not implemented");
+  return FEISHU_GUEST_TIER_ORDER;
 }
 
-/**
- * Precondition: tier is a valid FeishuGuestTier.
- * Postcondition: returns the canonical label, description, PM wakeup flag, and a non-null host-privilege warning whenever wakesUnsandboxedPm is true.
- */
-export function feishuGuestTierPolicy(_tier: FeishuGuestTier): FeishuGuestTierPolicy {
-  throw new Error("Not implemented");
+export function feishuGuestTierPolicy(tier: FeishuGuestTier): FeishuGuestTierPolicy {
+  return FEISHU_GUEST_TIER_POLICIES[tier];
 }
 
 export type FeishuGuestAction = "talk" | "answer_card" | "stop" | "send_files";
@@ -151,7 +169,6 @@ export function feishuOriginOf(message: { meta: Record<string, unknown> | null }
     typeof o.name !== "string" ||
     !isOne(FEISHU_SPEAKER_ROLES, o.role) ||
     !isOne(FEISHU_CHAT_MODES, o.mode) ||
-    !isOne(FEISHU_GUEST_TIERS, o.guestTier) ||
     !Array.isArray(o.context)
   ) {
     return null;
@@ -162,7 +179,7 @@ export function feishuOriginOf(message: { meta: Record<string, unknown> | null }
     name: o.name,
     role: o.role,
     mode: o.mode,
-    guestTier: o.guestTier,
+    guestTier: resolveFeishuGuestTier(o.guestTier),
     context: o.context.filter(isContextLine),
   };
 }
@@ -177,10 +194,30 @@ export function feishuDeliveryPrefixes(origin: FeishuMessageOrigin): string[] {
   return prefixes;
 }
 
+const OWNER_ONLY_HUB_COMMANDS: readonly HubCommand[] = [
+  "project.create",
+  "project.attach",
+  "project.detach",
+  "project.setup",
+  "persona.edit",
+];
+
+const NON_COLLABORATOR_BLOCKED_HUB_COMMANDS: readonly HubCommand[] = [
+  ...OWNER_ONLY_HUB_COMMANDS,
+  "graph.decide",
+  "schedule.add",
+  "schedule.edit",
+  "schedule.pause",
+  "schedule.resume",
+  "schedule.remove",
+  "watch.add",
+  "watch.close",
+];
+
 export const FEISHU_GUEST_BLOCKED_HUB_COMMANDS: Readonly<Record<FeishuGuestTier, readonly HubCommand[]>> = {
-  chat_only: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit", "graph.decide", "schedule.add", "schedule.edit"],
-  collaborator: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit"],
-  observer: ["project.create", "project.attach", "project.detach", "project.setup", "persona.edit", "graph.decide", "schedule.add", "schedule.edit"],
+  chat_only: NON_COLLABORATOR_BLOCKED_HUB_COMMANDS,
+  collaborator: OWNER_ONLY_HUB_COMMANDS,
+  observer: NON_COLLABORATOR_BLOCKED_HUB_COMMANDS,
 };
 
 export function feishuGuestTurnBlockReason(command: HubCommand, origin: FeishuMessageOrigin | null): string | null {
