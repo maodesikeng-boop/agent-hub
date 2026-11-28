@@ -23,3 +23,76 @@ jobs:
 
   macos:
     uses: ./.github/workflows/macos.yml
+
+  real-cli-mock-llm:
+    name: real-cli-mock-llm (ubuntu protocol drift)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install npm-packaged real CLIs into isolated temp prefix
+        run: |
+          TOOLS_DIR="$RUNNER_TEMP/mock-cli-tools"
+          mkdir -p "$TOOLS_DIR"
+          npm install --prefix "$TOOLS_DIR" --no-audit --no-fund \
+            @openai/codex@latest \
+            @anthropic-ai/claude-code@latest \
+            @earendil-works/pi-coding-agent@latest \
+            @deepseek-ai/dsh@0.2.2-rc.1
+
+      - name: Install sandbox apt packages
+        uses: ./.github/actions/apt-install
+        timeout-minutes: 7
+        with:
+          cache-id: sandbox
+          probe: command -v bwrap && command -v socat
+          install: timeout 115 apt-get update && timeout 115 apt-get install -y bubblewrap socat
+
+      - name: Setup Linux bubblewrap sandbox
+        run: sudo bash scripts/linux-sandbox-setup.sh
+
+      - name: Run real-CLI + mock-LLM suite on Ubuntu
+        env:
+          BELLWOOD_REQUIRE_REAL_CLI: claude,codex,pi,deepseek
+        run: |
+          export PATH="$RUNNER_TEMP/mock-cli-tools/node_modules/.bin:$PATH"
+          pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-nightly-real-cli.xml
+
+      - name: Check Codex app-server JSON Schema drift (pinned vs latest)
+        run: |
+          PINNED_DIR="$RUNNER_TEMP/codex-pinned"
+          mkdir -p "$PINNED_DIR" "$RUNNER_TEMP/codex-schema-pinned" "$RUNNER_TEMP/codex-schema-latest"
+          npm install --prefix "$PINNED_DIR" --no-audit --no-fund @openai/codex@0.169.0
+          "$PINNED_DIR/node_modules/.bin/codex" app-server generate-json-schema --out "$RUNNER_TEMP/codex-schema-pinned"
+          "$RUNNER_TEMP/mock-cli-tools/node_modules/.bin/codex" app-server generate-json-schema --out "$RUNNER_TEMP/codex-schema-latest"
+          node --input-type=module -e '
+            import { diffJsonSchemaTrees, evaluateJsonSchemaDrift } from "./test/mock-llm/protocol-snapshot.ts";
+            const diff = diffJsonSchemaTrees(
+              `${process.env.RUNNER_TEMP}/codex-schema-pinned`,
+              `${process.env.RUNNER_TEMP}/codex-schema-latest`,
+            );
+            const evaluation = evaluateJsonSchemaDrift(diff);
+            console.log("Codex JSON Schema diff (0.169.0 -> latest):", JSON.stringify(evaluation, null, 2));
+            if (evaluation.exitCode !== 0) {
+              console.error(evaluation.summary);
+              process.exit(evaluation.exitCode);
+            }
+          '
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: nightly-real-cli-diagnostics
+          path: vitest-nightly-real-cli.xml
+          if-no-files-found: ignore
