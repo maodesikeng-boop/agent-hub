@@ -422,6 +422,52 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
         ],
       ),
     ).not.toThrow();
+
+    expect(() =>
+      assertReviewStepsHaveTarget(
+        [
+          { key: "rev1", review: 1, base: "hub/7-pr", status: "done", skipped: 0 },
+          { key: "rev2", review: 1, base: "hub/7-pr", status: "done", skipped: 0 },
+          { key: "rev3", review: 1, base: null, status: "pending", skipped: 0 },
+        ],
+        [
+          { fromKey: "rev1", toKey: "rev3" },
+          { fromKey: "rev2", toKey: "rev3" },
+        ],
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      assertReviewStepsHaveTarget(
+        [
+          { key: "rev1", review: 1, base: "hub/7-pr", status: "done", skipped: 0 },
+          { key: "rev2", review: 1, base: "hub/8-pr", status: "done", skipped: 0 },
+          { key: "rev3", review: 1, base: null, status: "pending", skipped: 0 },
+        ],
+        [
+          { fromKey: "rev1", toKey: "rev3" },
+          { fromKey: "rev2", toKey: "rev3" },
+        ],
+      ),
+    ).toThrow(/被审分支/);
+
+    expect(() =>
+      assertReviewStepsHaveTarget(
+        [
+          { key: "a", review: 0, base: null, status: "done", skipped: 0 },
+          { key: "b", review: 0, base: null, status: "done", skipped: 0 },
+          { key: "rev1", review: 1, base: "hub/7-pr", status: "done", skipped: 0 },
+          { key: "rev2", review: 1, base: "hub/7-pr", status: "done", skipped: 0 },
+          { key: "rev3", review: 1, base: null, status: "pending", skipped: 0 },
+        ],
+        [
+          { fromKey: "a", toKey: "rev1" },
+          { fromKey: "b", toKey: "rev2" },
+          { fromKey: "rev1", toKey: "rev3" },
+          { fromKey: "rev2", toKey: "rev3" },
+        ],
+      ),
+    ).toThrow(/被审分支/);
   });
 
   it("S9: handles one-month volume (300 Workers, 30,000 messages, 50,000 step logs) and a 15-round consecutive review diamond without exponential blowup", () => {
@@ -646,7 +692,16 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
     ]);
     expect(resolveWorkspacePlan(db, planFor(explicitThenSkipped, "fix"))).toEqual({ kind: "fork", baseBranch: "feature/b" });
     expect(graphStillUsesStepWorktree(db, 1, explicitThenSkipped, "impl")).toBe(false);
-    expect(upstreamDeliveredCommit(planFor(explicitThenSkipped, "fix"))).toBe("abcdef1234");
+    expect(upstreamDeliveredCommit(planFor(explicitThenSkipped, "fix"), db)).toBeNull();
+
+    const explicitMatchingThenSkipped = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [2], artifactJson: JSON.stringify({ commit: "abcdef1234" }) },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "skip", skipped: true, status: "done", deps: ["rev1"] },
+      { key: "fix", status: "pending", deps: ["skip"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(explicitMatchingThenSkipped, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/b", worktreePath: wtB });
+    expect(upstreamDeliveredCommit(planFor(explicitMatchingThenSkipped, "fix"), db)).toBe("abcdef1234");
 
     const skippedExplicit = makeStepMaps([
       { key: "impl", status: "done", workerIds: [1] },
@@ -750,7 +805,7 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
     expect(resolveWorkspacePlan(db, planFor(asymmetricReset, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/a", worktreePath: wtA });
     expect(graphStillUsesStepWorktree(db, 1, asymmetricReset, "impl")).toBe(true);
 
-    // Standalone explicit review without upstream code step cannot satisfy a follow-up implicit review.
+    // Standalone explicit reviews without any upstream code step pass their unanimous target branch to follow-up implicit reviews and fixes.
     expect(() =>
       assertReviewStepsHaveTarget(
         [
@@ -759,12 +814,56 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
         ],
         [{ fromKey: "rev1", toKey: "rev2" }],
       ),
-    ).toThrow(/被审分支/);
-    const standaloneToImplicit = makeStepMaps([
+    ).not.toThrow();
+    const standaloneChain = makeStepMaps([
       { key: "rev1", review: true, base: "feature/b", status: "done" },
-      { key: "rev2", review: true, status: "pending", deps: ["rev1"] },
+      { key: "rev2", review: true, base: "feature/b", status: "done" },
+      { key: "rev3", review: true, status: "done", deps: ["rev1", "rev2"] },
+      { key: "rev4", review: true, status: "done", deps: ["rev3"] },
+      { key: "fix", status: "pending", deps: ["rev4"] },
     ]);
-    expect(() => resolveWorkspacePlan(db, planFor(standaloneToImplicit, "rev2"))).toThrow(/找不到被审分支/);
+    expect(resolveWorkspacePlan(db, planFor(standaloneChain, "rev3"))).toEqual({
+      kind: "review",
+      branch: "feature/b",
+      implWorktreePath: null,
+    });
+    expect(resolveWorkspacePlan(db, planFor(standaloneChain, "rev4"))).toEqual({
+      kind: "review",
+      branch: "feature/b",
+      implWorktreePath: null,
+    });
+    expect(resolveWorkspacePlan(db, planFor(standaloneChain, "fix"))).toEqual({
+      kind: "fork",
+      baseBranch: "feature/b",
+    });
+    expect(upstreamDeliveredCommit(planFor(standaloneChain, "rev3"), db)).toBeNull();
+
+    const standaloneConflict = makeStepMaps([
+      { key: "rev1", review: true, base: "feature/b", status: "done" },
+      { key: "rev2", review: true, base: "feature/c", status: "done" },
+      { key: "rev3", review: true, status: "pending", deps: ["rev1", "rev2"] },
+    ]);
+    expect(() => resolveWorkspacePlan(db, planFor(standaloneConflict, "rev3"))).toThrow(/找不到被审分支/);
+
+    // Explicit branch reviews must only receive upstreamDeliveredCommit when the upstream delivery branch matches the target branch.
+    const explicitMismatchFanIn = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1], artifactJson: JSON.stringify({ commit: "aaaa1111" }) },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, base: "feature/c", status: "done", deps: ["impl"] },
+      { key: "rev3", review: true, base: "feature/b", status: "pending", deps: ["rev1", "rev2"] },
+      { key: "revImplicit", review: true, status: "pending", deps: ["rev1", "rev2"] },
+    ]);
+    expect(upstreamDeliveredCommit(planFor(explicitMismatchFanIn, "rev1"), db)).toBeNull();
+    expect(upstreamDeliveredCommit(planFor(explicitMismatchFanIn, "rev3"), db)).toBeNull();
+    expect(upstreamDeliveredCommit(planFor(explicitMismatchFanIn, "revImplicit"), db)).toBe("aaaa1111");
+
+    const explicitMatchFanIn = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [2], artifactJson: JSON.stringify({ commit: "bbbb2222" }) },
+      { key: "rev1", review: true, base: "feature/a", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, base: "feature/c", status: "done", deps: ["impl"] },
+      { key: "rev3", review: true, base: "feature/b", status: "pending", deps: ["rev1", "rev2"] },
+    ]);
+    expect(upstreamDeliveredCommit(planFor(explicitMatchFanIn, "rev3"), db)).toBe("bbbb2222");
   });
 });
 

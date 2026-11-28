@@ -112,7 +112,7 @@ function resolveInternalMemo(
       edge =
         dep.base !== null
           ? { codeStep: up.codeStep, reviewedBase: { kind: "explicit", branch: dep.base } }
-          : { codeStep: up.codeStep, reviewedBase: up.codeStep.kind === "none" ? { kind: "none" } : { kind: "implicit" } };
+          : { codeStep: up.codeStep, reviewedBase: up.codeStep.kind === "none" ? up.reviewedBase : { kind: "implicit" } };
     }
     acc = {
       codeStep: meetCodeStepRef(acc.codeStep, edge.codeStep),
@@ -124,8 +124,19 @@ function resolveInternalMemo(
   return acc;
 }
 
-export function resolveUpstreamCodeStep(stepKey: TaskNodeKey, maps: LineageMaps): CodeStepRef {
-  return resolveInternalMemo(stepKey, maps, new Map()).codeStep;
+type ReviewTargetRef =
+  | { kind: "none" }
+  | { kind: "step"; stepKey: TaskNodeKey }
+  | { kind: "branch"; branch: string }
+  | { kind: "conflict" };
+
+export function resolveImplicitReviewTarget(stepKey: TaskNodeKey, maps: LineageMaps): ReviewTargetRef {
+  const internal = resolveInternalMemo(stepKey, maps, new Map());
+  if (internal.codeStep.kind === "one") return { kind: "step", stepKey: internal.codeStep.stepKey };
+  if (internal.codeStep.kind === "many") return { kind: "conflict" };
+  if (internal.reviewedBase.kind === "explicit") return { kind: "branch", branch: internal.reviewedBase.branch };
+  if (internal.reviewedBase.kind === "conflict") return { kind: "conflict" };
+  return { kind: "none" };
 }
 
 /**
@@ -233,25 +244,43 @@ function latestWorktreeWorker(db: Db, projectId: number, step: TaskNodeDbRow): U
 
 const REPORTED_COMMIT = /\b[0-9a-f]{7,40}\b/i;
 
-export function upstreamDeliveredCommit(input: PlanInput): string | null {
-  const internal = resolveInternalMemo(input.step.node_key, input, new Map());
-  let stepKey: TaskNodeKey | null = null;
-  if (input.step.review === 1) {
-    stepKey = internal.codeStep.kind === "one" ? internal.codeStep.stepKey : null;
-  } else {
-    const lineage = toStepUpstreamLineage(internal);
-    stepKey =
-      lineage.kind === "step" || lineage.kind === "step_and_base"
-        ? lineage.stepKey
-        : lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one"
-          ? lineage.sourceStep.stepKey
-          : null;
-  }
-  if (stepKey === null) return null;
-  const u = input.byKey.get(stepKey);
-  if (u === undefined) return null;
-  const reported = readStoredArtifact(u.artifact_json).artifact?.commit ?? "";
+function deliveredCommitFrom(step: TaskNodeDbRow | undefined): string | null {
+  if (step === undefined) return null;
+  const reported = readStoredArtifact(step.artifact_json).artifact?.commit ?? "";
   return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
+}
+
+export function upstreamDeliveredCommit(input: PlanInput, db?: Db): string | null {
+  const { graphRow, step } = input;
+  const internal = resolveInternalMemo(step.node_key, input, new Map());
+  if (step.review === 1) {
+    if (internal.codeStep.kind !== "one") return null;
+    const u = input.byKey.get(internal.codeStep.stepKey);
+    if (u === undefined) return null;
+    if (step.base !== null) {
+      if (db === undefined) return null;
+      const worker = latestWorktreeWorker(db, graphRow.project_id, u);
+      if (worker === null || worker.branch !== step.base) return null;
+    }
+    return deliveredCommitFrom(u);
+  }
+  if (step.base === "main") return null;
+  const lineage = toStepUpstreamLineage(internal);
+  if (lineage.kind === "step") {
+    return deliveredCommitFrom(input.byKey.get(lineage.stepKey));
+  }
+  let target: { stepKey: TaskNodeKey; branch: string } | null = null;
+  if (lineage.kind === "step_and_base") {
+    target = { stepKey: lineage.stepKey, branch: lineage.branch };
+  } else if (lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one") {
+    target = { stepKey: lineage.sourceStep.stepKey, branch: lineage.branch };
+  }
+  if (target === null || db === undefined) return null;
+  const u = input.byKey.get(target.stepKey);
+  if (u === undefined) return null;
+  const worker = latestWorktreeWorker(db, graphRow.project_id, u);
+  if (worker === null || worker.branch !== target.branch) return null;
+  return deliveredCommitFrom(u);
 }
 
 function continuedWorktreeTarget(
@@ -332,8 +361,9 @@ export function graphStillUsesStepWorktree(db: Db, projectId: number, maps: Step
 function resolveReviewPlan(db: Db, input: PlanInput): Extract<StepWorkspacePlan, { kind: "review" }> {
   const { graphRow, step } = input;
   if (step.base !== null) return { kind: "review", branch: step.base, implWorktreePath: null };
-  const codeStep = resolveInternalMemo(step.node_key, input, new Map()).codeStep;
-  const upStep = codeStep.kind === "one" ? input.byKey.get(codeStep.stepKey) : undefined;
+  const target = resolveImplicitReviewTarget(step.node_key, input);
+  if (target.kind === "branch") return { kind: "review", branch: target.branch, implWorktreePath: null };
+  const upStep = target.kind === "step" ? input.byKey.get(target.stepKey) : undefined;
   const worker = upStep === undefined ? null : latestWorktreeWorker(db, graphRow.project_id, upStep);
   if (worker === null) {
     throw fail(

@@ -629,6 +629,88 @@ describe("Task Graph multi-review fan-in workspace inheritance (end-to-end)", ()
       ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: cancelGraph.id });
       expect(ledger.isWorkerCleanable(wImpl2)).toBe(true);
     });
+
+    it("explicit branch review after fan-in does not pass mismatched impl commit as expected when local and remote target branch diverged", async () => {
+      const branchB = "feature/b";
+      const branchC = "feature/c";
+      git(repoDir, "branch", branchB, "main");
+      git(repoDir, "push", "--quiet", "origin", branchB);
+      git(repoDir, "branch", branchC, "main");
+      git(repoDir, "push", "--quiet", "origin", branchC);
+
+      const graph = createGraph([
+        { key: "impl", title: "Impl", brief: "Implement on feature A", deps: [] },
+        { key: "revB", title: "Review B", brief: "Review B", review: true, base: branchB, deps: ["impl"] },
+        { key: "revC", title: "Review C", brief: "Review C", review: true, base: branchC, deps: ["impl"] },
+        { key: "revFinal", title: "Final Review B", brief: "Re-review B", review: true, base: branchB, deps: ["revB", "revC"] },
+      ]);
+
+      const wImpl = graph.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl);
+      const impl = workerRow(wImpl);
+      writeFileSync(join(impl.worktree_path, "a.ts"), "export const a = 101;\n");
+      git(impl.worktree_path, "commit", "-am", "impl on feature a");
+      git(impl.worktree_path, "push", "--quiet", "origin", impl.branch!);
+      const implSha = git(impl.worktree_path, "rev-parse", "HEAD");
+      await reportTurn(wImpl, report({ summary: "impl done", commit: implSha }));
+
+      for (const k of ["revB", "revC"] as const) {
+        const w = graphNow(graph.id).nodes.find((n) => n.key === k)!.activeWorkerId!;
+        await prepareWorkspace(w);
+        const sha = parseReviewTarget(workerRow(w).review_json)!.snapshot!.sha;
+        await reportTurn(w, report({ summary: "ok", verdict: "PASS", sha }));
+        await runVerifyFor(w);
+      }
+
+      // Stale local feature/b contains implSha while remote feature/b diverged to a rewritten commit without implSha.
+      git(repoDir, "branch", "-f", branchB, implSha);
+      const other = join(root, `rewrite-${++now}`);
+      git(root, "clone", "--quiet", "--branch", "main", originDir, other);
+      git(other, "checkout", "-b", branchB);
+      writeFileSync(join(other, "a.ts"), "export const a = 202;\n");
+      git(other, "commit", "-am", "rewritten remote feature b");
+      git(other, "push", "--quiet", "--force", "origin", branchB);
+      const rewrittenRemoteB = git(other, "rev-parse", "HEAD");
+
+      const wRevFinal = graphNow(graph.id).nodes.find((n) => n.key === "revFinal")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wRevFinal)?.checkout).toEqual({ kind: "review", branch: branchB });
+      await prepareWorkspace(wRevFinal);
+      expect(git(workerRow(wRevFinal).worktree_path, "rev-parse", "HEAD")).toBe(rewrittenRemoteB);
+      expect(parseReviewTarget(workerRow(wRevFinal).review_json)?.snapshot?.sha).toBe(rewrittenRemoteB);
+    });
+
+    it("standalone parallel explicit reviews with the same base converge cleanly into a follow-up implicit review and fix", async () => {
+      const stale = seedPrBranch();
+      const remoteHead = pushFromElsewhere(PR_BRANCH, "export const a = 303;\n");
+
+      const graph = createGraph([
+        { key: "rev1", title: "Review 1", brief: "R1", review: true, base: PR_BRANCH, deps: [] },
+        { key: "rev2", title: "Review 2", brief: "R2", review: true, base: PR_BRANCH, deps: [] },
+        { key: "rev3", title: "Review 3", brief: "R3", review: true, deps: ["rev1", "rev2"] },
+        { key: "fix", title: "Fix", brief: "Fix on PR branch", deps: ["rev3"] },
+      ]);
+
+      for (const k of ["rev1", "rev2"] as const) {
+        const w = graphNow(graph.id).nodes.find((n) => n.key === k)!.activeWorkerId!;
+        await prepareWorkspace(w);
+        await reportTurn(w, report({ summary: "ok", verdict: "PASS", sha: remoteHead }));
+        await runVerifyFor(w);
+      }
+
+      const wRev3 = graphNow(graph.id).nodes.find((n) => n.key === "rev3")!.activeWorkerId!;
+      await prepareWorkspace(wRev3);
+      expect(parseReviewTarget(workerRow(wRev3).review_json)?.branch).toBe(PR_BRANCH);
+      expect(git(workerRow(wRev3).worktree_path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(git(workerRow(wRev3).worktree_path, "rev-parse", "HEAD")).not.toBe(stale);
+
+      await reportTurn(wRev3, report({ status: "有问题", summary: "needs fix", verdict: "FAIL", sha: remoteHead }));
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wRev3 });
+      ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "rev3" });
+
+      const wFix = graphNow(graph.id).nodes.find((n) => n.key === "fix")!.activeWorkerId!;
+      await prepareWorkspace(wFix);
+      expect(git(workerRow(wFix).worktree_path, "rev-parse", "HEAD")).toBe(remoteHead);
+    });
   });
 
   describe("unchanged boundaries (regression baseline, passes before and after implementation)", () => {
