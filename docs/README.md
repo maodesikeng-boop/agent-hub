@@ -50,6 +50,7 @@ Active standards and architecture references for Bellwood. Start with [`../AGENT
 - [Handover byte budget and lightweight skill carryover](handover-budget-and-skills-design.md): Lightweight verified skill-index carryover, declarative per-vendor single-message byte caps, delivery-time priority-tiered preamble budgeting protecting the latest user message, and prompt-cache preservation across all eight vendors.
 - [Shipped prompt de-overfitting](prompt-deoverfitting-design.md): Separating platform mechanics from project workflow policy across shipped PM and Worker prompts, the Task Graph skill, CLI help, JSON hints, and runtime daemon notices, enforced by a workflow-neutrality audit contract.
 - [Session stop lifecycle and settlement fix](stop-lifecycle-design.md): Root-cause traces on real `agy acp`, `stopId`-matched ledger stop settlement, unified `BaseSessionDriver` interrupt coordination with bounded `SIGINT` to `SIGKILL` escalation, post-turn ACP notification gating, and frontend `useStop` reset closure.
+- [Codex model catalog recovery and quota reset reconciliation](codex-catalog-and-quota-refresh-design.md): Isolated `codex 0.169.0` traces of silent built-in fallback after 5-second refresh timeouts, cross-vendor `ModelCatalogs` degraded-probe semantics with bounded `models_cache.json` recovery, and probe-start timestamp (`probedAt`) reconciliation between `ProviderQuota` and `ObservedQuotaStore`.
 
 ## Testing
 
