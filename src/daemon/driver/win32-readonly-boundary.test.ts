@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_VENDORS, type AgentVendor } from "../../shared/vendors.ts";
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger } from "../ledger/ledger.ts";
@@ -67,7 +67,7 @@ function createWin32LedgerFixture(opts: { osSandboxed?: () => boolean; readonlyK
   const created = ledger.createPm({ name: "WinPM", vendor: "pi", mode: "manage_only", persona: "" });
   const pmSessionId = created.sessionId;
   ledger.hubCall(pmSessionId, "project.create", { folder: projectDir, name: "Repo" });
-  return { ledger, pmSessionId, projectDir, root };
+  return { db, ledger, pmSessionId, projectDir, root };
 }
 
 describe("Windows strict read-only sandbox boundary (new and changed behavior)", () => {
@@ -308,6 +308,55 @@ describe("Windows strict read-only sandbox boundary (new and changed behavior)",
       graphId: graph.id,
     });
     expect("data" in started && started.data).toBeTruthy();
+  });
+
+  it("S5: graph.done starts the queued readonly step when MXC recovers while its dependency runs", () => {
+    let mxcReady = true;
+    const readonlyKernelSandboxed = vi.fn(() => mxcReady);
+    const { db, ledger, pmSessionId } = createWin32LedgerFixture({ readonlyKernelSandboxed });
+    const { graph } = ledger.hubCall(pmSessionId, "graph.create", {
+      title: "MXC recovery graph",
+      specJson: JSON.stringify({
+        goal: "Run a readonly audit after preparing its inputs",
+        steps: [
+          { key: "prep", title: "Prep inputs", brief: "Prepare the audit inputs", vendor: "codex", readonly: true },
+          { key: "audit", title: "Audit repo", brief: "Inspect the repository", vendor: "pi", readonly: true },
+        ],
+      }),
+    }).data;
+    const prep = graph.nodes.find((node) => node.key === "prep")!;
+    expect(prep.status).toBe("running");
+    expect(prep.activeWorkerId).not.toBeNull();
+
+    mxcReady = false;
+    const duringOutage = ledger.hubCall(pmSessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(duringOutage.nodes.find((node) => node.key === "prep")?.status).toBe("running");
+    expect(duringOutage.nodes.find((node) => node.key === "audit")).toMatchObject({
+      status: "pending",
+      activeWorkerId: null,
+      workerIds: [],
+    });
+
+    mxcReady = true;
+    ledger.hubCall(pmSessionId, "worker.end", { workerId: prep.activeWorkerId! });
+    readonlyKernelSandboxed.mockClear();
+    const afterDone = ledger.hubCall(pmSessionId, "graph.done", {
+      graphId: graph.id,
+      nodeKey: "prep",
+      summary: "Prep finished",
+    }).data.graph;
+    expect(afterDone.nodes.find((node) => node.key === "prep")?.status).toBe("done");
+    const audit = afterDone.nodes.find((node) => node.key === "audit")!;
+    expect(audit.status).toBe("running");
+    expect(audit.activeWorkerId).toEqual(expect.any(Number));
+    expect(audit.activeWorkerId).not.toBe(prep.activeWorkerId);
+    expect(audit.workerIds).toEqual([audit.activeWorkerId]);
+    expect(db.get("SELECT title, readonly, status FROM workers WHERE id = ?", audit.activeWorkerId)).toEqual({
+      title: "Audit repo",
+      readonly: 1,
+      status: "open",
+    });
+    expect(readonlyKernelSandboxed).toHaveReturnedWith(true);
   });
 });
 

@@ -1,7 +1,7 @@
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FEISHU_GUEST_BLOCKED_HUB_COMMANDS,
   FEISHU_GUEST_TIERS,
@@ -540,15 +540,6 @@ describe("Feishu guest security boundary (new and changed behavior)", () => {
     expect(collabCount).toBe(33);
     expect(observerCount).toBe(67);
 
-    const plan = db
-      .all<{ detail: string }>(
-        "EXPLAIN QUERY PLAN SELECT meta FROM messages INDEXED BY messages_in_flight WHERE session_id = ? AND status IN ('delivered', 'processing') AND sender = 'user' AND meta IS NOT NULL",
-        firstSessionId,
-      )
-      .map((r) => r.detail)
-      .join(" ");
-    expect(plan).toContain("messages_in_flight");
-
     const ledger = createLedger(db, {
       pmHomeRoot: join(dataHome, "pm-home"),
       dataHome,
@@ -556,12 +547,24 @@ describe("Feishu guest security boundary (new and changed behavior)", () => {
       userHome: dir,
       resolveFolder: createResolveFolder({ dataHome, userHome: dir }),
     });
+    const queries = vi.spyOn(db, "all");
     expect(() =>
       ledger.hubCall(firstSessionId, "watch.add", {
         everyMs: 60_000,
         body: "check status",
       }),
     ).toThrow(/访客/u);
+    const messageQueries = queries.mock.calls.filter(([sql]) => /\bFROM\s+messages\b/iu.test(sql));
+    queries.mockRestore();
+    expect(messageQueries).toHaveLength(1);
+    const [sql, ...params] = messageQueries[0]!;
+    const plan = db
+      .all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, ...params)
+      .map((r) => r.detail)
+      .join(" ");
+    expect(plan).toMatch(/\bSEARCH messages USING (?:COVERING )?INDEX messages_in_flight\b/u);
+    expect(plan).toContain("messages_in_flight");
+    expect(plan).not.toMatch(/\bSCAN messages\b/u);
 
     expect(resolveFeishuGuestTier("chat_only")).toBe("chat_only");
     expect(resolveFeishuGuestTier("bad")).toBe("observer");
