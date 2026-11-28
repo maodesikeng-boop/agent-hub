@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addWorktree } from "../git/index.ts";
+import { addWorktree, isBranchSquashMergedToMain } from "../git/index.ts";
 import {
   createBranchCleanup,
   type BranchCleanupLedger,
@@ -371,5 +371,46 @@ describe("createBranchCleanup", () => {
     expect(run.deleted.map((d) => d.branch)).toEqual(["hub/55-part2"]);
     expect(branchExists("hub/54-part1")).toBe(true);
     expect(run.held.map((h) => h.branch)).toEqual(["hub/54-part1"]);
+  });
+
+  it.each([
+    { shape: "expansion with partial overlap", main: { 5: "main 5", 6: "main 6" }, line4: ["relay 4a", "relay 4b"] },
+    { shape: "expansion with the same old range", main: { 4: "main 4", 5: "main 5", 6: "main 6" }, line4: ["relay 4a", "relay 4b"] },
+    { shape: "deletion with the same old range", main: { 4: "main 4", 5: "main 5", 6: "main 6" }, line4: [] },
+  ])("holds a relay branch after $shape keeps a main conflict line verbatim", async ({ main, line4 }) => {
+    const commit = (edits: Record<number, string | string[] | undefined>, message: string) => {
+      const lines = Array.from({ length: 10 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).flat();
+      writeFileSync(join(repo, "README.md"), `${lines.join("\n")}\n`);
+      git(repo, "add", "README.md");
+      git(repo, "commit", "-q", "-m", message);
+    };
+    commit({}, "base lines");
+    const base = git(repo, "rev-parse", "HEAD");
+    const first = "hub/56-part1";
+    const final = "hub/57-part2";
+    git(repo, "checkout", "-qb", first);
+    commit({ 5: "first edit 5" }, "first relay edit");
+    git(repo, "checkout", "-q", "main");
+    commit(main, "main edits");
+    git(repo, "checkout", "-qb", final, first);
+    expect(() => git(repo, "merge", "-q", "--no-edit", "main")).toThrow();
+    expect(git(repo, "diff", "--name-only", "--diff-filter=U")).toBe("README.md");
+    commit({ 4: line4, 5: "main 5", 6: "relay 6" }, "resolve conflict keeping main line 5");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", final);
+    git(repo, "commit", "-qm", "squash relay");
+
+    const worker: ManagedBranchWorkerRef = {
+      workerId: 56, projectId: 1, branch: first, baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS,
+    };
+    const cleanup = createBranchCleanup({ ledger: makeLedger([worker]), log: () => {}, now: () => nowMs });
+    const merged = await isBranchSquashMergedToMain(repo, first, base);
+    const run = await cleanup.runOnce();
+    expect({
+      merged,
+      held: run.held.map((entry) => entry.branch),
+      deleted: run.deleted.map((entry) => entry.branch),
+      exists: branchExists(first),
+    }).toEqual({ merged: false, held: [first], deleted: [final], exists: true });
   });
 });

@@ -161,164 +161,57 @@ interface OldLineInterval {
   readonly end: number;
 }
 
-function sameOwnSpaceHunk(a: UnifiedHunk, b: UnifiedHunk): boolean {
+type HunkCoverage = Pick<UnifiedHunk, "oldStart" | "oldCount"> & { readonly addedLines?: readonly string[] };
+
+function sameOwnSpaceHunk(a: HunkCoverage, b: UnifiedHunk): boolean {
   return (
     a.oldStart === b.oldStart &&
     a.oldCount === b.oldCount &&
-    a.addedLines.length === b.addedLines.length &&
+    a.addedLines?.length === b.addedLines.length &&
     a.addedLines.every((line, idx) => line === b.addedLines[idx])
   );
 }
 
-function arrayMatchesAt(haystack: readonly string[], needle: readonly string[], offset: number): boolean {
-  if (offset < 0 || offset + needle.length > haystack.length) return false;
-  for (let i = 0; i < needle.length; i++) {
-    if (haystack[offset + i] !== needle[i]) return false;
-  }
-  return true;
+function sliceCoverage(candidate: HunkCoverage, oldStart: number, oldEnd: number): HunkCoverage {
+  const oldCount = oldEnd - oldStart + 1;
+  const offset = oldStart - candidate.oldStart;
+  const addedLines = candidate.addedLines?.length === candidate.oldCount
+    ? candidate.addedLines.slice(offset, offset + oldCount)
+    : undefined;
+  return { oldStart, oldCount, ...(addedLines === undefined ? {} : { addedLines }) };
 }
 
-function findMatchingSubarrayOffset(
-  haystack: readonly string[],
-  needle: readonly string[],
-  preferredOffset: number,
-  minOffset: number,
-  maxOffset: number,
-): number {
-  if (preferredOffset >= minOffset && preferredOffset <= maxOffset && arrayMatchesAt(haystack, needle, preferredOffset)) {
-    return preferredOffset;
-  }
-  let best = -1;
-  let bestDist = Number.POSITIVE_INFINITY;
-  for (let offset = minOffset; offset <= maxOffset; offset++) {
-    if (!arrayMatchesAt(haystack, needle, offset)) continue;
-    const dist = Math.abs(offset - preferredOffset);
-    if (dist < bestDist) {
-      best = offset;
-      bestDist = dist;
-    }
-  }
-  return best;
-}
-
-function subtractAlignedMainHunk(candidate: UnifiedHunk, mainHunk: UnifiedHunk): UnifiedHunk[] {
-  const cStart = candidate.oldStart;
-  const cEnd = cStart + candidate.oldCount - 1;
-  const mStart = mainHunk.oldStart;
-  const mEnd = mStart + mainHunk.oldCount - 1;
-  const ovStart = Math.max(cStart, mStart);
-  const ovEnd = Math.min(cEnd, mEnd);
-
-  let excludedAny = false;
-  const out: UnifiedHunk[] = [];
-  let runStart: number | null = null;
-
-  const flushRun = (runEnd: number): void => {
-    if (runStart === null) return;
-    const runLen = runEnd - runStart + 1;
-    const offset = runStart - cStart;
-    out.push({
-      oldStart: runStart,
-      oldCount: runLen,
-      newStart: candidate.newStart + offset,
-      newCount: runLen,
-      addedLines: candidate.addedLines.slice(offset, offset + runLen),
-    });
-    runStart = null;
-  };
-
-  for (let line = cStart; line <= cEnd; line++) {
-    const matchesMain =
-      line >= ovStart &&
-      line <= ovEnd &&
-      candidate.addedLines[line - cStart] === mainHunk.addedLines[line - mStart];
-    if (matchesMain) {
-      excludedAny = true;
-      flushRun(line - 1);
-    } else if (runStart === null) {
-      runStart = line;
-    }
-  }
-  flushRun(cEnd);
-  return excludedAny ? out : [candidate];
-}
-
-function subtractMainHunk(candidate: UnifiedHunk, mainHunk: UnifiedHunk): UnifiedHunk[] {
+function subtractMainHunk(candidate: HunkCoverage, mainHunk: UnifiedHunk): HunkCoverage[] {
   if (sameOwnSpaceHunk(candidate, mainHunk)) return [];
   if (candidate.oldCount === 0 || mainHunk.oldCount === 0) return [candidate];
 
   const cStart = candidate.oldStart;
   const cEnd = cStart + candidate.oldCount - 1;
-  const mStart = mainHunk.oldStart;
-  const mEnd = mStart + mainHunk.oldCount - 1;
-  if (mEnd < cStart || mStart > cEnd) return [candidate];
+  const overlapStart = Math.max(cStart, mainHunk.oldStart);
+  const overlapEnd = Math.min(cEnd, mainHunk.oldStart + mainHunk.oldCount - 1);
+  if (overlapEnd < overlapStart) return [candidate];
 
-  if (candidate.oldCount === candidate.addedLines.length && mainHunk.oldCount === mainHunk.addedLines.length) {
-    return subtractAlignedMainHunk(candidate, mainHunk);
-  }
-
-  if (mStart < cStart || mEnd > cEnd || candidate.oldCount <= mainHunk.oldCount) return [candidate];
-  const leftOldCount = mStart - cStart;
-  const rightOldCount = cEnd - mEnd;
-  const mLen = mainHunk.addedLines.length;
-
-  if (mLen === 0) {
-    if (candidate.addedLines.length !== leftOldCount + rightOldCount) return [candidate];
-    const out: UnifiedHunk[] = [];
-    if (leftOldCount > 0) {
-      out.push({
-        oldStart: cStart,
-        oldCount: leftOldCount,
-        newStart: candidate.newStart,
-        newCount: leftOldCount,
-        addedLines: candidate.addedLines.slice(0, leftOldCount),
-      });
+  const aligned = candidate.addedLines?.length === candidate.oldCount && mainHunk.addedLines.length === mainHunk.oldCount;
+  const pieces: HunkCoverage[] = [];
+  let start = cStart;
+  // A length change makes the correspondence between old and new lines ambiguous inside the overlap.
+  if (!aligned) {
+    if (cStart < overlapStart) pieces.push(sliceCoverage(candidate, cStart, overlapStart - 1));
+    start = overlapEnd + 1;
+  } else {
+    for (let line = overlapStart; line <= overlapEnd; line++) {
+      if (candidate.addedLines?.[line - cStart] !== mainHunk.addedLines[line - mainHunk.oldStart]) continue;
+      if (start < line) pieces.push(sliceCoverage(candidate, start, line - 1));
+      start = line + 1;
     }
-    if (rightOldCount > 0) {
-      out.push({
-        oldStart: mEnd + 1,
-        oldCount: rightOldCount,
-        newStart: candidate.newStart + leftOldCount,
-        newCount: rightOldCount,
-        addedLines: candidate.addedLines.slice(leftOldCount),
-      });
-    }
-    return out;
   }
-
-  if (candidate.addedLines.length < mLen) return [candidate];
-  const minOffset = leftOldCount === 0 ? 0 : rightOldCount === 0 ? candidate.addedLines.length - mLen : 0;
-  const maxOffset =
-    leftOldCount === 0 ? 0 : rightOldCount === 0 ? candidate.addedLines.length - mLen : candidate.addedLines.length - mLen;
-  const matchOffset = findMatchingSubarrayOffset(candidate.addedLines, mainHunk.addedLines, leftOldCount, minOffset, maxOffset);
-  if (matchOffset === -1) return [candidate];
-
-  const out: UnifiedHunk[] = [];
-  if (leftOldCount > 0) {
-    out.push({
-      oldStart: cStart,
-      oldCount: leftOldCount,
-      newStart: candidate.newStart,
-      newCount: matchOffset,
-      addedLines: candidate.addedLines.slice(0, matchOffset),
-    });
-  }
-  if (rightOldCount > 0) {
-    const rightNewOffset = matchOffset + mLen;
-    out.push({
-      oldStart: mEnd + 1,
-      oldCount: rightOldCount,
-      newStart: candidate.newStart + rightNewOffset,
-      newCount: candidate.newCount - rightNewOffset,
-      addedLines: candidate.addedLines.slice(rightNewOffset),
-    });
-  }
-  return out;
+  if (start === cStart) return [candidate];
+  if (start <= cEnd) pieces.push(sliceCoverage(candidate, start, cEnd));
+  return pieces;
 }
 
-function subtractMainHunks(containing: readonly UnifiedHunk[], mainHunks?: readonly UnifiedHunk[]): UnifiedHunk[] {
-  if (mainHunks === undefined || mainHunks.length === 0) return [...containing];
-  let pieces: UnifiedHunk[] = [...containing];
+function subtractMainHunks(containing: readonly UnifiedHunk[], mainHunks: readonly UnifiedHunk[] = []): HunkCoverage[] {
+  let pieces: HunkCoverage[] = [...containing];
   for (const mainHunk of mainHunks) {
     pieces = pieces.flatMap((piece) => subtractMainHunk(piece, mainHunk));
     if (pieces.length === 0) break;
@@ -326,7 +219,7 @@ function subtractMainHunks(containing: readonly UnifiedHunk[], mainHunks?: reado
   return pieces;
 }
 
-function mergeOldLineIntervals(hunks: readonly UnifiedHunk[]): OldLineInterval[] {
+function mergeOldLineIntervals(hunks: readonly HunkCoverage[]): OldLineInterval[] {
   const intervals = hunks
     .filter((h) => h.oldCount > 0)
     .map((h) => ({ start: h.oldStart, end: h.oldStart + h.oldCount - 1 }))
@@ -343,22 +236,23 @@ function mergeOldLineIntervals(hunks: readonly UnifiedHunk[]): OldLineInterval[]
   return merged;
 }
 
-function insertionCoveredBy(own: UnifiedHunk, candidate: UnifiedHunk): boolean {
+function insertionCoveredBy(own: UnifiedHunk, candidate: HunkCoverage): boolean {
   if (candidate.oldCount === 0) return candidate.oldStart === own.oldStart;
-  if (candidate.newCount === 0) return false;
+  const addedLines = candidate.addedLines;
+  if (addedLines === undefined || addedLines.length === 0) return false;
   const candidateEnd = candidate.oldStart + candidate.oldCount - 1;
   const touchesPoint =
     (own.oldStart >= candidate.oldStart && own.oldStart <= candidateEnd) ||
     (own.oldStart === 0 && candidate.oldStart === 1);
   if (!touchesPoint) return false;
   const strictlyInterior = own.oldStart >= candidate.oldStart && own.oldStart < candidateEnd;
-  if (strictlyInterior || candidate.newCount > candidate.oldCount) return true;
-  return own.addedLines.some((line) => candidate.addedLines.includes(line));
+  if (strictlyInterior || addedLines.length > candidate.oldCount) return true;
+  return own.addedLines.some((line) => addedLines.includes(line));
 }
 
 /**
  * Precondition: own, containing, and optional mainSinceOwn are parsed from diffs sharing the same left-hand base tree (ownMergeBase).
- * Postcondition: returns true only when neither own nor containing is binary, own has at least one hunk, and every base line modified or deleted by own (and every pure insertion point) is covered by containing hunks after stripping mainSinceOwn-identical edits.
+ * Postcondition: returns true only when neither own nor containing is binary, own has at least one hunk, and every base line modified or deleted by own (and every pure insertion point) is covered by containing hunks after excluding main-identical edits and ambiguous overlaps.
  */
 export function hunksCoverOwnDiff(
   own: ParsedFileDiff,
