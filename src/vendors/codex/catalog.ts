@@ -319,12 +319,18 @@ function decodeJwtEmail(jwt: unknown): string | null {
   return null;
 }
 
-function readBoundedFile(filePath: string, maxBytes: number): { text: string; mtimeMs: number } | null {
+type BoundedFileRead =
+  | { readonly kind: "ok"; readonly text: string; readonly mtimeMs: number }
+  | { readonly kind: "missing" }
+  | { readonly kind: "unreadable" };
+
+function readBoundedFileResult(filePath: string, maxBytes: number, allowEmpty = false): BoundedFileRead {
   let fd: number | undefined;
   try {
     fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const st = fstatSync(fd);
-    if (!st.isFile() || st.size <= 0 || st.size > maxBytes) return null;
+    if (!st.isFile() || st.size > maxBytes || (!allowEmpty && st.size <= 0)) return { kind: "unreadable" };
+    if (st.size === 0) return { kind: "ok", text: "", mtimeMs: st.mtimeMs };
     const buf = Buffer.allocUnsafe(st.size);
     let offset = 0;
     while (offset < st.size) {
@@ -332,9 +338,10 @@ function readBoundedFile(filePath: string, maxBytes: number): { text: string; mt
       if (n <= 0) break;
       offset += n;
     }
-    return { text: buf.subarray(0, offset).toString("utf8"), mtimeMs: st.mtimeMs };
-  } catch {
-    return null;
+    return { kind: "ok", text: buf.subarray(0, offset).toString("utf8"), mtimeMs: st.mtimeMs };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "missing" } : { kind: "unreadable" };
   } finally {
     if (fd !== undefined) {
       try {
@@ -345,9 +352,15 @@ function readBoundedFile(filePath: string, maxBytes: number): { text: string; mt
   }
 }
 
-// Require a local ChatGPT auth.json anchor so keyring account switches without auth.json cannot reuse a prior account's cache.
+function readBoundedFile(filePath: string, maxBytes: number): { text: string; mtimeMs: number } | null {
+  const res = readBoundedFileResult(filePath, maxBytes);
+  return res.kind === "ok" ? { text: res.text, mtimeMs: res.mtimeMs } : null;
+}
+
+// Require a local ChatGPT auth.json anchor and a verified non-keyring config.toml so keyring accounts cannot reuse a prior account's cache.
 function readCodexAuthOwnership(codexHome: string): { mtimeMs: number; email: string | null } | null {
-  if (codexCredentialsStore(codexHome) === "keyring") return null;
+  const store = codexCredentialsStore(codexHome);
+  if (store.kind === "unverified" || store.store === "keyring") return null;
   const file = readBoundedFile(join(codexHome, "auth.json"), PROVIDER_SECRETS_FILE_MAX_BYTES);
   if (file === null) return null;
   let parsed: unknown;
@@ -435,26 +448,31 @@ export const codexCatalogProbe: VendorCatalogProbe = {
   },
 };
 
-function codexCredentialsStore(codexHome: string): string | null {
-  const file = readBoundedFile(join(codexHome, "config.toml"), MAX_VENDOR_SYNC_CONFIG_BYTES);
-  if (file === null) return null;
+type CodexCredentialsStoreResult =
+  | { readonly kind: "ok"; readonly store: string | null }
+  | { readonly kind: "unverified" };
+
+function codexCredentialsStore(codexHome: string): CodexCredentialsStoreResult {
+  const file = readBoundedFileResult(join(codexHome, "config.toml"), MAX_VENDOR_SYNC_CONFIG_BYTES, true);
+  if (file.kind === "missing") return { kind: "ok", store: null };
+  if (file.kind === "unreadable") return { kind: "unverified" };
   let parsed: unknown;
   try {
     parsed = parseToml(file.text.replace(/^\uFEFF/, ""), { integersAsBigInt: false });
   } catch {
-    return null;
+    return { kind: "unverified" };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { kind: "unverified" };
   const value = (parsed as Record<string, unknown>).cli_auth_credentials_store;
-  return typeof value === "string" ? value : null;
+  return { kind: "ok", store: typeof value === "string" ? value : null };
 }
 
-// auth.json may be absent when cli_auth_credentials_store is keyring or auto.
+// auth.json may be absent when cli_auth_credentials_store is keyring or auto, or when config.toml cannot be verified.
 export function codexAuthFileAvailability(env: NodeJS.ProcessEnv, homeDir: string): VendorAvailability {
   const codexHome = vendorConfigHome("codex", homeDir, env)!;
   if (existsSync(join(codexHome, "auth.json"))) return "available";
   const store = codexCredentialsStore(codexHome);
-  return store === "keyring" || store === "auto" ? "unknown" : "signed_out";
+  return store.kind === "unverified" || store.store === "keyring" || store.store === "auto" ? "unknown" : "signed_out";
 }
 
 export function createCodexCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {

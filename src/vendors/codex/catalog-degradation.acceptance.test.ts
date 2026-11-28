@@ -8,6 +8,7 @@ import {
   AGENT_VENDORS,
   CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS,
   MAX_CODEX_MODELS_CACHE_BYTES,
+  MAX_VENDOR_SYNC_CONFIG_BYTES,
   MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_RETRY_MS,
@@ -501,5 +502,20 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     writeFileSync(authFile, JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: sameToken } }));
     utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
     expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).not.toBeNull();
+
+    // Empty config.toml is valid TOML without keyring store and still allows fallback.
+    writeFileSync(configFile, "");
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).not.toBeNull();
+
+    // Oversized config.toml (> MAX_VENDOR_SYNC_CONFIG_BYTES) cannot be verified, so fail-closed and refuse fallback.
+    const oversizedToml = `# ${"a".repeat(MAX_VENDOR_SYNC_CONFIG_BYTES)}\ncli_auth_credentials_store = "keyring"\n`;
+    writeFileSync(configFile, oversizedToml);
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).toBeNull();
+    expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
+
+    // Malformed config.toml cannot be verified, so fail-closed and refuse fallback.
+    writeFileSync(configFile, 'cli_auth_credentials_store = ["unterminated\n');
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).toBeNull();
+    expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
   });
 });
