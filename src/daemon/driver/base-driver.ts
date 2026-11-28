@@ -12,6 +12,7 @@ import {
   HANDOVER_DELIVERY_SUFFIX_RESERVE_BYTES,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
+  INTERRUPT_POST_ACK_GRACE_MS,
   KILL_WAIT_MS,
   LAST_EVENT_WRITE_MS,
   RELAUNCH_NOTE,
@@ -62,45 +63,13 @@ import { measureTurnReservedBytes } from "../ledger/handover-budget.ts";
 import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
+import { consumePreWriteStop, coordinateSessionInterrupt } from "./stop-coordination.ts";
 import { dropUserEntries, untakenReleaseEvents, type UntakenReleaseCause } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
-import {
-  clearKillTimer,
-  errorMessage,
-  launchChanged,
-  takePendingBatch,
-  within,
-  type BaseBatch,
-  type BaseProc,
-  type BatchNotes,
-  type ClosingReason,
-  type DriverHealthSnapshot,
-  type PendingBatchParts,
-  type PendingEntry,
-  type StartupOutcome,
-} from "./driver-helpers.ts";
+import { clearKillTimer, errorMessage, launchChanged, takePendingBatch, within, type BaseBatch, type BaseProc, type BatchNotes, type ClosingReason, type DriverHealthSnapshot, type PendingBatchParts, type PendingEntry, type StartupOutcome } from "./driver-helpers.ts";
 
-export {
-  NO_NOTES,
-  clearKillTimer,
-  entryParts,
-  errorMessage,
-  flatEntryText,
-  formatStartupExitDetail,
-  launchChanged,
-  takePendingBatch,
-  within,
-} from "./driver-helpers.ts";
-export type {
-  BaseBatch,
-  BaseProc,
-  BatchNotes,
-  ClosingReason,
-  DriverHealthSnapshot,
-  PendingBatchParts,
-  PendingEntry,
-  StartupOutcome,
-} from "./driver-helpers.ts";
+export { NO_NOTES, clearKillTimer, entryParts, errorMessage, flatEntryText, formatStartupExitDetail, launchChanged, takePendingBatch, within } from "./driver-helpers.ts";
+export type { BaseBatch, BaseProc, BatchNotes, ClosingReason, DriverHealthSnapshot, PendingBatchParts, PendingEntry, StartupOutcome } from "./driver-helpers.ts";
 
 export const USAGE_THROTTLE_MS = USAGE_PUSH_MS;
 
@@ -146,16 +115,7 @@ export type BaseDriverOptions = Omit<DriverOptions, "executablePath"> & {
 };
 
 export type ResolvedBaseDriverOptions = Required<
-  Pick<
-    DriverOptions,
-    | "idleCloseMs"
-    | "backgroundHoldMaxMs"
-    | "interruptGraceMs"
-    | "startTimeoutMs"
-    | "shutdownGraceMs"
-    | "commandsTimeoutMs"
-    | "log"
-  >
+  Pick<DriverOptions, "idleCloseMs" | "backgroundHoldMaxMs" | "interruptGraceMs" | "interruptPostAckGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log">
 > &
   Omit<BaseDriverOptions, "composer">;
 
@@ -220,6 +180,7 @@ export abstract class BaseSessionDriver<
       idleCloseMs: IDLE_CLOSE_MS,
       backgroundHoldMaxMs: BACKGROUND_TASKS_HOLD_MAX_MS,
       interruptGraceMs: INTERRUPT_GRACE_MS,
+      interruptPostAckGraceMs: INTERRUPT_POST_ACK_GRACE_MS,
       startTimeoutMs: START_TIMEOUT_MS,
       shutdownGraceMs: SHUTDOWN_GRACE_MS,
       commandsTimeoutMs: RUNNING_COMMANDS_TIMEOUT_MS,
@@ -256,8 +217,21 @@ export abstract class BaseSessionDriver<
     resolveExited: () => void,
   ): void;
 
+  protected sendInterrupt(_st: TState, _proc: TProc): void {}
+  protected markMidTurnBatchesStopped?(st: TState): void;
   abstract send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult>;
-  abstract interrupt(sessionId: SessionId): Promise<void>;
+
+  async interrupt(sessionId: SessionId): Promise<void> {
+    const st = this.sessions.get(sessionId);
+    if (!st) return;
+    await coordinateSessionInterrupt<TProc, TBatch, TState>(st, {
+      dropPendingUsers: (s) => this.dropPendingUsers(s),
+      stopIdleBackgroundTasks: (s, p) => this.stopIdleBackgroundTasks(s, p),
+      isBusy: (s) => this.busy(s),
+      sendInterrupt: (s, p) => this.sendInterrupt(s, p),
+      ...(this.markMidTurnBatchesStopped ? { markMidTurnBatchesStopped: (s) => this.markMidTurnBatchesStopped!(s) } : {}),
+    });
+  }
 
   onEvent(listener: DriverEventListener): Unsubscribe {
     this.#listeners.add(listener);
@@ -516,6 +490,19 @@ export abstract class BaseSessionDriver<
     if (dropped.length > 0) {
       this.emit(st.id, { type: "message.cancelled", messageIds: dropped, reason: "stop", at: Date.now() });
     }
+  }
+
+  protected consumeStoppedBatch(st: TState, batch: TBatch, proc?: TProc): boolean {
+    if (!consumePreWriteStop(st, batch)) return false;
+    this.dropBatch(st, batch);
+    this.releaseUntaken(st, [batch], "user_stop", Date.now());
+    this.resolveInterrupt(st);
+    if (proc && st.proc === proc && !proc.closing) {
+      if (proc.initSeen) this.afterTurn(st, proc);
+      else this.closeStdin(st, proc, "interrupt");
+    }
+    this.settled(st);
+    return true;
   }
 
   protected dropBatch(st: TState, batch: TBatch): void {
@@ -812,27 +799,15 @@ export abstract class BaseSessionDriver<
     }, grace);
   }
 
-  protected sigintForInterrupt(
-    st: TState,
-    proc: TProc,
-    escalateTimer: "none" | "interruptTimer" | "killTimer" = "none",
-  ): void {
+  protected sigintForInterrupt(st: TState, proc: TProc): void {
     if (st.proc !== proc || proc.closing) return;
     proc.closing = "interrupt";
     signalChild(proc.child, "SIGINT");
-    if (escalateTimer === "interruptTimer") {
-      this.clearTimer(st, "interruptTimer");
-      st.interruptTimer = setTimeout(() => {
-        st.interruptTimer = null;
-        this.forceKillProc(st, proc);
-      }, this.opts.interruptGraceMs);
-    } else if (escalateTimer === "killTimer") {
-      clearKillTimer(proc);
-      proc.killTimer = setTimeout(() => {
-        proc.killTimer = null;
-        this.forceKillProc(st, proc);
-      }, this.opts.interruptGraceMs);
-    }
+    clearKillTimer(proc);
+    proc.killTimer = setTimeout(() => {
+      proc.killTimer = null;
+      this.forceKillProc(st, proc);
+    }, this.opts.interruptGraceMs);
   }
 
   protected abortIfStopped(st: TState, proc: TProc): void {

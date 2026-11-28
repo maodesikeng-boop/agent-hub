@@ -175,7 +175,7 @@ class ControllableDriver extends BaseSessionDriver<TestProc, TestBatch, TestStat
     return input.messageIds.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
-  async interrupt(sessionId: SessionId): Promise<void> {
+  override async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.sessions.get(sessionId);
     if (!st) return;
     this.dropPendingUsers(st);

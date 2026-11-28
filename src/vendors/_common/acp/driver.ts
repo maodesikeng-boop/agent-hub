@@ -225,36 +225,20 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
-  async interrupt(sessionId: SessionId): Promise<void> {
-    const st = this.sessions.get(sessionId);
-    if (!st) return;
-    this.dropPendingUsers(st);
-    const proc = st.proc;
-    if (!proc || proc.closing) return;
-    const stopBg = this.stopIdleBackgroundTasks(st, proc);
-    if (stopBg) {
-      await stopBg;
-      return;
-    }
-    if (!this.busy(st) && proc.initSeen) return;
-
-    st.stopRequested = true;
+  protected override sendInterrupt(st: AcpSessionState, proc: AcpProc): void {
     st.turnInterrupted = true;
-    const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
-    if (!st.cancelSent) {
-      st.cancelSent = true;
-      if (proc.acpSessionId) {
-        void proc.acpConn.agent
-          .notify(methods.agent.session.cancel, { sessionId: proc.acpSessionId })
-          .catch(() => {});
-      }
-      this.clearTimer(st, "interruptTimer");
-      st.interruptTimer = setTimeout(() => {
-        st.interruptTimer = null;
-        this.sigintForInterrupt(st, proc, "killTimer");
-      }, this.opts.interruptGraceMs);
+    if (st.cancelSent) return;
+    st.cancelSent = true;
+    if (proc.acpSessionId) {
+      void proc.acpConn.agent
+        .notify(methods.agent.session.cancel, { sessionId: proc.acpSessionId })
+        .catch(() => {});
     }
-    return done;
+    this.clearTimer(st, "interruptTimer");
+    st.interruptTimer = setTimeout(() => {
+      st.interruptTimer = null;
+      this.sigintForInterrupt(st, proc);
+    }, this.opts.interruptGraceMs);
   }
 
   protected override closeStdin(st: AcpSessionState, proc: AcpProc, reason: ClosingReason): void {
@@ -379,8 +363,13 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
     if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     let proc = existing;
     try {
-      if (!proc) proc = await this.#spawn(st, this.resumeFor(st), files);
+      if (!proc) {
+        const resolved = files ?? (await this.resolveLaunchFiles(st, null)).files;
+        if (this.consumeStoppedBatch(st, batch)) return;
+        proc = await this.#spawn(st, this.resumeFor(st), resolved);
+      }
       this.abortIfStopped(st, proc);
+      if (this.consumeStoppedBatch(st, batch, proc)) return;
     } catch (error) {
       this.dropBatch(st, batch);
       throw error;
@@ -412,12 +401,14 @@ export class AcpSessionDriver extends VendorSessionDriver<AcpProc, AcpBatch, Acp
       if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
       return;
     }
+    if (this.consumeStoppedBatch(st, batch, proc)) return;
 
     await this.writeBatch(st, proc, batch);
   }
 
   protected async writeBatch(st: AcpSessionState, proc: AcpProc, batch: AcpBatch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
+    if (this.consumeStoppedBatch(st, batch, proc)) return;
     const vendorCap = handoverMaxSingleMessageBytesOf(this.vendor);
     const systemBlock = proc.pendingSystemPromptBlock ?? this.#takeReinjectBlock(st, proc);
     const systemBytes = systemBlock !== null && systemBlock.trim() !== "" ? Buffer.byteLength(systemBlock, "utf8") : 0;

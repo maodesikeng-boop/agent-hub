@@ -372,7 +372,7 @@ function markHandshakeReady(
   }
 
   if (st.stopRequested) {
-    host.sigintForInterrupt(st, proc, "killTimer");
+    host.sigintForInterrupt(st, proc);
     proc.resolveReady({ kind: "closed", reason: "interrupt" });
     return;
   }

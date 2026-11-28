@@ -222,38 +222,26 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     this.settled(st);
   }
 
-  async interrupt(sessionId: SessionId): Promise<void> {
-    const st = this.sessions.get(sessionId);
-    if (!st) return;
-    this.dropPendingUsers(st);
-    const proc = st.proc;
-    if (!proc || proc.closing) return;
-    const stopBg = this.stopIdleBackgroundTasks(st, proc);
-    if (stopBg) {
-      await stopBg;
-      return;
-    }
-    if (!this.busy(st)) return;
-    st.stopRequested = true;
-    st.turnInterrupted = true;
+  protected override markMidTurnBatchesStopped(st: SessionState): void {
     for (const batch of st.inFlight) {
       if (batch.midTurn && !batch.delivered) batch.stopped = true;
     }
-    const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
-    if (!st.interruptSent) {
-      st.interruptSent = true;
-      const clearId = `rpc-${++this.requestSeq}`;
-      const abortId = `rpc-${++this.requestSeq}`;
-      proc.pendingRpcs.set(clearId, { kind: "clear_queue" });
-      proc.pendingRpcs.set(abortId, { kind: "abort" });
-      proc.child.stdin.write(`${buildClearQueueLine(clearId)}\n`);
-      proc.child.stdin.write(`${buildAbortLine(abortId)}\n`);
-      st.interruptTimer = setTimeout(() => {
-        st.interruptTimer = null;
-        this.sigintForInterrupt(st, proc, "killTimer");
-      }, this.opts.interruptGraceMs);
-    }
-    return done;
+  }
+
+  protected override sendInterrupt(st: SessionState, proc: Proc): void {
+    st.turnInterrupted = true;
+    if (st.interruptSent) return;
+    st.interruptSent = true;
+    const clearId = `rpc-${++this.requestSeq}`;
+    const abortId = `rpc-${++this.requestSeq}`;
+    proc.pendingRpcs.set(clearId, { kind: "clear_queue" });
+    proc.pendingRpcs.set(abortId, { kind: "abort" });
+    proc.child.stdin.write(`${buildClearQueueLine(clearId)}\n`);
+    proc.child.stdin.write(`${buildAbortLine(abortId)}\n`);
+    st.interruptTimer = setTimeout(() => {
+      st.interruptTimer = null;
+      this.sigintForInterrupt(st, proc);
+    }, this.opts.interruptGraceMs);
   }
 
   override queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null> {
@@ -315,6 +303,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     if (this.discardStaleSystemBatch(st, proc, batch)) return;
+    if (this.consumeStoppedBatch(st, batch, proc)) return;
     const combinedText = batch.includeDeliverySuffix !== true ? batch.combinedText : this.withDeliverySuffix(st, batch, batch.combinedText);
     const problem = checkPiTurnText(combinedText);
     if (problem) {
@@ -379,13 +368,17 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
 
   protected startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
     st.inFlight = [batch];
-    st.turnInterrupted = false;
-    st.stopRequested = false;
     const run = async () => {
       try {
         const resume = existing?.resume ?? this.resumeFor(st);
-        const proc = existing ?? (await this.#spawn(st, resume, files));
+        let proc = existing;
+        if (!proc) {
+          const resolved = files ?? (await this.resolveLaunchFiles(st, null)).files;
+          if (this.consumeStoppedBatch(st, batch)) return;
+          proc = await this.#spawn(st, resume, resolved);
+        }
         this.abortIfStopped(st, proc);
+        if (this.consumeStoppedBatch(st, batch, proc)) return;
         this.clearTimer(st, "idleTimer");
         st.inFlight = [batch];
         this.armStartTimer(st, proc);
@@ -396,6 +389,7 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
             if (st.ended) throw new DriverError("session_ended", `session ${st.id} has been ended`);
             return;
           }
+          if (this.consumeStoppedBatch(st, batch, proc)) return;
           await this.writeBatch(st, proc, batch);
           return;
         }

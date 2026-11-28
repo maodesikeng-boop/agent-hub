@@ -183,18 +183,6 @@ class DummyDriver extends BaseSessionDriver<DummyProc, DummyBatch, DummyState> {
     return input.messageIds.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
-  async interrupt(sessionId: SessionId): Promise<void> {
-    const st = this.state(sessionId);
-    this.dropPendingUsers(st);
-    const proc = st.proc;
-    if (!proc || proc.closing) return;
-    const bgExit = this.stopIdleBackgroundTasks(st, proc);
-    if (bgExit) {
-      await bgExit;
-      return;
-    }
-  }
-
   // 测试暴露包装
   exposeState(id: SessionId): DummyState {
     return this.state(id);

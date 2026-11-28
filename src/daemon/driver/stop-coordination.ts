@@ -1,7 +1,9 @@
 // Invariant: every interrupt request either settles through an active turn/exit, aborts pre-spawn startup, awaits an already-closing process, or returns immediately only when the session is already quiescent.
 import type { BaseBatch, BaseProc } from "./driver-helpers.ts";
 
-export interface StoppableSessionState<TProc extends BaseProc<unknown>, TBatch extends BaseBatch> {
+export type StoppableProc = Pick<BaseProc<never>, "closing" | "initSeen" | "exited">;
+
+export interface StoppableSessionState<TProc extends StoppableProc, TBatch extends BaseBatch> {
   proc: TProc | null;
   inFlight: TBatch[];
   stopRequested: boolean;
@@ -11,7 +13,7 @@ export interface StoppableSessionState<TProc extends BaseProc<unknown>, TBatch e
   interruptWaiters: Array<() => void>;
 }
 
-export interface StopCoordinationCallbacks<TProc extends BaseProc<unknown>, TState> {
+export interface StopCoordinationCallbacks<TProc extends StoppableProc, TState> {
   dropPendingUsers(st: TState): void;
   stopIdleBackgroundTasks(st: TState, proc: TProc): Promise<void> | null;
   isBusy(st: TState): boolean;
@@ -19,7 +21,7 @@ export interface StopCoordinationCallbacks<TProc extends BaseProc<unknown>, TSta
   markMidTurnBatchesStopped?(st: TState): void;
 }
 
-export interface PostAckEscalationTarget<TProc extends BaseProc<unknown>> {
+export interface PostAckEscalationTarget<TProc extends StoppableProc> {
   proc: TProc | null;
   interruptTimer: NodeJS.Timeout | null;
 }
@@ -29,14 +31,55 @@ export interface PostAckEscalationTarget<TProc extends BaseProc<unknown>> {
  * Postcondition: drops pending user messages; if startup is awaiting spawn before proc attaches, latches stopRequested and awaits startup; if proc is already closing, awaits proc.exited; if idle background tasks are active, closes the process and awaits exit; if busy or pre-init, latches stopRequested, invokes sendInterrupt once, and resolves when the turn ends or process exits; if already idle, returns without hanging.
  */
 export async function coordinateSessionInterrupt<
-  TProc extends BaseProc<unknown>,
+  TProc extends StoppableProc,
   TBatch extends BaseBatch,
   TState extends StoppableSessionState<TProc, TBatch>,
 >(
-  _st: TState,
-  _callbacks: StopCoordinationCallbacks<TProc, TState>,
+  st: TState,
+  callbacks: StopCoordinationCallbacks<TProc, TState>,
 ): Promise<void> {
-  throw new Error("Not implemented");
+  callbacks.dropPendingUsers(st);
+  for (;;) {
+    const proc = st.proc;
+    if (!proc) {
+      if (st.starting !== null) {
+        st.stopRequested = true;
+        await st.starting.catch(() => {});
+        if (st.proc === null) {
+          st.stopRequested = false;
+          return;
+        }
+        continue;
+      }
+      st.stopRequested = false;
+      return;
+    }
+    if (proc.closing !== null) {
+      await proc.exited;
+      return;
+    }
+    const stopBg = callbacks.stopIdleBackgroundTasks(st, proc);
+    if (stopBg !== null) {
+      await stopBg;
+      return;
+    }
+    if (!callbacks.isBusy(st) && proc.initSeen) {
+      if (st.starting !== null) {
+        const pendingStart = st.starting;
+        await pendingStart.catch(() => {});
+        if (st.proc !== proc || (st.starting !== null && st.starting !== pendingStart) || callbacks.isBusy(st) || proc.closing !== null) {
+          continue;
+        }
+      }
+      st.stopRequested = false;
+      return;
+    }
+    st.stopRequested = true;
+    callbacks.markMidTurnBatchesStopped?.(st);
+    const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
+    callbacks.sendInterrupt(st, proc);
+    return done;
+  }
 }
 
 /**
@@ -44,10 +87,13 @@ export async function coordinateSessionInterrupt<
  * Postcondition: returns true and clears stopRequested/turnInterrupted when a stop was latched before the batch was written (signaling the caller to cancel or requeue the batch instead of writing it); returns false otherwise.
  */
 export function consumePreWriteStop<TBatch extends BaseBatch>(
-  _st: { stopRequested: boolean; turnInterrupted: boolean; inFlight: TBatch[] },
+  st: { stopRequested: boolean; turnInterrupted: boolean; inFlight: TBatch[] },
   _batch: TBatch,
 ): boolean {
-  throw new Error("Not implemented");
+  if (!st.stopRequested) return false;
+  st.stopRequested = false;
+  st.turnInterrupted = false;
+  return true;
 }
 
 /**
@@ -55,13 +101,18 @@ export function consumePreWriteStop<TBatch extends BaseBatch>(
  * Postcondition: replaces any existing interruptTimer with a bounded postAckGraceMs timer that invokes onEscalate only if st.proc is still proc and not yet closing.
  */
 export function armPostAckInterruptEscalation<
-  TProc extends BaseProc<unknown>,
+  TProc extends StoppableProc,
   TState extends PostAckEscalationTarget<TProc>,
 >(
-  _st: TState,
-  _proc: TProc,
-  _postAckGraceMs: number,
-  _onEscalate: (st: TState, proc: TProc) => void,
+  st: TState,
+  proc: TProc,
+  postAckGraceMs: number,
+  onEscalate: (st: TState, proc: TProc) => void,
 ): void {
-  throw new Error("Not implemented");
+  if (st.interruptTimer) clearTimeout(st.interruptTimer);
+  st.interruptTimer = setTimeout(() => {
+    st.interruptTimer = null;
+    if (st.proc !== proc || proc.closing !== null) return;
+    onEscalate(st, proc);
+  }, postAckGraceMs);
 }
