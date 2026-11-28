@@ -26,6 +26,11 @@ export interface ObservedQuotaStore {
   observeRateLimit(vendor: AgentVendor, info: RateLimitInfo, at?: number): void;
   observeTurnError(vendor: AgentVendor, errorMessage: string, at?: number): VendorQuotaObservation | null;
   observeTurnSuccess(vendor: AgentVendor): void;
+  /**
+   * Precondition: probedAt is the daemon timestamp when the upstream quota probe started.
+   * Postcondition: clears the active observation for vendor and returns true only when probedAt > active.observedAt and fetched contains at least one active non-exhausted window with zero exhausted windows for vendor.
+   */
+  reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): boolean;
   clearVendor(vendor: AgentVendor): void;
   getActive(vendor: AgentVendor, at?: number): VendorQuotaObservation | null;
   snapshot(at?: number): Partial<Record<AgentVendor, VendorQuotaObservation>>;
@@ -80,9 +85,13 @@ export function parseQuotaResetAt(errorMessage: string, nowMs: number, fallbackT
   }
 }
 
+/**
+ * Postcondition: merges observed and fetched quota for vendor; when fetchedProbedAt > observed.observedAt and fetched has active windows with none exhausted, fetched supersedes the stale observed limit.
+ */
 export function mergeVendorQuota(
-  vendor: AgentVendor, observed: VendorQuotaObservation | null, fetched: QuotaResponse | null, at = Date.now(),
+  vendor: AgentVendor, observed: VendorQuotaObservation | null, fetched: QuotaResponse | null, at = Date.now(), fetchedProbedAt?: number,
 ): HubVendorQuota | undefined {
+  void fetchedProbedAt;
   const windows = (fetched?.groups ?? []).filter((group) => group.vendor === vendor).flatMap(({ id, windows }) =>
     Object.entries(windows).flatMap(([key, window]) => {
       if (window === undefined || !Number.isFinite(window.utilization) || (window.resetsAt > 0 && window.resetsAt * 1000 <= at)) return [];
@@ -146,6 +155,13 @@ export function createObservedQuotaStore({
       return record(vendor, "observed", truncateChars(redactSecrets(errorMessage).trim().replace(/\s+/g, " "), MAX_QUOTA_REASON_CHARS), reset, at);
     },
     observeTurnSuccess: clear,
+    reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): boolean {
+      void vendor;
+      void fetched;
+      void probedAt;
+      void at;
+      throw new Error("Not implemented");
+    },
     clearVendor: clear,
     getActive,
     snapshot(at = now()) {

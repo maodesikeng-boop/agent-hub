@@ -25,6 +25,8 @@ export interface VendorCatalogProbe {
   parse(raw: unknown): ModelCatalog | null;
   availabilityOf(raw: unknown): VendorAvailability;
   availabilityOfError?(error: unknown): VendorAvailability;
+  /** Returns true when the probe returned a degraded fallback list rather than a confirmed fresh catalog. */
+  isDegraded?(raw: unknown): boolean;
 }
 
 export interface VendorCatalogSourceOptions {

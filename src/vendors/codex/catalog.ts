@@ -230,7 +230,39 @@ export async function queryCodexModels(options: CodexModelQueryOptions): Promise
   return (await queryCodexAppServer(options, [{ method: "model/list", params: {} }]))[0];
 }
 
-export async function queryCodexCatalog(options: CodexModelQueryOptions): Promise<{ models: unknown; account: unknown }> {
+export interface CodexCatalogQueryResult {
+  models: unknown;
+  account: unknown;
+  degraded?: boolean;
+}
+
+export interface CodexModelsCacheFallbackOptions {
+  codexHome: string;
+  account: unknown;
+  nowMs?: number;
+  maxAgeMs?: number;
+  maxBytes?: number;
+}
+
+/**
+ * Precondition: stderr is captured stderr text from a codex app-server probe (may contain ANSI escapes).
+ * Postcondition: returns true only when codex logged a remote model-list refresh failure.
+ */
+export function isCodexRemoteRefreshFailure(stderr: string): boolean {
+  void stderr;
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: codexHome is the resolved Codex configuration directory and account is the raw account/read result.
+ * Postcondition: returns parsed models_cache.json payload when ChatGPT auth is eligible and the file is bounded, valid, fresh within maxAgeMs, and not older than auth.json; otherwise returns null.
+ */
+export function readCodexModelsCacheFallback(options: CodexModelsCacheFallbackOptions): unknown | null {
+  void options;
+  throw new Error("Not implemented");
+}
+
+export async function queryCodexCatalog(options: CodexModelQueryOptions): Promise<CodexCatalogQueryResult> {
   const [models, account] = await queryCodexAppServer(options, [
     { method: "model/list", params: {} },
     { method: "account/read", params: {}, optional: true },
@@ -245,6 +277,7 @@ export async function queryCodexSkills(options: CodexModelQueryOptions): Promise
 
 export const codexCatalogProbe: VendorCatalogProbe = {
   parse: (raw) => parseCodexModels((raw as { models?: unknown } | null)?.models),
+  isDegraded: (raw) => (raw as { degraded?: unknown } | null)?.degraded === true,
   availabilityOf(raw) {
     const read = (raw as { account?: unknown } | null)?.account;
     if (typeof read !== "object" || read === null || !("account" in read)) return "unknown";

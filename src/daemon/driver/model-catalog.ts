@@ -55,6 +55,8 @@ export interface VendorCatalogSource {
   parse: (raw: unknown) => ModelCatalog | null;
   availabilityOf?: (raw: unknown) => VendorAvailability;
   availabilityOfError?: (error: unknown) => VendorAvailability;
+  /** Returns true when the raw probe result is a degraded fallback that must not overwrite a live cache or use the full fresh TTL. */
+  isDegraded?: (raw: unknown) => boolean;
   confirm?: (signal: AbortSignal) => Promise<VendorAvailability>;
   installed?: () => boolean;
   fingerprint?: () => CatalogFingerprint;
@@ -71,6 +73,8 @@ export interface ModelCatalogsOptions {
   now?: () => number;
   log?: (line: string) => void;
   ensureUsableBudgetMs?: number;
+  /** Called whenever a vendor's input fingerprint changes so sibling caches (such as observed quota) can invalidate. */
+  onInputsChanged?: (vendor: AgentVendor) => void;
 }
 
 export interface ModelCatalogs {

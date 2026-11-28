@@ -50,7 +50,16 @@ export interface FetchedQuota {
   get(): Promise<QuotaResponse>;
 }
 
+export interface FetchedQuotaSnapshot {
+  readonly response: QuotaResponse;
+  readonly probedAt: number | null;
+}
+
 export interface CachedQuota extends FetchedQuota {
+  /**
+   * Postcondition: returns the current cached or freshly probed QuotaResponse together with the daemon timestamp recorded when that probe started (null when closed, unconfigured, or empty/failed).
+   */
+  getSnapshot(): Promise<FetchedQuotaSnapshot>;
   invalidate(): void;
   isCurrent(value: QuotaResponse): boolean;
   /**
@@ -78,6 +87,8 @@ export function createFetchedQuota(options: {
   query: ((signal: AbortSignal) => Promise<QuotaResponse | null>) | undefined;
   fingerprint?: () => string;
   now?: () => number;
+  onFetched?: (response: QuotaResponse, probedAt: number) => void;
+  onScopeChanged?: () => void;
 }): CachedQuota {
   const now = options.now ?? Date.now;
   const fingerprint = options.fingerprint ?? (() => "");
@@ -93,6 +104,9 @@ export function createFetchedQuota(options: {
   };
 
   return {
+    getSnapshot(): Promise<FetchedQuotaSnapshot> {
+      throw new Error("Not implemented");
+    },
     invalidate,
     isCurrent: (value) => !closed && cached?.value === value && now() < cached.until && scope === fingerprint(),
     get() {

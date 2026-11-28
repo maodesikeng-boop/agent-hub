@@ -43,6 +43,7 @@ import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
 import { HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
 import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
+import type { ProviderQuota } from "../quota/provider-quota.ts";
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
@@ -71,7 +72,7 @@ export interface AgentApiOptions {
   findTranscript?: (ref: TranscriptRef) => string | null;
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  quota?: { observed: ObservedQuotaStore; get(): Promise<QuotaResponse>; now?: () => number };
+  quota?: { observed: ObservedQuotaStore; get(): Promise<QuotaResponse>; getSnapshot?: ProviderQuota["getSnapshot"]; now?: () => number };
   sandboxGuard?: RouterSandboxGuard;
   onRouterDispatch?: (
     sessionId: SessionId,
