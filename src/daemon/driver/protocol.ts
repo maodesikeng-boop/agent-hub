@@ -7,12 +7,10 @@ import {
   type AgentToolPreviewEvent,
   type TokenUsage,
 } from "../../shared/index.ts";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { STEP_INPUT_KEYS, pickStepInput } from "../../shared/step-labels.ts";
+import { PARENT_SESSION_ENV } from "../../vendors/parent-session-env.ts";
 
-export { pickStepInput };
-import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
-import { VENDOR_LIST } from "../../vendors/registry.ts";
+export { PARENT_SESSION_ENV, pickStepInput };
 
 export function userContent(prefixes: readonly string[], text: string): Array<{ type: "text"; text: string }> {
   const blocks = prefixes.filter((p) => p.trim() !== "");
@@ -42,16 +40,6 @@ export function parseUsage(usage: unknown): Omit<TokenUsage, "context"> {
     output: tokenCount(u.output_tokens),
   };
 }
-
-export const PARENT_SESSION_ENV: readonly string[] = [
-  ...new Set([
-    ...VENDOR_LIST.flatMap(({ id }) => VENDOR_PATHS[id].parentSessionEnv ?? []),
-    "T3CODE_THREAD_ID",
-    "T3CODE_CLI_PATH",
-    ENV_HUB_TOKEN,
-    ENV_HUB_SOCK,
-  ]),
-];
 
 export function buildChildEnv(
   base: Record<string, string | undefined>,

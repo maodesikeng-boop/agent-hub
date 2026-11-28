@@ -33,6 +33,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 - [Read-only Worker design](readonly-worker-design.md): Vendor-neutral `ReadonlyPolicy`, OS-level read-only sandboxes, MCP `readOnlyHint` filtering, and credential deny lists.
 - [Linux sandbox design](linux-sandbox-design.md): Outer `bubblewrap` (`bwrap`) isolation, PID and mount namespaces, secret-glob scanning, signal routing, and Ubuntu 24.04+ AppArmor setup.
 - [Task Graph orchestration](task-graph-design.md): Directed acyclic Task Graphs, four-state step progression, `fusa-task-graph` skill delivery, user blockers, deliverables, and verify-only independent reviews.
+- [Task Graph multi-review fan-in workspace inheritance](task-graph-fanin-workspace-design.md): Pure DAG meet-semilattice workspace lineage across parallel review diamonds, contention detection over code continuers, DAG ancestor worker ownership, unified review validation, and active-graph worktree cleanup holds.
 - [Router architecture](router-design.md): Stateless single-turn cross-device dispatch, zero-copy `--verbatim` forwarding, two-tier background project catalog, decision tray, and timeline.
 - [Account mesh and E2EE relay](account-mesh-design.md): GitHub Device Flow login, six-digit SAS device verification, mutual TLS 1.3 over LAN and Cloudflare or Node relays, and hub lease failover.
 - [Event stream recovery](change-stream-recovery-design.md): Replay cursors tied to daemon boots, snapshot recovery, and reconnect through the Mesh proxy.
@@ -68,6 +69,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 - [Product capability evaluation](product-eval-design.md): The unified three-tier product capability evaluation framework (`harness`, `replay`, and `canary`), five non-collapsed capability dimensions, loopback mock model server with prompt-cache prefix verification, multi-trial `pass@k` and `pass^k` gating, holdout anti-overfitting guards, and CI and release-gate integration.
 - [Real CLI with mock model test environment](real-cli-mock-model-design.md): Empirical 8-vendor endpoint audit, loopback multi-dialect mock LLM HTTP/SSE server, isolated temporary HOME provisioning, deterministic prompt-cache prefix stability assertions, normalized protocol snapshots, and cross-platform real-CLI CI strategy.
 - [Verify-smoke diagnostics and WebKit composer stability](verify-smoke-diagnostics-and-stability-design.md): Root-cause analysis of blank `ProtocolError` failures and `finally` error masking in `WKSession`, step-scoped bounded error diagnostics, sequential WebKit and Chromium browser lifetimes, settled `#chat` composer readiness, and acceptance test plan.
+- [Eliminating `pnpm test:related` fan-out and local concurrency overload](test-related-fanout-design.md): Empirical fan-out profile of `pnpm test:related` across real PRs and shared hubs, symbol-aware static impact graph (`oxc-parser`), thin `setupFiles` boundaries, dynamic vendor-loader edges, and bounded local worker concurrency.
 
 ## Desktop and distribution
 
