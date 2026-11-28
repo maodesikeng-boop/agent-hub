@@ -14,7 +14,7 @@
 
 ### Project Manager plan review
 
-- Every quoted user sentence in Section 1 maps to executable acceptance scenarios S1 through S10 in Section 8.
+- Every quoted user sentence in Section 1 maps to executable acceptance scenarios S1 through S11 in Section 8.
 - Every verification category in `docs/plan-standard.md` is either covered by a runnable scenario or accompanied by a one-sentence explanation of why it cannot apply.
 - Section 3 compares three genuinely different structures: source-tree barrel elimination (Candidate A), Vitest recorded runtime dependencies (Candidate B), and a symbol-aware static impact graph with thin `setupFiles` and bounded concurrency (Candidate C).
 
@@ -82,7 +82,7 @@ flowchart LR
 ### Gotchas discovered during exploration
 
 1. **Dynamic vendor loader blind spot**: `src/vendors/load.ts:5` uses `import(/* @vite-ignore */ \`./${id}/${file}\`)` to load every vendor's `daemon.ts` and `paths.ts`. `[Measured]` Real `vitest related` for `src/vendors/claude/daemon.ts` matches only 1 test (`src/daemon/driver/pm-memory-dirs.test.ts`), and `src/vendors/kimi/paths.ts` matches only 1 test (`src/vendors/kimi/kimi.test.ts`), missing `src/vendors/daemon-registry.ts` and `src/vendors/paths-registry.ts` consumers.
-2. **TypeScript `import("...").Type` trap**: `src/daemon/ui-server/fake-ledger.ts:591` uses inline TypeScript type-import syntax `import("../../shared/index.ts").RouterCommandsPage`. A regex scanner misclassifies this as a dynamic runtime import; an AST parser (`oxc-parser` `ImportExpression`) distinguishes runtime dynamic imports from `TSImportType`.
+2. **TypeScript `import("...").Type` versus runtime dynamic imports and `vi.mock` family**: `src/daemon/ui-server/fake-ledger.ts:591` uses inline TypeScript type-import syntax `import("../../shared/index.ts").RouterCommandsPage`, whereas real tests use runtime dynamic `import("./...")`, `vi.mock(import("../../vendors/_common/setup/file-helpers.ts"), ...)` (`src/daemon/provider-manager/provider-status.test.ts:18`), and string-literal `vi.mock("./...")` (`24` occurrences across the repo), alongside `vi.doMock`, `vi.unmock`, `vi.importActual`, and `vi.importMock`. Using `oxc-parser` AST traversal lets `analyzeModuleSource` treat every runtime `ImportExpression` and every relative string-literal `vi.mock`, `vi.doMock`, `vi.unmock`, `vi.importActual`, or `vi.importMock` call as a **fail-closed whole-file dependency (`imported: "*"`, `local: null`)**, while cleanly ignoring type-only `TSImportType` annotations.
 3. **E2E daemon spawn boundary**: `test/e2e/harness.ts:39` spawns `src/daemon/main.ts` by file path (`new URL("../../src/daemon/main.ts", import.meta.url)`) without importing it statically, so neither `vitest related` nor static module edges link `src/daemon/daemon.ts` directly to all 40 E2E specs unless a shared symbol changes. Full-suite E2E coverage runs on cloud CI's four Ubuntu shards.
 
 ### Verified evidence (pre-implementation baseline)
@@ -257,7 +257,7 @@ During implementation, delete these superseded paths in the same PR so old and n
 - `docs/README.md`: Adds the index entry for `docs/test-related-fanout-design.md`.
 - `src/shared/limits.ts`: Exports `TEST_RELATED_LOCAL_MAX_WORKERS = 4`.
 - `scripts/related-graph.ts`: Compilable typed skeleton for `loadVitestProjectSpecs`, `analyzeModuleSource`, `diffChangedExports`, `resolveAffectedTests`, and `resolveLocalConcurrency`.
-- `scripts/related-graph.test.ts`: Runnable pre-implementation acceptance test suite mapping S1 through S10 and setup-file closure guards to concrete assertions.
+- `scripts/related-graph.test.ts`: Runnable pre-implementation acceptance test suite mapping S1 through S11 and setup-file closure guards to concrete assertions.
 
 Additional files to create or modify during implementation (not modified in the planning skeleton so existing runtime behavior remains unchanged):
 
@@ -316,6 +316,10 @@ Every scenario below follows the three-part structure (first, next, visible resu
   - *First*: Pass Windows-style relative paths and run `resolveAffectedTests` with `platform: "win32"`, `"darwin"`, and `"linux"` using `vitest.config.ts` project definitions.
   - *Next*: Project `include`/`exclude` matching filters discovered specs.
   - *Result*: On `win32`, the four Windows-excluded eval tests (`test/eval/{isolation,cli,selftest,fakes}.test.ts`) are excluded from `testFiles`; on `darwin` and `linux`, they remain eligible when affected.
+- **S11: Dynamic `import("./...")` and `vi.mock` family fail closed as whole-file dependencies while `TSImportType` stays type-only (maps to zero-missed-tests rule)**:
+  - *First*: Tests or helper modules reference a target module exclusively through relative string-literal `vi.mock("./target.ts")`, `vi.doMock("./target.ts")`, `vi.unmock("./target.ts")`, `vi.importActual("./target.ts")`, `vi.importMock("./target.ts")`, runtime dynamic `import("./target.ts")`, or `vi.mock(import("./target.ts"))`, while another file references only `import("./target.ts").SomeType` in a type annotation.
+  - *Next*: A single export in `./target.ts` changes, and `analyzeModuleSource` plus `resolveAffectedTests` run.
+  - *Result*: `analyzeModuleSource` emits `{ target, imported: "*", local: null }` for every dynamic import and `vi.*` mock/actual helper (and no edge for `TSImportType`); `resolveAffectedTests` selects every test connected through any of those runtime or mock edges and excludes the `TSImportType`-only consumer.
 
 #### Required category coverage audit
 
@@ -328,7 +332,7 @@ Every scenario below follows the three-part structure (first, next, visible resu
    - *Caches key on identity, have a limit, and retry failures soon* (`Trigger: ..., src/shared/limits.ts, ...`): Graph maps are scoped to one CLI invocation with zero cross-run cache persistence, so staleness cannot occur.
    - *Child processes are tracked and gone before cleanup* (`Trigger: ..., src/daemon/driver/**, test/spawn-guard.ts, ...`): Decoupling `test/spawn-guard.ts` from `src/shared/limits.ts` preserves its exact `5_000 ms` child-exit wait (`SPAWN_GUARD_EXIT_WAIT_MS`) and leak-reaping behavior, guarded by a unit test asserting equality with `TEST_CHILD_EXIT_WAIT_MS`.
    - *Tests wait for events, not for time* (`Trigger: **/*.test.ts, test/**`): `scripts/related-graph.test.ts` uses pure deterministic AST/graph assertions with zero sleeps or wall-clock duration assertions.
-   - *Planned acceptance scenarios cover every requirement and pass real tests* (`Trigger: **`): All scenarios S1 through S10 have runnable Vitest assertions in `scripts/related-graph.test.ts`, with a recorded pre-implementation failing baseline before implementation starts.
+   - *Planned acceptance scenarios cover every requirement and pass real tests* (`Trigger: **`): All scenarios S1 through S11 have runnable Vitest assertions in `scripts/related-graph.test.ts`, with a recorded pre-implementation failing baseline before implementation starts.
 5. **Reopening a closed view after cached data becomes stale**: Not applicable because this change modifies no web view or React Query cache.
 6. **Large data volume**: Covered by S9 (full repository scale of 1,548+ modules, 594+ test specs, and 6,000+ untracked paths; ledger 300-Worker/30k-message sizing does not apply because no ledger tables or queries change).
 7. **Malformed or dirty data**: Covered by S7.

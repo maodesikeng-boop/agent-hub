@@ -93,7 +93,7 @@ export async function loadVitestProjectSpecs(_repoRoot: string): Promise<VitestP
 
 /**
  * Precondition: `file` is a repo-relative POSIX path and `knownFiles` contains all discoverable repo-relative POSIX module paths.
- * Postcondition: parses `source` into runtime import edges, re-export edges, intra-file top-level declaration references (including JSX identifiers and excluding type-only syntax), and top-level side-effect references; sets `parseFailed: true` on syntax error instead of throwing.
+ * Postcondition: parses `source` into runtime static import edges, re-export edges, whole-file fail-closed edges (`imported: "*"`, `local: null`) for runtime dynamic `import("./...")` (`ImportExpression`, including `vi.mock(import("./..."))`) and relative string-literal `vi.mock`, `vi.doMock`, `vi.unmock`, `vi.importActual`, and `vi.importMock` calls, intra-file top-level declaration references (including JSX identifiers and excluding TypeScript type-only syntax and `TSImportType`), and top-level side-effect references; sets `parseFailed: true` on syntax error instead of throwing.
  */
 export function analyzeModuleSource(_file: string, _source: string, _knownFiles: ReadonlySet<string>): ModuleSummary {
   throw new Error("Not implemented");
@@ -114,7 +114,7 @@ export function diffChangedExports(
 
 /**
  * Precondition: `input.projects` reflects the repository's Vitest project globs and `setupFiles`, and `input.sources` maps repo-relative POSIX code paths to current source text.
- * Postcondition: returns `fullSuite: true` for config triggers, or the sorted deduplicated list of affected test files matching the active platform's project globs plus `alwaysRunTests`, traversing barrels and `setupFiles` at symbol granularity, bridging dynamic vendor loaders, and recording shortest causal `reasons`.
+ * Postcondition: returns `fullSuite: true` for config triggers, or the sorted deduplicated list of affected test files matching the active platform's project globs plus `alwaysRunTests`, traversing barrels and `setupFiles` at symbol granularity, treating dynamic `import("./...")` and `vi.mock`/`vi.doMock`/`vi.unmock`/`vi.importActual`/`vi.importMock` targets as fail-closed whole-file dependencies, bridging dynamic vendor loaders, and recording shortest causal `reasons`.
  */
 export function resolveAffectedTests(_input: ResolveAffectedInput): AffectedTestsResult {
   throw new Error("Not implemented");

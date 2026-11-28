@@ -525,4 +525,66 @@ describe("scripts/related-graph.ts acceptance scenarios", () => {
     expect(winResult.testFiles).toEqual(["src/guard.test.ts", "test/eval/other.test.ts"]);
     expect(winResult.testFiles).not.toContain("test/eval/isolation.test.ts");
   });
+
+  it("S11: treats dynamic import() and vi.mock/doMock/unmock/importActual/importMock as fail-closed whole-file edges while ignoring TSImportType", () => {
+    const oldTarget = "export const alpha = 1;\nexport const beta = 2;\nexport interface TargetShape { id: string; }\n";
+    const newTarget = "export const alpha = 99;\nexport const beta = 2;\nexport interface TargetShape { id: string; }\n";
+
+    const baseSources = new Map<string, string>([
+      ["src/mod/target.ts", oldTarget],
+      ["src/mod/mock-str.test.ts", 'import { vi } from "vitest";\nvi.mock("./target.ts", () => ({ beta: 2 }));\n'],
+      ["src/mod/domock.test.ts", 'import { vi } from "vitest";\nvi.doMock("./target.ts", () => ({ beta: 2 }));\n'],
+      ["src/mod/unmock.test.ts", 'import { vi } from "vitest";\nvi.unmock("./target.ts");\n'],
+      ["src/mod/import-actual.test.ts", 'import { vi } from "vitest";\nexport const load = () => vi.importActual("./target.ts");\n'],
+      ["src/mod/import-mock.test.ts", 'import { vi } from "vitest";\nexport const load = () => vi.importMock("./target.ts");\n'],
+      ["src/mod/dynamic-import.test.ts", 'export const load = () => import("./target.ts");\n'],
+      ["src/mod/mock-import.test.ts", 'import { vi } from "vitest";\nvi.mock(import("./target.ts"), () => ({ beta: 2 }));\n'],
+      ["src/mod/type-only-import.ts", 'export function shape(): import("./target.ts").TargetShape { return { id: "1" }; }\n'],
+      ["src/mod/type-only-import.test.ts", 'import { shape } from "./type-only-import.ts";\nvoid shape;\n'],
+      ["test/clean-env.ts", "export {};\n"],
+      ["test/spawn-guard.ts", "export {};\n"],
+      ["src/web/test-setup.ts", "export {};\n"],
+      ["src/guard.test.ts", "export {};\n"],
+    ]);
+    const currentSources = new Map(baseSources);
+    currentSources.set("src/mod/target.ts", newTarget);
+    const known = new Set(currentSources.keys());
+
+    for (const file of [
+      "src/mod/mock-str.test.ts",
+      "src/mod/domock.test.ts",
+      "src/mod/unmock.test.ts",
+      "src/mod/import-actual.test.ts",
+      "src/mod/import-mock.test.ts",
+      "src/mod/dynamic-import.test.ts",
+      "src/mod/mock-import.test.ts",
+    ]) {
+      const summary = analyzeModuleSource(file, currentSources.get(file)!, known);
+      expect(summary.imports, file).toContainEqual({ target: "src/mod/target.ts", imported: "*", local: null });
+    }
+    const typeOnlySummary = analyzeModuleSource("src/mod/type-only-import.ts", currentSources.get("src/mod/type-only-import.ts")!, known);
+    expect(typeOnlySummary.imports).toEqual([]);
+
+    const result = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/mod/target.ts"],
+      projects: SYNTHETIC_PROJECTS,
+      alwaysRunTests: ["src/guard.test.ts"],
+      sources: currentSources,
+      readBaseFile: makeBaseReader(baseSources),
+    });
+
+    expect(result.testFiles).toEqual([
+      "src/guard.test.ts",
+      "src/mod/domock.test.ts",
+      "src/mod/dynamic-import.test.ts",
+      "src/mod/import-actual.test.ts",
+      "src/mod/import-mock.test.ts",
+      "src/mod/mock-import.test.ts",
+      "src/mod/mock-str.test.ts",
+      "src/mod/unmock.test.ts",
+    ]);
+    expect(result.testFiles).not.toContain("src/mod/type-only-import.test.ts");
+  });
 });
