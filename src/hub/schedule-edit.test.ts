@@ -1,17 +1,18 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createAgentApi } from "../daemon/agent-api/server.ts";
+import { createAgentApi, startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
 import { createSessionTokens } from "../daemon/agent-api/tokens.ts";
 import { createLedger } from "../daemon/ledger/index.ts";
 import { HUB_USAGE_PROMPT, WORKER_HUB_USAGE_PROMPT } from "../daemon/prompt.ts";
 import { buildRouterSystemPrompt } from "../daemon/router/prompt.ts";
 import { openTestDb } from "../daemon/store/test-helpers.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, HUB_HELP_ONLY_COMMANDS } from "../shared/hub.ts";
-import { MAX_SCHEDULE_NAME_CHARS } from "../shared/limits.ts";
+import { MAX_SCHEDULE_NAME_CHARS, MAX_TASK_BYTES } from "../shared/limits.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
+import { resolveHubPaths } from "../shared/paths.ts";
 import { runHub } from "./cli.ts";
 import { parseCommand } from "./parse.ts";
 import { HUB_CLI_REGISTRY, renderHelpIndex, resolveHelpTarget } from "./registry.ts";
@@ -180,6 +181,97 @@ describe("S6 & S4 (Agent API): POST /v1/schedule.edit validation and round-trip"
     expect(routerRes.statusCode).toBe(403);
     expect(routerRes.json()).toMatchObject({ ok: false, code: "forbidden" });
     expect((await postEdit({ scheduleId: 99_999, name: "无" })).statusCode).toBe(404);
+  });
+});
+
+describe("S6 (CLI end-to-end): authenticated hub schedule edit exits 2 on invalid name or oversized prompt with zero ledger writes", () => {
+  let root: string;
+  let db: ReturnType<typeof openTestDb>;
+  let ledger: ReturnType<typeof createLedger>;
+  let running: RunningAgentApi;
+  let pmEnv: Record<string, string | undefined>;
+  let scheduleId: number;
+  let sessionId: number;
+
+  beforeEach(async () => {
+    root = realpathSync.native(mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "ah-se-")));
+    mkdirSync(join(root, "pm-home"), { recursive: true });
+    db = openTestDb();
+    const now = new Date(2026, 10, 4, 8, 0).getTime();
+    ledger = createLedger(db, {
+      now: () => now,
+      pmHomeRoot: join(root, "pm-home"),
+      dataHome: join(root, ".agent-hub"),
+    });
+    const lin = ledger.createPm({ name: "小林", mode: "manage_only", persona: "" });
+    sessionId = lin.sessionId;
+    scheduleId = ledger.hubCall(lin.sessionId, "schedule.add", { name: "日报", prompt: "v1", daily: "09:00" }).data.schedule.id;
+
+    const tokens = createSessionTokens();
+    const token = tokens.issue(lin.sessionId);
+    const sock = process.platform === "win32" ? resolveHubPaths({}, root).hubSock : join(root, "run", "hub.sock");
+    running = await startAgentApi({ ledger, tokens, runDir: join(root, "run"), hubSock: sock });
+    pmEnv = { [ENV_HUB_TOKEN]: token, [ENV_HUB_SOCK]: running.socketPath };
+  });
+
+  afterEach(async () => {
+    await running.close();
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const editCallCount = () =>
+    db.get<{ n: number }>("SELECT count(*) AS n FROM hub_calls WHERE command = 'schedule.edit'")!.n;
+
+  it("exits 2 without calling the daemon for invalid names (brackets, control chars, blank, over 40 chars) and oversized prompts (> 100 KB)", async () => {
+    const before = ledger.hubCall(sessionId, "schedule.show", { scheduleId }).data.schedule;
+
+    const invalidCases: Array<{ argv: string[]; stdin?: string; pattern: RegExp }> = [
+      { argv: ["schedule", "edit", String(scheduleId), "--name", "【bad】"], pattern: /【/ },
+      { argv: ["schedule", "edit", String(scheduleId), "--name", "bad】"], pattern: /【/ },
+      { argv: ["schedule", "edit", String(scheduleId), "--name", "a\nb"], pattern: /控制字符|换行/ },
+      { argv: ["schedule", "edit", String(scheduleId), "--name", "日报\n"], pattern: /控制字符|换行/ },
+      { argv: ["schedule", "edit", String(scheduleId), "--name", "   "], pattern: /名字/ },
+      { argv: ["schedule", "edit", String(scheduleId), "--name", ""], pattern: /名字/ },
+      {
+        argv: ["schedule", "edit", String(scheduleId), "--name", "长".repeat(MAX_SCHEDULE_NAME_CHARS + 1)],
+        pattern: new RegExp(`定时任务名称有 .*上限 ${MAX_SCHEDULE_NAME_CHARS} 字`),
+      },
+      {
+        argv: ["schedule", "edit", String(scheduleId), "--stdin"],
+        stdin: "x".repeat(MAX_TASK_BYTES + 1),
+        pattern: new RegExp(`任务说明有 .*上限 ${MAX_TASK_BYTES / 1024} KB`),
+      },
+      {
+        argv: ["schedule", "edit", String(scheduleId), "--stdin"],
+        stdin: "中".repeat(Math.floor(MAX_TASK_BYTES / 3) + 1),
+        pattern: new RegExp(`任务说明有 .*上限 ${MAX_TASK_BYTES / 1024} KB`),
+      },
+    ];
+
+    for (const c of invalidCases) {
+      const res = await invokeHub(c.argv, c.stdin ?? "", pmEnv);
+      expect(res.code, `argv=${JSON.stringify(c.argv)}`).toBe(HUB_EXIT.usage);
+      expect(res.stderr).toMatch(c.pattern);
+    }
+
+    expect(editCallCount()).toBe(0);
+    expect(ledger.hubCall(sessionId, "schedule.show", { scheduleId }).data.schedule).toEqual(before);
+  });
+
+  it("accepts exact boundary values (40-char name, trimmed spaces, 100 KB prompt) end to end with exit 0", async () => {
+    const exactName = "长".repeat(MAX_SCHEDULE_NAME_CHARS);
+    const exactPrompt = "x".repeat(MAX_TASK_BYTES);
+    const res = await invokeHub(
+      ["schedule", "edit", String(scheduleId), "--name", `  ${exactName}  `, "--stdin"],
+      exactPrompt,
+      pmEnv,
+    );
+    expect(res.code).toBe(HUB_EXIT.ok);
+    expect(editCallCount()).toBe(1);
+    const after = ledger.hubCall(sessionId, "schedule.show", { scheduleId }).data.schedule;
+    expect(after.name).toBe(exactName);
+    expect(after.prompt).toBe(exactPrompt);
   });
 });
 

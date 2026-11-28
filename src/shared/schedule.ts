@@ -61,7 +61,10 @@ export interface ScheduleEditPlan {
 export type ScheduleFrequency = Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">;
 
 export function validateScheduleName(raw: unknown): { ok: true; name: string } | { ok: false; error: string } {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (typeof raw !== "string" || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(raw)) {
+    return { ok: false, error: "定时任务的名字不能是空的，也不能带换行等控制字符" };
+  }
+  const trimmed = raw.trim();
   const limit = checkHubLimit("schedule.name", trimmed);
   if (limit !== null) return { ok: false, error: formatHubLimitViolations([limit]) };
   const name = normalizeName(trimmed, HUB_LIMITS["schedule.name"].max);

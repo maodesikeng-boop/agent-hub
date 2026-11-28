@@ -1,7 +1,7 @@
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { CAPABILITY_KINDS, type CapabilityKind } from "../shared/pm-capabilities.ts";
-import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
+import { checkEveryMinutes, parseDailyTime, parseEvery, validateScheduleName } from "../shared/schedule.ts";
 import { AGENT_VENDORS, isAgentVendor } from "../shared/vendors.ts";
 import {
   UsageError,
@@ -134,7 +134,11 @@ export function parseScheduleCommand({ group, action, rest, values }: GroupArgs)
     expectPositionals(rest, 1, "schedule edit");
     const scheduleId = idOf(rest[0], "schedule edit", "定时任务");
     const body: Record<string, unknown> = { scheduleId };
-    if (values.name !== undefined) body.name = values.name;
+    if (values.name !== undefined) {
+      const checkedName = validateScheduleName(values.name);
+      if (!checkedName.ok) throw new UsageError(checkedName.error);
+      body.name = checkedName.name;
+    }
     parseScheduleFrequencyFlags(values, body, "schedule edit", false);
     const hasStdin = values.stdin === true;
     if (values.name === undefined && values.daily === undefined && values.every === undefined && !hasStdin) {
