@@ -73,7 +73,7 @@ Launch **Bellwood** and open **Settings → Providers** (it opens automatically 
 <br>
 
 - **Claude Code (`claude`).** On macOS and Linux, run `curl -fsSL https://claude.ai/install.sh | bash`. On Windows PowerShell, run `irm https://claude.ai/install.ps1 | iex`. Sign in with `claude auth login`.
-- **Antigravity (`agy`).** On macOS and Linux, run `curl -fsSL https://antigravity.google/cli/install.sh | bash`. On Windows PowerShell, run `irm https://antigravity.google/cli/install.ps1 | iex`. Run `agy` to sign in, or set `GEMINI_API_KEY`.
+- **Antigravity (`agy`).** On macOS and Linux, run `curl -fsSL https://antigravity.google/cli/install.sh | bash`. On Windows PowerShell, run `irm https://antigravity.google/cli/install.ps1 | iex`. Run `agy` to sign in, or set `GEMINI_API_KEY` and set `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json`.
 - **Codex (`codex`).** On macOS and Linux, run `curl -fsSL https://chatgpt.com/codex/install.sh | sh`. On Windows, run `npm install -g @openai/codex`. Sign in with `codex login`, or `codex login --device-auth` on headless servers.
 - **Pi (`pi`).** On macOS and Linux, run `curl -fsSL https://pi.dev/install.sh | sh`. On Windows PowerShell, run `irm https://pi.dev/install.ps1 | iex` (or `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`). Run `pi` and type `/login`.
 - **DeepSeek Harness (`dsh`).** Run `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`, then run `dsh` or write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env`.
@@ -83,7 +83,11 @@ Launch **Bellwood** and open **Settings → Providers** (it opens automatically 
 
 </details>
 
-### 3. Connect Feishu, Linux, or other computers (optional)
+### 3. Create your first project manager and send a task
+
+Click `+` in the project list header to open **New project manager**, enter a **Name**, pick your repository in **Main folder** (or type an absolute path on Linux), and click **Create**. Send your first task in the chat composer: the Project Manager aligns on the goal in one thread, tracks multi-step work in a live checklist, and dispatches Workers into isolated git worktrees when code changes are needed.
+
+### 4. Connect Feishu, Linux, or other computers (optional)
 
 - **Feishu bot and project groups.** While the daemon is running, run `node src/feishu/main.ts connect` and scan the QR code in Feishu. Run `node src/feishu/main.ts status` to inspect bindings.
 - **Multiple computers.** Bellwood includes an official public blind relay and GitHub Device Flow client ID. Open **Settings → Computers**, sign in with the same GitHub account on each computer, and compare the six-digit code on both screens to trust the device. To use a self-hosted relay, set `FUSA_RELAY_URL` and `FUSA_GITHUB_CLIENT_ID`.
@@ -191,13 +195,13 @@ Every multi-step turn renders a live progress checklist in the chat stream so yo
 Project Managers coordinate Workers, decision cards, scheduled tasks, external waits, and capabilities through the built-in `hub` CLI:
 
 ```sh
-hub graph create --stdin                             # declare a multi-step Task Graph with automatic handoff
-hub worker start --title "..." --stdin               # dispatch one Worker into an isolated git worktree
-hub ask --option "A" --option "B" --stdin            # post a decision card with a recommended choice
-hub watch add --until "..." --every 30s --stdin      # wait in the background for an external check
-hub schedule add --name "..." --daily 09:00 --stdin  # run a recurring PM prompt on a schedule
-hub caps                                             # list skills, MCP servers, and connectors on this project
-hub persona edit --stdin                             # update the PM's mode or persona instructions
+hub graph create --stdin                                   # declare a multi-step Task Graph with automatic handoff
+hub worker start --title "..." --stdin                     # dispatch one Worker into an isolated git worktree
+hub ask --option "A" --option "B" --recommended A --stdin  # post a decision card with a recommended choice
+hub watch add --until "..." --every 30s --stdin            # wait in the background for an external check
+hub schedule add --name "..." --daily 09:00 --stdin        # run a recurring PM prompt on a schedule
+hub caps                                                   # list skills, MCP servers, and connectors on this project
+hub persona edit --stdin                                   # update the PM's mode or persona instructions
 ```
 
 - **Automatic step progression.** Once a Task Graph starts, the daemon passes the overall goal, branch state, and handoff notes to each downstream Worker automatically. It wakes the PM or posts a card only when a step fails, deviates from scope, reaches a checkpoint, or completes the graph.
@@ -223,7 +227,7 @@ When your repositories span a laptop, a desktop workstation, and a Linux server,
 
 - **One tray for every pending decision and delivery.** When any project on any computer finishes a graph or pauses for your decision, its card appears in Router. Your answer syncs back to the owning PM immediately.
 - **Natural-language dispatch.** Ask about a project by its everyday name without remembering hostnames or folder paths. Router matches the computer and PM, forwards the request, and displays the reply under your message.
-- **Two-tier catalog and stateless dispatch.** The daemon maintains a short one-line card per project plus an on-demand detailed brief. Each Router turn runs in a clean single-turn session without carrying a growing chat history, so response latency stays steady as project count grows and model switches take effect on the next turn.
+- **Two-tier catalog and stateless dispatch.** The daemon maintains a short one-line card per project plus an on-demand detailed brief. Each Router turn runs in a clean single-turn session without accumulating chat history across turns, and model switches take effect on the next turn.
 - **Private account mesh.** Sign in with the same GitHub account on macOS, Windows, and Linux, confirm the six-digit code once, and your devices connect directly over LAN or fall back to an end-to-end encrypted relay over mutual TLS 1.3. Source code and logs stay on each computer with no public IP, SSH tunnel, or port forwarding.
 
 ## Feishu on mobile and in team groups
@@ -252,7 +256,7 @@ Connect **Feishu** (or **Lark**) over an outbound WebSocket with no public serve
 Workers edit code and run commands as your current OS user. Review the actual isolation boundaries before running on sensitive computers:
 
 - **Regular Workers.** Inside native OS sandboxes (`sandbox-exec` on macOS, `bubblewrap` on Linux, and `fusa-run.exe` Job Object + restricted token + NTFS ACLs on Windows), each regular Worker writes only to its own worktree inside protected roots, cannot read Bellwood's `state/` or `backups/` directories (SQLite ledger, UI and provider tokens, Feishu and mesh keys, PM memory, or other launch directories), and connects only to `run/hub.sock` rather than `run/admin.sock` ([docs/write-scope.md](docs/write-scope.md)). Outside protected roots, it keeps your user permissions for the project folder, tests, and network.
-- **Read-only Workers.** Block writes everywhere except a private temp directory and required vendor runtime paths, restrict tools to read-only operations, enforce the same data-directory boundary, and block reads of SSH, cloud, vendor CLI, and `.env` credential files ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)).
+- **Read-only Workers.** Block writes everywhere except a private temp directory and required vendor runtime paths, restrict tools to read-only operations, enforce the same data-directory boundary, and block reads of SSH, cloud, vendor CLI, and `.env` credential files ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)). On Windows 11 24H2 or later, outer read-only isolation uses `@microsoft/mxc-sdk` ProcessContainer when available; when MXC is unavailable (including on older Windows versions), Bellwood warns and falls back to the restricted token with data-directory NTFS ACLs and tool checks, which does not enforce full filesystem read-only access or block reads of all external credential paths.
 - **User-confirmed Computer Use exceptions (macOS only).** On macOS, a Worker that explicitly mounts a Computer Use capability can request `--no-outer-sandbox` so the vendor's built-in sandbox runs without nested `sandbox-exec` conflicts. The Worker stays paused until you click **Approve this run** in the Web workbench (Feishu shows a read-only notice), and each desktop app Computer Use tries to control requires a separate per-app confirmation card (**Allow for this run** or **Deny**). While running without the outer sandbox, the Worker can read files across the disk under the vendor's built-in sandbox, including Bellwood's data directory. Both approvals expire automatically when that Worker ends.
 - **Project Managers and local network.** Project Managers run as your OS user without an outer sandbox, and the local web UI listens on `127.0.0.1` only by default. See [SECURITY.md](SECURITY.md) for the full threat model and private vulnerability reporting.
 

@@ -24,6 +24,7 @@ export const ALWAYS_RUN_TESTS = [
   "src/shared/errors-guard.test.ts",
   "src/shared/vendor-guard.test.ts",
   "src/user-docs-consistency.test.ts",
+  "src/user-docs-followups.test.ts",
   "src/vendors/contract.test.ts",
   "src/wall-clock-guard.test.ts",
   "src/web/query-write-guard.test.ts",

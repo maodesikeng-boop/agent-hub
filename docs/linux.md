@@ -34,7 +34,7 @@ You can install and authenticate any supported CLI from **Settings → Providers
 | --- | --- | --- |
 | Claude Code (`claude`) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` |
 | Codex (`codex`) | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `codex login --device-auth` |
-| Antigravity (`agy`) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | Run `agy` (paste auth code) or set `GEMINI_API_KEY` |
+| Antigravity (`agy`) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | Run `agy` (paste auth code), or set `GEMINI_API_KEY` with `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json` |
 | Pi (`pi`) | `curl -fsSL https://pi.dev/install.sh \| sh` | Run `pi`, then `/login` |
 | DeepSeek Harness (`dsh`) | `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` | Write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env` |
 | Cursor (`cursor-agent`) | `curl https://cursor.com/install -fsS \| bash` | `cursor-agent login` |
@@ -72,7 +72,7 @@ loginctl enable-linger "$USER"
 journalctl --user -u agent-hub -f
 ```
 
-Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. If you run more than one Bellwood instance on the same Linux host, set `AGENT_HUB_PORT` (`4317` by default) and `FUSA_MESH_PORT` (`4320` by default; `0` asks the OS for a free port) in the unit file so the two instances do not collide. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
+Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. If you run more than one Bellwood instance on the same Linux host, give each service its own `AGENT_HUB_HOME` (each daemon acquires an exclusive lock at `<AGENT_HUB_HOME>/state/lock` and exits with `DaemonAlreadyRunningError` if two services share a data directory) along with distinct `AGENT_HUB_PORT` (`4317` by default) and `FUSA_MESH_PORT` (`4320` by default; `0` asks the OS for a free port) values in each unit file. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
 
 ## 4. Connect from your laptop or phone
 
