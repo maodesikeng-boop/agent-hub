@@ -26,11 +26,11 @@ Bellwood connects to Feishu (and Lark) over an outbound persistent WebSocket (`W
 
 | Tier | Capabilities |
 | --- | --- |
-| `observer` | Read-only in group; messages stay in passive context when the owner starts a turn and never wake the PM. |
-| `chat_only` (default) | Can `@`-mention the bot to start PM turns; card buttons, `Stop`, and file uploads stay owner-only. |
+| `observer` (default) | Read-only in group; messages stay in passive context when the owner starts a turn and never wake the PM. |
+| `chat_only` | Can `@`-mention the bot to start PM turns; card buttons, `Stop`, and file uploads stay owner-only. |
 | `collaborator` | Can `@`-mention the bot, answer decision cards, click `Stop`, and upload attachments. |
 
-- **Owner-only ledger lock (`FEISHU_GUEST_BLOCKED_HUB_COMMANDS`)**: Even during a turn triggered by a `chat_only` or `collaborator` guest, `hubCall` in `src/daemon/ledger/hub-commands.ts` hard-blocks system-mutating commands (creating projects, attaching or detaching workspace folders, editing setup scripts, or editing PM personas).
+- **Owner-only ledger lock (`FEISHU_GUEST_BLOCKED_HUB_COMMANDS`)**: Even during a turn triggered by a `chat_only` or `collaborator` guest, `hubCall` in `src/daemon/ledger/hub-commands.ts` hard-blocks system-mutating commands (creating projects, attaching or detaching workspace folders, editing setup scripts, or editing PM personas; plus `graph.decide`, `schedule.*` mutations, and `watch.*` mutations for `chat_only` and `observer`). Policy cards display an explicit host-privilege warning before enabling `chat_only` or `collaborator`, and `node src/feishu/main.ts policy` prints the same warning when setting either tier.
 
 ## Streaming JSON 2.0 cards, decisions, and media
 

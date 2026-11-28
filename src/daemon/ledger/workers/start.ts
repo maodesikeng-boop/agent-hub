@@ -8,6 +8,7 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import { reviewTakeoverWorkspaceNote } from "../../../shared/review.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
 import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage } from "../../prompt.ts";
+import { checkReadonlyWorkerSandbox } from "../../driver/kernel-readonly.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
 import {
   INHERIT_WORKER_CAPABILITIES,
@@ -345,7 +346,19 @@ export function startIn(
   const maxTimeMs = validMaxTimeMs(args.maxTimeMs ?? bindTarget?.maxTimeMs ?? undefined);
   const agent = resolveStartAgent(w, caller, args, bindTarget);
   const sandboxRequest = args.noOuterSandbox === true || bindTarget?.noOuterSandbox === true;
-  if (!sandboxRequest && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  if (!sandboxRequest) {
+    if (agent.readonly) {
+      const check = checkReadonlyWorkerSandbox({
+        vendor: agent.vendor,
+        platform: w.options.platform,
+        osSandboxed: w.ctx.osSandboxed(),
+        readonlyKernelSandboxed: w.ctx.readonlyKernelSandboxed(),
+      });
+      if (!check.ok) throw fail("invalid", check.message);
+    } else if (!w.ctx.osSandboxed()) {
+      throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+    }
+  }
   const computerUse = sandboxRequest ? requireSandboxRequest(w, caller.pmId, { ...agent, review: bindTarget?.review === true, inventory: context.capabilityInventory }) : null;
   const card = w.projects.projectCard(project);
   const space = resolveStartWorkspace(w, project, card, args, context, bindTarget, takeover);

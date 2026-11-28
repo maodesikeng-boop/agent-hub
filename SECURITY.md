@@ -29,7 +29,7 @@ These checks protect local endpoints from other users and browser origins. Proce
 - Regular and read only Workers cannot read the `~/.agent-hub` data directory, including `state/` and `backups/`. They can read only `worktrees/`, `uploads/`, `tools/`, `run/bin/`, and their own session launch directory, and can connect only to `run/hub.sock`. The UI token, provider and Feishu secrets, mesh keys, SQLite ledger, logs, backups, project manager memory, and `run/admin.sock` stay out of reach.
 - macOS uses `sandbox-exec`. Linux uses `bubblewrap`. Windows uses `fusa-run.exe` with a Job Object for the process tree, a restricted token, and explicit deny write and deny read NTFS ACLs across protected roots and the data directory.
 - Read only mode allows writes only to a private session temp directory and required vendor runtime paths. Allowed workspaces and the network remain accessible. The data directory, including the SQLite ledger and logs, and known user credential paths are unreadable. File pattern coverage varies by platform and vendor. MCP connectors allow only tools that declare `readOnlyHint: true` without `destructiveHint: true`, subject to explicit allow and deny rules.
-- On Windows 11 24H2 or later, outer read only enforcement uses the `@microsoft/mxc-sdk` ProcessContainer when the capability probe succeeds. When MXC is unavailable, including on older Windows versions, a read only Worker that needs the outer sandbox falls back to the restricted token with data directory NTFS ACLs and tool checks. Bellwood shows a warning because this fallback does not enforce full filesystem read only access or block reads of all external credential paths.
+- On Windows 11 24H2 or later, outer read only enforcement uses the `@microsoft/mxc-sdk` ProcessContainer when the capability probe succeeds. When MXC is unavailable, including on older Windows versions, Bellwood fails closed and refuses to start read only Workers or Router sessions that require the outer sandbox instead of falling back to tool-layer checks. Codex (`codex`) read only Workers still work through Codex's native read only sandbox, and regular Workers continue using `fusa-run.exe` Job Objects, restricted tokens, and NTFS ACLs.
 - On macOS, a Worker that explicitly mounts a Computer Use capability can request `--no-outer-sandbox` so the vendor's built-in sandbox runs without nested `sandbox-exec` conflicts. The Worker stays paused until the human user clicks **Approve this run** in the Web workbench (Feishu shows a read only notice, and `hub` has no approval command). While running without the outer sandbox, the Worker can read files across the disk under the vendor's built-in sandbox, including Bellwood's data directory and credentials. Each desktop app Computer Use attempts to control also requires a separate per-app approval card (**Allow for this run** or **Deny**) in the Web workbench. Both approvals bind to that single Worker run and expire when the Worker ends. Linux and Windows reject `--no-outer-sandbox` and keep their mandatory outer sandboxes.
 
 ## Account mesh and relays
@@ -47,11 +47,11 @@ The owner sets a guest tier for each project group:
 
 | Tier | Guest access |
 | --- | --- |
-| Read only (`observer`) | Read group messages. A guest message does not start a project manager turn. Bellwood can include it as context when the owner starts a turn. |
-| Chat only (`chat_only`, default) | Mention the bot to talk to the project manager. Decision cards, stopping work, and attachments are reserved for the owner. |
+| Read only (`observer`, default) | Read group messages. A guest message does not start a project manager turn. Bellwood can include it as context when the owner starts a turn. |
+| Chat only (`chat_only`) | Mention the bot to talk to the project manager. Decision cards, stopping work, and attachments are reserved for the owner. |
 | Collaborator (`collaborator`) | Chat, answer decision cards, stop work, and send attachments. |
 
-Only the owner can change group settings. During a turn initiated by a guest, the ledger rejects commands reserved for the owner, such as creating projects, attaching or detaching folders, editing setup commands, and changing personas.
+Only the owner can change group settings. New project groups default to Read only (`observer`), and upgrading from earlier versions tightens legacy `chat_only` groups to `observer` while keeping explicit `collaborator` groups unchanged. During a turn initiated by a guest, the ledger rejects commands reserved for the owner, such as creating projects, attaching or detaching folders, editing setup commands, and changing personas (and for `chat_only` or `observer`, also `graph.decide`, `schedule.*` mutations, and `watch.*` mutations).
 
 Use Chat only and Collaborator with people you trust. Guest messages can instruct an unsandboxed project manager through prompt injection. The owner only checks in the ledger do not constrain shell commands that the project manager runs as your OS user.
 
@@ -86,7 +86,7 @@ Use Chat only and Collaborator with people you trust. Guest messages can instruc
 - Worker（普通与只读）读不到数据目录，只能读 `worktrees/`、`uploads/`、`tools/`、`run/bin/` 与本会话的启动目录，只能连 `run/hub.sock`。界面令牌、各类密钥、账本数据库、日志、备份、项目经理记忆与 `run/admin.sock` 都在边界之外。
 - macOS 使用 `sandbox-exec`。Linux 使用 `bubblewrap`。Windows 使用 `fusa-run.exe`，以 Job Object 管理进程树，并通过受限令牌与 NTFS ACL 实施数据目录的禁写与禁读。
 - 只读策略仅允许写会话私有临时目录和厂商运行所需的路径，并限制读取已知凭据路径与整个数据目录。文件通配规则的覆盖因平台和厂商而异。网络仍可访问。MCP 连接器默认放行声明 `readOnlyHint: true` 且未声明 `destructiveHint: true` 的工具，并可以通过显式规则调整。
-- Windows 11 24H2 或更新版本在能力探测通过时可使用 `@microsoft/mxc-sdk` 的 ProcessContainer 实施外层只读沙箱。旧版 Windows 或 MXC 不可用时，需要外层沙箱的只读 Worker 会降级为受限令牌和工具层检查。Bellwood 会显示告警，因为降级路径无法保证全盘只读或禁止读取所有配置的凭据路径。
+- Windows 11 24H2 或更新版本在能力探测通过时可使用 `@microsoft/mxc-sdk` 的 ProcessContainer 实施外层只读沙箱。旧版 Windows 或 MXC 不可用时，Bellwood 默认失败关闭，直接拒绝启动需要外层沙箱的只读 Worker 与总助只读会话，不再降级为受限令牌或工具层规则兜底。Codex（`codex`）的只读 Worker 仍可通过 Codex 自带只读沙箱运行；普通 Worker 继续使用 `fusa-run.exe` 的 Job Object、受限令牌与 NTFS ACL。
 - 在 macOS 上，仅明确挂载了 Computer Use 能力的 Worker 可以申请 `--no-outer-sandbox`，以便在厂商内置沙箱下运行并避免嵌套 `sandbox-exec` 冲突。Worker 必须等待人类用户在网页工作台点击确认后才开工（飞书仅发只读提示，`hub` 不提供批准命令）。退出外层沙箱期间，Worker 在厂商内置沙箱下可读取全盘文件，包括 Bellwood 数据目录与凭据。Computer Use 每次尝试控制新的桌面应用时，还会弹出逐应用确认卡，由用户在网页工作台批准或拒绝。两类授权均仅对当前单个 Worker 生效，Worker 结束时自动撤销。Linux 与 Windows 拒绝 `--no-outer-sandbox` 并始终保留外层沙箱。
 
 ### 账号组网与盲转中继
@@ -104,10 +104,10 @@ Use Chat only and Collaborator with people you trust. Guest messages can instruc
 
 | 档位 | 访客权限 |
 | --- | --- |
-| 只读（`observer`） | 可看群消息。访客发言不会唤醒项目经理，主人发起对话时可将访客发言一并作为背景。 |
-| 仅对话（`chat_only`，默认） | 可 @ 机器人与项目经理对话。拍板卡、停止与发送附件仅限主人。 |
+| 只读（`observer`，默认） | 可看群消息。访客发言不会唤醒项目经理，主人发起对话时可将访客发言一并作为背景。 |
+| 仅对话（`chat_only`） | 可 @ 机器人与项目经理对话。拍板卡、停止与发送附件仅限主人。 |
 | 协作者（`collaborator`） | 可对话、回答拍板卡、停止与发送附件。 |
 
-群设置仅主人可改。在访客触发的轮次中，账本会硬拦截建项目、挂卸文件夹、修改准备命令、修改性格设定等主人专属操作。
+群设置仅主人可改。新建项目群默认采用只读（`observer`）档位；从旧版本升级时，历史默认 `chat_only` 群会收紧为 `observer`，已显式开启的 `collaborator` 群保持不变。在访客触发的轮次中，账本会硬拦截建项目、挂卸文件夹、修改准备命令、修改性格设定等主人专属操作（`chat_only` 与 `observer` 还会拦截 `graph.decide`、定时任务变更与监视器变更）。
 
 「仅对话」和「协作者」仅适用于互信团队。请勿向不可信外部人员开放这两档权限。访客有可能通过提示词注入影响未受沙箱限制的项目经理，账本对主人专属操作的拦截无法限制项目经理以你的系统用户身份运行的 shell 命令。

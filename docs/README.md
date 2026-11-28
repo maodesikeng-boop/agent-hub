@@ -28,6 +28,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 ## Architecture and security
 
 - [Worker write and read scope](write-scope.md): Write boundaries across protected roots and least-privilege data-directory read and socket isolation across macOS, Linux, and Windows.
+- [Security boundary hardening for Feishu guests and Windows read-only isolation](security-boundary-hardening-design.md): Fail-closed `observer` default and host-privilege disclosure for Feishu project groups, expanded guest command blocks, and fail-closed Windows MXC read-only enforcement removing `--readonly-fallback`.
 - [User-confirmed Worker mode without outer sandbox](worker-no-outer-sandbox-design.md): Computer Use eligibility checks, human-only single-run confirmation cards, vendor built-in sandbox declarations, and launch-time fail-closed enforcement.
 - [Computer Use app approval cards](computer-use-app-approval-design.md): Per-app workbench confirmation for Computer Use Workers, the vendor-neutral approval gate, Worker-run grants, and how cards end.
 - [External capabilities](pm-capabilities-design.md): Router, PM, and Worker policies for skills, MCP servers, and connectors, Worker `inherit`, `none`, and `custom` modes, vendor isolation levels, and the project setup command API.

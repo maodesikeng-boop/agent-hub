@@ -9,7 +9,6 @@ import { startAgentApi } from "../../src/daemon/agent-api/server.ts";
 import { createSessionTokens } from "../../src/daemon/agent-api/tokens.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import {
-  WIN32_READONLY_FALLBACK_WARNING,
   osSandboxAvailable,
   prepareOsSandboxForLaunch,
   resetOsSandboxCacheForTest,
@@ -80,7 +79,7 @@ afterEach(async () => {
   }
 });
 
-describe.runIf(process.platform === "win32")("Windows 真机集成：受限令牌 + ACL 沙箱（禁写、数据目录禁读）与无 MXC 只读 Worker 回退", () => {
+describe.runIf(process.platform === "win32")("Windows 真机集成：受限令牌 + ACL 沙箱（禁写、数据目录禁读）与无 MXC 只读 Worker 严格失败关闭", () => {
   it("fusa-run probe 通过；普通 Worker 拒写 state\\ 与别的 worktree，icacls/takeown/Set-Acl 全败，写本 worktree / %TEMP% / 外部目录与连 hub 管道全通；PM 无沙箱可写 state\\", { timeout: 45_000 }, async () => {
     expect(osSandboxAvailable("win32")).toBe(true);
 
@@ -352,8 +351,8 @@ writeFileSync(
     expect(readFileSync(pmFile, "utf8")).toBe("pm-ok");
   });
 
-  it("非 codex 只读 Worker 在无 MXC 环境下绝不硬拒：自动回退为 4.4.2 受限令牌 + 受保护根禁写、数据目录禁读 + 工具层禁写，并发出清晰降级告警", { timeout: 30_000 }, async () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "fusa-win-ro-fallback-")));
+  it("非 codex 只读 Worker 在无 MXC 环境下严格失败关闭：不降级且拒绝启动进程", { timeout: 30_000 }, async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "fusa-win-ro-failclosed-")));
     cleanups.push(() => removeTreeWithRetry(root));
 
     const dataDir = join(root, "agent-hub");
@@ -369,43 +368,18 @@ writeFileSync(
     await ensureWin32ProtectedRootAcl(stateDir, dataDir);
     await allowWin32WorkerWorktreeAcl(stateDir, "600", wtDir);
 
-    // 1) 验证 --readonly-fallback 内核级效果：连 worktree 目录本身与额外 protectedRoots 也一并禁止写入！
     const roLaunchDir = join(stateDir, "launch", "600");
     mkdirSync(roLaunchDir, { recursive: true });
-    writeFileSync(join(roLaunchDir, "prompt.md"), "RO_PROMPT");
-    writeFileSync(join(stateDir, "ui-token"), "UI_TOKEN");
-    writeFileSync(join(extraProtectedRoot, "peer.txt"), "PEER");
     const policy = buildReadonlyPolicy({
       homeDir: realpathSync.native(homedir()),
       stateDir,
       protectedRoots: [dataDir, extraProtectedRoot],
       dataDirScope: dataDirReadScope({ dataDir, launchDir: roLaunchDir, extraReadable: [wtDir] }),
     });
-    // 起进程前的异步准备（launch.ts 调）给 extraProtectedRoot 设拒写 ACL、数据目录设读边界；包命令行本身不碰 ACL
     await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly: policy }, "win32");
+    const base = { command: process.execPath, args: ["-e", "process.exit(0)"] };
     const roWrapped = wrapInReadonlyOsSandbox(
-      {
-        command: process.execPath,
-        args: [
-          "-e",
-          `
-const fs = require("node:fs");
-let stateBlocked = false;
-let wtBlocked = false;
-let extraRootBlocked = false;
-try { fs.writeFileSync(${JSON.stringify(join(stateDir, "ro.txt"))}, "x"); } catch { stateBlocked = true; }
-try { fs.writeFileSync(${JSON.stringify(join(wtDir, "ro.txt"))}, "x"); } catch { wtBlocked = true; }
-try { fs.writeFileSync(${JSON.stringify(join(extraProtectedRoot, "ro.txt"))}, "x"); } catch { extraRootBlocked = true; }
-let secretReadBlocked = false;
-try { fs.readFileSync(${JSON.stringify(join(stateDir, "ui-token"))}); } catch { secretReadBlocked = true; }
-let launchReadable = false;
-try { launchReadable = fs.readFileSync(${JSON.stringify(join(roLaunchDir, "prompt.md"))}, "utf8") === "RO_PROMPT"; } catch {}
-let extraRootReadable = false;
-try { extraRootReadable = fs.readFileSync(${JSON.stringify(join(extraProtectedRoot, "peer.txt"))}, "utf8") === "PEER"; } catch {}
-fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked, extraRootBlocked, secretReadBlocked, launchReadable, extraRootReadable }));
-`,
-        ],
-      },
+      base,
       {
         tmpDir: tmpRo,
         stateDir,
@@ -419,24 +393,11 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
       "win32",
       { disableWin32Mxc: true },
     );
-    expect(roWrapped.osSandboxed).toBe(true);
-    expect(roWrapped.readonlyMode).toBe("fallback_write_restricted");
-    expect(roWrapped.readonlyFallbackWarning).toBe(WIN32_READONLY_FALLBACK_WARNING);
+    expect(roWrapped).toEqual({ ...base, osSandboxed: false });
+    expect(roWrapped.readonlyMode).toBeUndefined();
 
-    const execRes = spawnSync(roWrapped.command, roWrapped.args, { encoding: "utf8", windowsHide: true });
-    expect(execRes.status, execRes.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(join(tmpRo, "result.json"), "utf8"))).toEqual({
-      stateBlocked: true,
-      wtBlocked: true,
-      extraRootBlocked: true,
-      secretReadBlocked: true,
-      launchReadable: true,
-      extraRootReadable: true,
-    });
-
-    // 2) 验证真实非 codex 驱动（以 Pi 驱动 + .cmd 垫片为例）启动只读会话不报错、带出工具禁写参数并发射 driver.warning
     const fakePi = writeFakePiBinary(join(root, "pi-bin"), {
-      turns: [{ finalText: "只读审查完成" }],
+      turns: [{ finalText: "不应执行" }],
     });
     const store = new MemorySessionStore();
     const sessionRow: AgentSessionRow = {
@@ -463,7 +424,6 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
     };
     store.add(sessionRow);
 
-    const logs: string[] = [];
     const events: DriverEvent[] = [];
     const promptFile = join(root, "prompt.md");
     writeFileSync(promptFile, "只读审查提示词");
@@ -473,7 +433,7 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
     const piDriver = createPiDriver({
       executablePath: fakePi.binPath,
       store,
-      log: (l) => logs.push(l),
+      readonlySpawn: (cmd, input) => wrapInReadonlyOsSandbox(cmd, input, "win32", { disableWin32Mxc: true }),
       env: {
         PATH: `${dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}`,
         FAKE_PI_LOG: fakePi.logPath,
@@ -490,28 +450,15 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
     cleanups.push(() => piDriver.shutdown());
     piDriver.onEvent((_id, ev) => events.push(ev));
 
-    const sendRes = await piDriver.send(600, {
-      messageIds: [1],
-      source: "user",
-      text: "请只读检查代码",
-    });
-    expect(sendRes.kind).toBe("written");
+    await expect(
+      piDriver.send(600, {
+        messageIds: [1],
+        source: "user",
+        text: "请只读检查代码",
+      }),
+    ).rejects.toThrow(/MXC/u);
 
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && !events.some((e) => e.type === "turn.ended")) {
-      await new Promise((r) => setTimeout(r, 40));
-    }
-
-    expect(events.some((e) => e.type === "turn.ended" && e.ok)).toBe(true);
-    expect(
-      events.some(
-        (e) => e.type === "driver.warning" && e.message === WIN32_READONLY_FALLBACK_WARNING,
-      ),
-    ).toBe(true);
-    expect(logs.some((l) => l.includes("受限令牌"))).toBe(true);
-    const piArgv = fakePi.readLogs().find((e) => Array.isArray(e.argv))?.argv ?? [];
-    expect(piArgv).toContain("--exclude-tools");
-    expect(piArgv).toContain("edit,write");
-    expect(piArgv).toContain("--no-mcp");
+    expect(events.some((e) => e.type === "driver.warning")).toBe(false);
+    expect(fakePi.readLogs()).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-use crate::sids::{ensure_reader_sid, ensure_worker_sid, load_or_create_sid_store};
+use crate::sids::{ensure_reader_sid, ensure_worker_sid};
 use crate::win::acl::allow_null_device;
 use crate::win::util::{last_os_error, win32_code_error, LocalSid, OwnedHandle};
 use std::ffi::c_void;
@@ -151,23 +151,10 @@ fn contains_sid(list: &[Vec<u8>], candidate: *mut c_void) -> bool {
 // Not WRITE_RESTRICTED: with it restricting SIDs only join write checks, so the FusaWorker read deny would never apply.
 pub fn create_worker_restricted_token(
     state_dir: &Path,
-    worker_id: Option<&str>,
+    worker_id: &str,
     reader: Option<&str>,
-    readonly_fallback: bool,
 ) -> io::Result<OwnedHandle> {
-    let (group_sid_str, worker_sid_str) = if readonly_fallback {
-        let store = load_or_create_sid_store(state_dir)?;
-        (store.worker_group_sid, None)
-    } else {
-        let wid = worker_id.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "worker_id required when not in readonly_fallback mode",
-            )
-        })?;
-        let (g, w) = ensure_worker_sid(state_dir, wid)?;
-        (g, Some(w))
-    };
+    let (group_sid_str, worker_sid_str) = ensure_worker_sid(state_dir, worker_id)?;
 
     let desired = TOKEN_DUPLICATE
         | TOKEN_QUERY
@@ -223,11 +210,9 @@ pub fn create_worker_restricted_token(
     allow_null_device(group_sid.as_ptr());
     owned_sids.push(unsafe { copy_sid_bytes(group_sid.as_ptr())? });
 
-    if let Some(ws_str) = worker_sid_str {
-        let ws = LocalSid::from_string(&ws_str)?;
-        allow_null_device(ws.as_ptr());
-        owned_sids.push(unsafe { copy_sid_bytes(ws.as_ptr())? });
-    }
+    let ws = LocalSid::from_string(&worker_sid_str)?;
+    allow_null_device(ws.as_ptr());
+    owned_sids.push(unsafe { copy_sid_bytes(ws.as_ptr())? });
 
     if let Some(key) = reader {
         let rs = LocalSid::from_string(&ensure_reader_sid(state_dir, key)?)?;

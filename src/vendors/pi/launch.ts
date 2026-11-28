@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { readonlySandboxUnavailableMessage } from "../../daemon/driver/kernel-readonly.ts";
 import {
   scanSecretGlobs,
   spawnInWriteScope,
@@ -17,7 +18,7 @@ import {
   type WriteScope,
 } from "../../shared/index.ts";
 import { buildPiArgs, isValidPiSessionId } from "./protocol.ts";
-import { READONLY_PI_NEEDS_SANDBOX_MESSAGE, piReadonlySandboxInput } from "./readonly.ts";
+import { piReadonlySandboxInput } from "./readonly.ts";
 import { piTranscriptPath } from "./transcript.ts";
 
 export interface PiLaunchDeps {
@@ -99,7 +100,7 @@ export async function preparePiLaunch(
     }),
   );
   if (!launch.osSandboxed) {
-    throw new DriverError("spawn_failed", READONLY_PI_NEEDS_SANDBOX_MESSAGE);
+    throw new DriverError("spawn_failed", readonlySandboxUnavailableMessage());
   }
   return {
     sessionId,

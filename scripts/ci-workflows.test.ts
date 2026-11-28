@@ -51,7 +51,6 @@ const SANDBOX_RUNTIME_SYMBOLS = new Set([
   "buildReadonlyPolicy",
   "dataDirDenyList",
   "win32WorkerSandboxArgs",
-  "win32ReadonlyFallbackSandboxArgs",
   "wrapReadonlyWithWin32Mxc",
   "win32MxcReadonlyAvailable",
   "WRITE_SCOPE_ENFORCERS",

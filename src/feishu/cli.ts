@@ -2,9 +2,10 @@ import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import {
   FEISHU_GUEST_TIERS,
   FEISHU_TRIGGER_MODES,
+  feishuGuestTierOrder,
+  feishuGuestTierPolicy,
   type FeishuBindCodeResponse,
   type FeishuChatView,
-  type FeishuGuestTier,
   type FeishuStatusView,
   type FeishuTriggerMode,
 } from "../shared/feishu.ts";
@@ -15,7 +16,7 @@ export const FEISHU_USAGE = `用法：node src/feishu/main.ts <子命令>
   connect --manual [--lark]     手动接入：从标准输入读两行 App ID、App Secret
   bind                          手动接入后打印绑定码，在飞书里私聊机器人发它
   status                        连接状态和项目群
-  policy <项目经理编号> [--trigger ${FEISHU_TRIGGER_MODES.join("|")}] [--guest ${FEISHU_GUEST_TIERS.join("|")}]
+  policy <项目经理编号> [--trigger ${FEISHU_TRIGGER_MODES.join("|")}] [--guest ${feishuGuestTierOrder().join("|")}]
   resync                        照账本重新对一遍项目群
   disconnect [--dissolve-chats] 断开（加 --dissolve-chats 一起解散项目群）
 `;
@@ -23,12 +24,13 @@ export const FEISHU_USAGE = `用法：node src/feishu/main.ts <子命令>
 class UsageError extends Error {}
 
 const TRIGGER_TEXT: Readonly<Record<FeishuTriggerMode, string>> = { auto: "只有主人时直聊，有别人时 @机器人", mention_only: "一直要 @机器人" };
-const TIER_TEXT: Readonly<Record<FeishuGuestTier, string>> = { chat_only: "仅对话", collaborator: "协作者", observer: "只读" };
 
 function chatLine(chat: FeishuChatView): string {
   const who = chat.target.kind === "router" ? "总助单聊" : `项目经理 ${chat.target.pmId}「${chat.name}」`;
   if (chat.target.kind === "router") return `  ${who}`;
-  const state = chat.archived ? "（已归档，群已解散）" : `，${chat.guestCount} 个访客，唤醒：${TRIGGER_TEXT[chat.triggerMode]}，访客：${TIER_TEXT[chat.guestTier]}`;
+  const state = chat.archived
+    ? "（已归档，群已解散）"
+    : `，${chat.guestCount} 个访客，唤醒：${TRIGGER_TEXT[chat.triggerMode]}，访客：${feishuGuestTierPolicy(chat.guestTier).label}`;
   return `  ${who}${state}`;
 }
 
@@ -101,9 +103,11 @@ async function dispatch(io: FeishuCliIo): Promise<number> {
       const guest = values.guest as string | undefined;
       if (trigger === undefined && guest === undefined) throw new UsageError("--trigger 和 --guest 至少给一个");
       if (trigger !== undefined && !(FEISHU_TRIGGER_MODES as readonly string[]).includes(trigger)) throw new UsageError(`--trigger 只能是 ${FEISHU_TRIGGER_MODES.join("、")}`);
-      if (guest !== undefined && !(FEISHU_GUEST_TIERS as readonly string[]).includes(guest)) throw new UsageError(`--guest 只能是 ${FEISHU_GUEST_TIERS.join("、")}`);
+      if (guest !== undefined && !(FEISHU_GUEST_TIERS as readonly string[]).includes(guest)) throw new UsageError(`--guest 只能是 ${feishuGuestTierOrder().join("、")}`);
       const chat = (await io.admin("PUT", "/feishu/policy", { pmId, ...(trigger ? { triggerMode: trigger } : {}), ...(guest ? { guestTier: guest } : {}) })) as FeishuChatView;
       io.stdout.write(`${chatLine(chat).trim()}\n`);
+      const warning = guest !== undefined ? feishuGuestTierPolicy(chat.guestTier).hostPrivilegeWarning : null;
+      if (warning !== null) io.stdout.write(`安全提示：${warning}\n`);
       return 0;
     }
     case "resync":

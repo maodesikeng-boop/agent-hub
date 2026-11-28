@@ -342,9 +342,9 @@ describe("renderChatPolicyCard（群设置卡：模型与思考程度、唤醒�
       { kind: "set_policy", pmId: 2, triggerMode: "mention_only" },
     ]);
     expect(tierValues).toEqual([
-      { kind: "set_policy", pmId: 2, guestTier: "collaborator" },
-      { kind: "set_policy", pmId: 2, guestTier: "chat_only" },
       { kind: "set_policy", pmId: 2, guestTier: "observer" },
+      { kind: "set_policy", pmId: 2, guestTier: "chat_only" },
+      { kind: "set_policy", pmId: 2, guestTier: "collaborator" },
     ]);
   });
 
@@ -362,7 +362,7 @@ describe("renderChatPolicyCard（群设置卡：模型与思考程度、唤醒�
   it("三档各有一句直白说明：协作者能发文件、点拍板和停止；仅对话不收文件；只读只旁听", () => {
     const members = JSON.stringify(groups(policy())[2]);
     expect(members).toMatch(/协作者[^"]*可对话、发文件、点拍板卡与停止/);
-    expect(members).toMatch(/仅对话[^"]*只能文字聊天，不收文件/);
+    expect(members).toMatch(/仅对话[^"]*可 @机器人 对话，不收文件、不能点拍板卡与停止/);
     expect(members).toMatch(/只读[^"]*只旁听，@机器人 也不唤醒/);
   });
 

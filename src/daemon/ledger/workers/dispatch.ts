@@ -1,5 +1,6 @@
 import { normalizeWorkerTitle, type WorkerRecord } from "../../../shared/domain.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
+import { checkReadonlyWorkerSandbox } from "../../driver/kernel-readonly.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
 import { fail } from "../context.ts";
 import type { Pending } from "../context.ts";
@@ -42,7 +43,19 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
     defaults: vendor === input.pmVendor ? { model: input.pmModel, effort: input.pmEffort } : null,
   });
 
-  if (input.sandboxStepId === undefined && !w.ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+  if (input.sandboxStepId === undefined) {
+    if (input.readonly) {
+      const check = checkReadonlyWorkerSandbox({
+        vendor,
+        platform: w.options.platform,
+        osSandboxed: w.ctx.osSandboxed(),
+        readonlyKernelSandboxed: w.ctx.readonlyKernelSandboxed(),
+      });
+      if (!check.ok) throw fail("invalid", check.message);
+    } else if (!w.ctx.osSandboxed()) {
+      throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+    }
+  }
   const capabilities = input.sandboxStepId === undefined ? null : requireSandboxRequest(w, input.pmId, {
     vendor, readonly: input.readonly, review: input.workspacePlan.kind === "review", capabilities: input.capabilities, inventory: input.context?.capabilityInventory,
   });

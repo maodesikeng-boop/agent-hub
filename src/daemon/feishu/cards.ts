@@ -3,7 +3,7 @@ import { z } from "zod";
 import { isDeviceId, type DeviceId } from "../../shared/api.ts";
 import { CONFIRM_CHECKPOINT_OPTIONS } from "../../shared/domain.ts";
 import type { AskMeta, ConversationId, Message, MessageId, PmId, RouterItemId, TaskGraphId, TaskNodeKey } from "../../shared/domain.ts";
-import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
+import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES, feishuGuestTierOrder, feishuGuestTierPolicy } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuGuestTier, FeishuTriggerMode } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MAX_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_PRINT_FREQUENCY_MS, FEISHU_STREAM_PRINT_STEP } from "../../shared/limits.ts";
 import type { MeshApprovalView } from "../../shared/mesh.ts";
@@ -362,13 +362,6 @@ const TRIGGER_DESCRIPTIONS: Readonly<Record<FeishuTriggerMode, string>> = {
   auto: "群里只有你时直接说，有别人时要 @机器人",
   mention_only: "不管几个人，都要 @机器人 才回",
 };
-export const TIER_LABELS: Readonly<Record<FeishuGuestTier, string>> = { chat_only: "仅对话", collaborator: "协作者", observer: "只读" };
-const TIER_DESCRIPTIONS: Readonly<Record<FeishuGuestTier, string>> = {
-  collaborator: "可对话、发文件、点拍板卡与停止",
-  chat_only: "只能文字聊天，不收文件",
-  observer: "只旁听，@机器人 也不唤醒",
-};
-const TIER_ORDER: readonly FeishuGuestTier[] = ["collaborator", "chat_only", "observer"];
 
 function choiceRow(choices: readonly { text: string; chosen: boolean; value: FeishuActionValue }[]): Record<string, unknown> {
   return {
@@ -457,10 +450,25 @@ export function renderChatPolicyCard(input: {
       })),
     ),
   ];
-  const tierLines = TIER_ORDER.map((tier) => `${tier === input.guestTier ? "✓" : "·"} **${TIER_LABELS[tier]}**：${TIER_DESCRIPTIONS[tier]}`);
+  const tierOrder = feishuGuestTierOrder();
+  const currentTier = feishuGuestTierPolicy(input.guestTier);
+  const tierLines = tierOrder.map((tier) => {
+    const policy = feishuGuestTierPolicy(tier);
+    const suffix = tier === "observer" ? "（默认）" : "";
+    return `${tier === input.guestTier ? "✓" : "·"} **${policy.label}**${suffix}：${policy.description}`;
+  });
+  const hostWarning = feishuGuestTierPolicy("chat_only").hostPrivilegeWarning;
   const members = [
-    markdown(`**群成员权限** · 访客能做什么\n当前：**${TIER_LABELS[input.guestTier]}**\n${tierLines.join("\n")}`),
-    choiceRow(TIER_ORDER.map((tier) => ({ text: TIER_LABELS[tier], chosen: tier === input.guestTier, value: { kind: "set_policy", pmId: input.pmId, guestTier: tier } }))),
+    markdown(
+      `**群成员权限** · 访客能做什么\n当前：**${currentTier.label}**\n${tierLines.join("\n")}${hostWarning === null ? "" : `\n\n安全提示：${hostWarning}`}`,
+    ),
+    choiceRow(
+      tierOrder.map((tier) => ({
+        text: feishuGuestTierPolicy(tier).label,
+        chosen: tier === input.guestTier,
+        value: { kind: "set_policy", pmId: input.pmId, guestTier: tier },
+      })),
+    ),
   ];
   const footer = { tag: "markdown", content: "只有主人能改。随时在群里发 /群设置 或 /设置 叫出这张卡。", text_size: "notation" };
   return card({ title: "群设置", template: "grey", summary: "群设置", elements: [...models, HR, ...wake, HR, ...members, HR, footer] });

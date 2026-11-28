@@ -423,15 +423,6 @@ export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
     });
     this.assertRunning();
     this.assertNotEnded(st);
-    if (launch.readonlyFallbackWarning) {
-      this.log(launch.readonlyFallbackWarning);
-      this.emit(st.id, {
-        type: "driver.warning",
-        uuid: randomUUID(),
-        message: launch.readonlyFallbackWarning,
-        at: Date.now(),
-      });
-    }
     const child = await this.spawnDetachedChild(
       exePath,
       launch.command,

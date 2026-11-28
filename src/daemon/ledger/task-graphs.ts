@@ -55,6 +55,8 @@ export function createLedgerTaskGraphs(
     enqueue: ctx.enqueue,
     modelCatalog: ctx.modelCatalog,
     modelShortLabel: ctx.modelShortLabel,
+    osSandboxed: ctx.osSandboxed,
+    readonlyKernelSandboxed: ctx.readonlyKernelSandboxed,
     sessions,
     messages,
     persona,
