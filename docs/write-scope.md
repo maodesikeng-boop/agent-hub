@@ -69,7 +69,7 @@ Windows enforces Worker isolation without administrator privileges or WSL 2 thro
   - Each Worker worktree directory receives an inheritable `ALLOW FusaWorker-<id>` modify ACE before `git worktree add`, so checked-out files and `node_modules` inherit permissions with zero recursive walk.
   - Before launch, `prepareOsSandboxForLaunch` asynchronously sets `DENY FusaWorker` read on `dataDir`, `state\`, `run\`, and `backups\`, `ALLOW FusaWorker` read on `worktrees\`, `uploads\`, `tools\`, and `run\bin\`, and `ALLOW FusaRead-<sessionId>` read on `state\launch\<sessionId>\`. ACL caches key on directory identity and SID, and re-verify the target directory if it was replaced while an `fusa-run.exe` call was in flight.
   - The admin named pipe applies `acl deny-pipe` (`DENY FusaWorker`) before serving requests; requests arriving before hardening receive HTTP 503, and hardening failure closes the admin pipe rather than serving it unguarded.
-- **Read-only Workers**: `codex` uses its native `readOnly` sandbox; the other seven vendors use `@microsoft/mxc-sdk` ProcessContainer on Windows 11 24H2+ when available, and fall back to `fusa-run.exe --readonly-fallback` plus vendor tool-level write blocks with a `driver.warning` notice on older Windows builds.
+- **Read-only Workers**: `codex` uses its native `readOnly` sandbox; the other seven vendors require `@microsoft/mxc-sdk` ProcessContainer on Windows 11 24H2+ and fail closed (`osSandboxed: false` and `checkReadonlyWorkerSandbox` rejection) when MXC is unavailable.
 
 ## Fail-closed startup and known boundaries
 

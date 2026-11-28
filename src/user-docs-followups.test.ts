@@ -88,35 +88,34 @@ describe("user documentation review follow-up guards", () => {
     );
   });
 
-  it("README.md and README.zh-CN.md document Windows no-MXC outer-sandbox fallback limits and Codex exception", () => {
+  it("README.md and README.zh-CN.md document Windows no-MXC fail-closed behavior and Codex exception", () => {
     const enReadonly = readRepoFile("README.md")
       .split(/\r?\n/)
       .find((line) => line.includes("Read-only Workers")) ?? "";
-    expect(enReadonly, "README.md read-only Worker bullet must scope Windows MXC fallback to outer-sandbox Workers").toMatch(
+    expect(enReadonly, "README.md read-only Worker bullet must scope Windows MXC requirement to outer-sandbox Workers").toMatch(
       /outer sandbox/i,
     );
     expect(enReadonly).toContain("MXC");
-    expect(enReadonly).toMatch(/restricted token/i);
-    expect(enReadonly, "README.md must state post-fallback write and credential read limits").toMatch(
-      /does not enforce full[- ]filesystem read-only writes[\s\S]*external credential paths/i,
+    expect(enReadonly, "README.md must state fail-closed refusal when MXC is unavailable").toMatch(
+      /fails closed[\s\S]*refuses to start[\s\S]*instead of degrading/i,
     );
+    expect(enReadonly, "README.md must not document the removed fallback path").not.toMatch(/falls back/i);
     expect(enReadonly, "README.md must document the Codex built-in read-only sandbox exception").toMatch(
-      /Codex \(`codex`\)[\s\S]*built-in read-only sandbox[\s\S]*(?:rather than|not)[\s\S]*fallback/i,
+      /Codex \(`codex`\)[\s\S]*built-in read-only sandbox[\s\S]*without MXC/i,
     );
 
     const zhReadonly = readRepoFile("README.zh-CN.md")
       .split(/\r?\n/)
       .find((line) => line.includes("只读 Worker")) ?? "";
-    expect(zhReadonly, "README.zh-CN.md read-only Worker bullet must scope Windows MXC fallback to outer-sandbox Workers").toContain(
+    expect(zhReadonly, "README.zh-CN.md read-only Worker bullet must scope Windows MXC requirement to outer-sandbox Workers").toContain(
       "外层沙箱",
     );
     expect(zhReadonly).toContain("MXC");
-    expect(zhReadonly).toContain("受限令牌");
-    expect(zhReadonly, "README.zh-CN.md must state post-fallback write and credential read limits").toMatch(
-      /(?:全盘禁写|全盘只读)[\s\S]*外部凭据路径/,
+    expect(zhReadonly, "README.zh-CN.md must state fail-closed refusal when MXC is unavailable").toMatch(
+      /失败关闭[\s\S]*拒绝启动[\s\S]*不再降级/,
     );
     expect(zhReadonly, "README.zh-CN.md must document the Codex built-in read-only sandbox exception").toMatch(
-      /Codex（`codex`）[\s\S]*自带的只读沙箱[\s\S]*不走[\s\S]*降级/,
+      /Codex（`codex`）[\s\S]*自带的只读沙箱[\s\S]*无需 MXC/,
     );
   });
 
