@@ -381,7 +381,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const dynamicExecutablePaths = Object.fromEntries(
       AGENT_VENDORS.map((vendor) => [vendor, () => vendorRuntime.resolveExecutablePath(vendor)]),
     ) as Record<AgentVendor, () => string>;
-    const observedQuota = createObservedQuotaStore();
+    const observedQuota = createObservedQuotaStore({ db });
     observedQuota.hydrateFromRateLimits(loadPersistedSessionRateLimits(db));
     const models = createModelCatalogs({
       sources: createVendorCatalogSources(

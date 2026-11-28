@@ -306,5 +306,87 @@ describe("SessionStore", () => {
       db.close();
     }
   });
+
+  it("preserves unexpired rejected windows omitted from a partial rateLimit update while honoring explicit updates and null", () => {
+    const db = openTestDb();
+    try {
+      let t = Date.parse("2026-11-25T09:00:00Z");
+      const FIVE_HOUR = Date.parse("2026-11-25T11:00:00Z") / 1000;
+      const SEVEN_DAY = Date.parse("2026-11-29T09:00:00Z") / 1000;
+      const store = createSessionStore(db, { now: () => t });
+      const id = insertTestSession(db, { createdAt: t });
+
+      store.update(id, {
+        rateLimit: {
+          status: "rejected",
+          resetsAt: SEVEN_DAY,
+          windows: {
+            five_hour: { utilization: 1, resetsAt: FIVE_HOUR, status: "rejected" },
+            seven_day: { utilization: 1, resetsAt: SEVEN_DAY, status: "rejected" },
+          },
+        },
+      });
+
+      t += 5_000;
+      const afterPartial5h = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: FIVE_HOUR,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FIVE_HOUR, status: "allowed" },
+          },
+        },
+      });
+      expect(afterPartial5h.rateLimit).toEqual({
+        status: "rejected",
+        resetsAt: SEVEN_DAY,
+        windows: {
+          five_hour: { utilization: 0, resetsAt: FIVE_HOUR, status: "allowed" },
+          seven_day: { utilization: 1, resetsAt: SEVEN_DAY, status: "rejected" },
+        },
+      });
+
+      // Explicit report for seven_day replaces the carried-over rejection.
+      t += 5_000;
+      const after7hAllowed = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: SEVEN_DAY,
+          windows: {
+            five_hour: { utilization: 0, resetsAt: FIVE_HOUR, status: "allowed" },
+            seven_day: { utilization: 0, resetsAt: SEVEN_DAY, status: "allowed" },
+          },
+        },
+      });
+      expect(after7hAllowed.rateLimit?.status).toBe("allowed");
+      expect(after7hAllowed.rateLimit?.windows.seven_day?.status).toBe("allowed");
+
+      // Expired omitted rejected windows are not carried over.
+      store.update(id, {
+        rateLimit: {
+          status: "rejected",
+          resetsAt: SEVEN_DAY,
+          windows: {
+            five_hour: { utilization: 1, resetsAt: FIVE_HOUR, status: "rejected" },
+            seven_day: { utilization: 1, resetsAt: SEVEN_DAY, status: "rejected" },
+          },
+        },
+      });
+      t = SEVEN_DAY * 1000 + 1_000;
+      const afterExpiry = store.update(id, {
+        rateLimit: {
+          status: "allowed",
+          resetsAt: null,
+          windows: {},
+        },
+      });
+      expect(afterExpiry.rateLimit).toEqual({ status: "allowed", resetsAt: null, windows: {} });
+
+      // Explicit null still clears rate_limit.
+      expect(store.update(id, { rateLimit: null }).rateLimit).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
 });
 import { queryProcessStartTimeSync } from "../platform/index.ts";

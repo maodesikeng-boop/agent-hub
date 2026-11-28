@@ -31,6 +31,7 @@ export interface ObservedQuotaStoreOptions {
   now?: () => number;
   fallbackTtlMs?: number;
   maxEntries?: number;
+  db?: Db;
 }
 
 export interface ObservedQuotaStore {
@@ -314,7 +315,7 @@ export function formatVendorQuotaStatus(availability: VendorAvailability, quota:
 }
 
 export function createObservedQuotaStore({
-  now = Date.now, fallbackTtlMs = OBSERVED_QUOTA_FALLBACK_TTL_MS, maxEntries = OBSERVED_QUOTA_CACHE_MAX,
+  now = Date.now, fallbackTtlMs = OBSERVED_QUOTA_FALLBACK_TTL_MS, maxEntries = OBSERVED_QUOTA_CACHE_MAX, db,
 }: ObservedQuotaStoreOptions = {}): ObservedQuotaStore {
   const cache = new LRUCache<AgentVendor, VendorLimitState>({ max: maxEntries });
   const clear = (vendor: AgentVendor) => { cache.delete(vendor); };
@@ -342,6 +343,7 @@ export function createObservedQuotaStore({
       const activeWindows = valid.filter(([, w]) => w.resetsAt <= 0 || w.resetsAt * 1000 > at);
       const infoFallbackReset = info.resetsAt === null ? null : futureSeconds(info.resetsAt, at);
       let sawExhaustedWindow = false;
+      const clearedWindows = new Set<string>();
       for (const [key, w] of activeWindows) {
         if (isRateLimitWindowExhausted(w)) {
           sawExhaustedWindow = true;
@@ -356,11 +358,17 @@ export function createObservedQuotaStore({
           });
         } else if (isRateLimitWindowConfirmedAllowed(w)) {
           const existing = state.windows.get(key);
-          if (existing !== undefined && at > existing.observedAt) state.windows.delete(key);
+          if (existing !== undefined && at > existing.observedAt) {
+            state.windows.delete(key);
+            clearedWindows.add(key);
+          }
         }
       }
       if (sawExhaustedWindow) {
         commitState(vendor, state);
+        if (db !== undefined && clearedWindows.size > 0) {
+          clearPersistedVendorRateLimits(db, vendor, { clearedWindows });
+        }
         return;
       }
       if (isQuotaExhausted(info, at)) {
@@ -375,13 +383,21 @@ export function createObservedQuotaStore({
           };
         }
         commitState(vendor, state);
+        if (db !== undefined && clearedWindows.size > 0) {
+          clearPersistedVendorRateLimits(db, vendor, { clearedWindows });
+        }
         return;
       }
+      let clearedUnscoped = false;
       // Only clear an unscoped rejection when no specific rejected window remains active.
       if (state.windows.size === 0 && state.unscoped !== null && at > state.unscoped.observedAt) {
         state.unscoped = null;
+        clearedUnscoped = true;
       }
       commitState(vendor, state);
+      if (db !== undefined && (clearedWindows.size > 0 || clearedUnscoped)) {
+        clearPersistedVendorRateLimits(db, vendor, { clearedWindows, clearUnscoped: clearedUnscoped });
+      }
     },
     observeTurnError(vendor, errorMessage, at = now()) {
       if (vendorFailureOf(errorMessage, vendor)?.kind !== "quota") return null;
@@ -399,7 +415,11 @@ export function createObservedQuotaStore({
       commitState(vendor, state);
       return projectObservation(vendor, state);
     },
-    observeTurnSuccess: clear,
+    observeTurnSuccess(vendor) {
+      const hadActive = cache.has(vendor);
+      clear(vendor);
+      if (db !== undefined && hadActive) clearPersistedVendorRateLimits(db, vendor, { clearAll: true });
+    },
     reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at = now()): QuotaReconcileOutcome {
       const windows = activeFetchedWindows(vendor, fetched, at);
       if (windows.length === 0) return "unchanged";
@@ -421,22 +441,39 @@ export function createObservedQuotaStore({
         });
         recordedAny = true;
       }
+      let clearedInMemory = false;
+      const confirmedAllowed = new Set<string>();
       for (const w of windows) {
         if (w.exhausted) continue;
         const scoped = state.windows.get(w.scopedKey);
-        if (scoped !== undefined && probedAt > scoped.observedAt) state.windows.delete(w.scopedKey);
+        if (scoped !== undefined && probedAt > scoped.observedAt) {
+          state.windows.delete(w.scopedKey);
+          clearedInMemory = true;
+        }
+        if (!state.windows.has(w.scopedKey)) confirmedAllowed.add(w.scopedKey);
         if (w.scopedKey !== w.windowKey) {
           const unscopedWin = state.windows.get(w.windowKey);
           const siblingExhausted = exhausted.some((ex) => ex.windowKey === w.windowKey);
           if (unscopedWin !== undefined && !siblingExhausted && probedAt > unscopedWin.observedAt) {
             state.windows.delete(w.windowKey);
+            clearedInMemory = true;
           }
+          if (!siblingExhausted && !state.windows.has(w.windowKey)) confirmedAllowed.add(w.windowKey);
         }
       }
       if (exhausted.length === 0 && state.windows.size === 0 && state.unscoped !== null && probedAt > state.unscoped.observedAt) {
         state.unscoped = null;
+        clearedInMemory = true;
       }
       commitState(vendor, state);
+      const allClear = exhausted.length === 0 && state.windows.size === 0 && state.unscoped === null;
+      if (db !== undefined && (clearedInMemory || confirmedAllowed.size > 0 || allClear)) {
+        clearPersistedVendorRateLimits(db, vendor, {
+          clearedWindows: confirmedAllowed,
+          clearUnscoped: allClear,
+          ...(clearedInMemory ? {} : { beforeUpdatedAt: probedAt }),
+        });
+      }
       if (state.windows.size === 0 && state.unscoped === null) return hadActive ? "cleared" : "unchanged";
       return recordedAny ? "recorded" : "unchanged";
     },
@@ -493,7 +530,10 @@ export function createObservedQuotaStore({
       }
       return hydrated.size;
     },
-    clearVendor: clear,
+    clearVendor(vendor) {
+      clear(vendor);
+      if (db !== undefined) clearPersistedVendorRateLimits(db, vendor, { clearAll: true });
+    },
     getActive,
     snapshot(at = now()) {
       return Object.fromEntries(Array.from(cache.keys()).flatMap((vendor) => {
@@ -509,6 +549,84 @@ export function observeDriverQuota(store: ObservedQuotaStore, vendor: AgentVendo
   if (event.type !== "turn.ended") return;
   if (event.ok && !event.interrupted) store.observeTurnSuccess(vendor);
   else if (event.error) store.observeTurnError(vendor, event.error.message, event.at);
+}
+
+interface ClearPersistedRateLimitsSpec {
+  readonly clearAll?: boolean;
+  readonly clearedWindows?: ReadonlySet<string>;
+  readonly clearUnscoped?: boolean;
+  readonly beforeUpdatedAt?: number;
+}
+
+function clearPersistedRateLimitJson(
+  rawJson: string,
+  spec: ClearPersistedRateLimitsSpec,
+): { readonly changed: boolean; readonly next: RateLimitInfo | null } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    return { changed: false, next: null };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { changed: false, next: null };
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.status !== "string") return { changed: false, next: null };
+  if (typeof obj.windows !== "object" || obj.windows === null || Array.isArray(obj.windows)) {
+    return obj.status === "rejected" && (spec.clearAll === true || spec.clearUnscoped === true)
+      ? { changed: true, next: null }
+      : { changed: false, next: null };
+  }
+  const info = parsePersistedRateLimit(rawJson);
+  if (info === null) return { changed: false, next: null };
+  const nextWindows: Record<string, RateLimitWindow> = { ...info.windows };
+  let changed = false;
+  for (const [k, w] of Object.entries(info.windows)) {
+    if (!isRateLimitWindowExhausted(w)) continue;
+    if (spec.clearAll === true || spec.clearedWindows?.has(k) === true) {
+      nextWindows[k] = { ...w, status: "allowed" };
+      changed = true;
+    }
+  }
+  const remainingExhausted = Object.values(nextWindows).filter(isRateLimitWindowExhausted);
+  if (remainingExhausted.length > 0) {
+    if (!changed) return { changed: false, next: null };
+    const resets = remainingExhausted.map((w) => w.resetsAt).filter((r) => Number.isFinite(r) && r > 0);
+    return {
+      changed: true,
+      next: { ...info, status: "rejected", resetsAt: resets.length > 0 ? Math.max(...resets) : info.resetsAt, windows: nextWindows },
+    };
+  }
+  const clearTopLevel = changed || (info.status === "rejected" && (spec.clearAll === true || spec.clearUnscoped === true));
+  if (!clearTopLevel) return { changed: false, next: null };
+  return Object.keys(nextWindows).length === 0
+    ? { changed: true, next: null }
+    : { changed: true, next: { ...info, status: "allowed", windows: nextWindows } };
+}
+
+function clearPersistedVendorRateLimits(db: Db, vendor: AgentVendor, spec: ClearPersistedRateLimitsSpec): number {
+  const rows =
+    spec.beforeUpdatedAt !== undefined
+      ? db.all<{ id: number; rate_limit: string }>(
+          "SELECT id, rate_limit FROM agent_sessions WHERE vendor = ? AND rate_limit IS NOT NULL AND updated_at < ?",
+          vendor,
+          spec.beforeUpdatedAt,
+        )
+      : db.all<{ id: number; rate_limit: string }>(
+          "SELECT id, rate_limit FROM agent_sessions WHERE vendor = ? AND rate_limit IS NOT NULL",
+          vendor,
+        );
+  let updated = 0;
+  for (const row of rows) {
+    const result = clearPersistedRateLimitJson(row.rate_limit, spec);
+    if (!result.changed) continue;
+    db.run(
+      "UPDATE agent_sessions SET rate_limit = ? WHERE id = ?",
+      result.next === null ? null : JSON.stringify(result.next),
+      row.id,
+    );
+    updated += 1;
+  }
+  return updated;
 }
 
 function parsePersistedRateLimit(rawJson: string): RateLimitInfo | null {
