@@ -185,25 +185,25 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const created = ledger.hubCall(lin.sessionId, "graph.create", { specJson: TASK_GRAPH_CREATE_JSON_HINT }).data.graph;
     expect(created.goal).toBe("…");
     expect(created.nodes.map((n) => [n.key, stateOf(created, n.key), n.review])).toEqual([
-      ["impl", "running", false],
-      ["review", "pending", true],
+      ["step1", "running", false],
+      ["step2", "pending", false],
     ]);
     // 先补上示例里要删和要跳过的未开工步骤，再原样套用 patch 示例
     ledger.hubCall(lin.sessionId, "graph.patch", {
       graphId: created.id,
       specJson: JSON.stringify({
         addSteps: [
-          { key: "old", title: "旧步骤", deps: ["review"] },
-          { key: "polish", title: "打磨", deps: ["review"] },
+          { key: "old", title: "旧步骤", deps: ["step2"] },
+          { key: "optional", title: "可选步骤", deps: ["step2"] },
         ],
       }),
     });
     const patched = ledger.hubCall(lin.sessionId, "graph.patch", { graphId: created.id, specJson: TASK_GRAPH_PATCH_JSON_HINT }).data.graph;
-    expect(patched.nodes.map((n) => n.key).toSorted()).toEqual(["impl", "polish", "qa", "review"]);
+    expect(patched.nodes.map((n) => n.key).toSorted()).toEqual(["optional", "step1", "step2", "step3"]);
     // 示例里的 skipSteps：跳过还没开工的步骤
-    expect(stateOf(patched, "polish")).toBe("skipped");
-    expect(patched.edges).toContainEqual({ fromKey: "impl", toKey: "review" });
-    expect(patched.edges).toContainEqual({ fromKey: "review", toKey: "qa" });
+    expect(stateOf(patched, "optional")).toBe("skipped");
+    expect(patched.edges).toContainEqual({ fromKey: "step1", toKey: "step2" });
+    expect(patched.edges).toContainEqual({ fromKey: "step2", toKey: "step3" });
   });
 
   it("单项目允许最多 20 张活跃图（不卡 5 张低阈值），第 21 张报 conflict", () => {
@@ -779,7 +779,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(completed.next).toBeNull();
   });
 
-  it("第 2 步验收场景：最后节点完成后保持待交付、自动发交付单（防重复轰炸）、支持补挂审查节点与打回重派、PR 未合并默认拦截与 --unmerged-ok 放行", () => {
+  it("第 2 步验收场景：最后节点完成后保持待交付、自动发交付单（防重复轰炸）、支持补挂审查节点与打回重派、有 OPEN PR 时直接结束并注明（--unmerged-ok 兼容保留）", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "鉴权改造",
@@ -911,36 +911,28 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     // diffProbed 置 true 后不再重复探测
     expect(ledger.graphDeliveryProbeTarget!(notes[2]!.id)).toBeNull();
 
-    // 6) 分支上有 OPEN PR 时，hub graph finish 默认拦截并清晰列出 PR 与分支
+    // 6) 分支上有 OPEN PR 时，hub graph finish 直接结束并同步汇报卡进总助，同时在回执中注明未合并的 PR
     expect(ledger.graphPrTargets!(lin.sessionId, graph.id)).toEqual([
       { cwd: lin.folder, branch: implBranch },
       { cwd: lin.folder, prUrl: "https://github.com/org/repo/pull/88" },
     ]);
-    expect(() =>
-      ledger.hubCall(
-        lin.sessionId,
-        "graph.finish",
-        { graphId: graph.id, summary: "准备结案" },
-        { graphPrs: { [implBranch]: { number: 88, state: "OPEN", url: "https://github.com/org/repo/pull/88" } } },
-      ),
-    ).toThrow(/还有未合并（OPEN）的 PR.*impl.*PR #88.*--unmerged-ok/);
-
-    // 7) PR 已变为 MERGED（或传 --unmerged-ok、或未查到 PR）时 finish 放行，标 completed 并同步汇报卡进总助
     const finishRes = ledger.hubCall(
       lin.sessionId,
       "graph.finish",
-      { graphId: graph.id, summary: "Session 鉴权改造与异构审查均已验收合并" },
-      { graphPrs: { [implBranch]: { number: 88, state: "MERGED", url: "https://github.com/org/repo/pull/88" } } },
+      { graphId: graph.id, summary: "Session 鉴权改造已完成，待人工合并" },
+      { graphPrs: { [implBranch]: { number: 88, state: "OPEN", url: "https://github.com/org/repo/pull/88" } } },
     );
     expect(finishRes.data.graph.status).toBe("completed");
+    expect(finishRes.text).toContain("注意：以下 PR 仍处于未合并状态");
+    expect(finishRes.text).toContain("https://github.com/org/repo/pull/88");
     expect(finishRes.data.reportItem).toMatchObject({
       kind: "report",
-      summary: "Session 鉴权改造与异构审查均已验收合并",
+      summary: "Session 鉴权改造已完成，待人工合并",
       links: [{ label: "PR #88", target: "https://github.com/org/repo/pull/88" }],
     });
     expect(ledger.listRouterItems(undefined, 10, "report").items[0]?.id).toBe(finishRes.data.reportItem.id);
 
-    // 另建一张有 OPEN PR 的图，验证 --unmerged-ok 直接放行
+    // 7) 另建一张有 OPEN PR 的图，验证 --unmerged-ok 作为兼容 no-op 参数照常结束
     const g2 = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "对比实验", nodes: [{ key: "exp", title: "跑基准" }] }),
     }).data.graph;
@@ -952,6 +944,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       { graphPrs: { "hub/2-exp": { number: 89, state: "OPEN", url: "https://github.com/org/repo/pull/89" } } },
     );
     expect(g2Finished.data.graph.status).toBe("completed");
+    expect(g2Finished.text).toContain("https://github.com/org/repo/pull/89");
   });
 
   it("打回重做：已 done 节点换新 Worker 重跑收工后，节点产物与新交付单用新一轮汇报的提交号，不沿用上一轮的", () => {
@@ -975,7 +968,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(notes[1]!.text).not.toContain("1111111");
   });
 
-  it("hub graph done --pr 手工补记的 PR（节点上没有分支）也进 finish 的 PR 检查：按网址查，开着的默认拦下，--unmerged-ok 放行", () => {
+  it("hub graph done --pr 手工补记的 PR（节点上没有分支）也进 finish 的 PR 探测：开着时不拦截，在回执中注明", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "手工补记 PR", nodes: [{ key: "doc", title: "改文档" }] }),
     }).data.graph;
@@ -986,18 +979,15 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
 
     expect(ledger.graphPrTargets!(lin.sessionId, graph.id)).toEqual([{ cwd: lin.folder, prUrl }]);
     const open = { [prUrl]: { number: 301, state: "OPEN", url: prUrl } };
-    expect(() =>
-      ledger.hubCall(lin.sessionId, "graph.finish", { graphId: graph.id, summary: "结束" }, { graphPrs: open }),
-    ).toThrow(/还有未合并（OPEN）的 PR：节点「doc」补记的 PR：PR #301/);
-    expect(ledger.graphPrTargets!(lin.sessionId, graph.id)).toHaveLength(1);
-
     const finished = ledger.hubCall(
       lin.sessionId,
       "graph.finish",
-      { graphId: graph.id, unmergedOk: true, summary: "用户决定不合" },
+      { graphId: graph.id, summary: "结束" },
       { graphPrs: open },
     );
     expect(finished.data.graph.status).toBe("completed");
+    expect(finished.text).toContain("注意：以下 PR 仍处于未合并状态：节点「doc」补记的 PR：PR #301");
+    expect(finished.text).toContain(prUrl);
   });
 
   it("交付单在事务外探测期间被收起（图被打回、finish 或 cancel）：探测结果不再改写已收起的消息", () => {

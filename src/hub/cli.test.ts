@@ -633,11 +633,11 @@ describe("hub cli", () => {
       });
     });
 
-    it("graph create / patch 的 usage 直接附一行 JSON 字段示例", async () => {
+    it("graph create / patch 的 usage 直接附一行中立 JSON 字段示例", async () => {
       const r = await hub(["help", "--all"]);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_CREATE_JSON_HINT}`);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_PATCH_JSON_HINT}`);
-      for (const field of ["title", "goal", "steps", "brief", "review"]) {
+      for (const field of ["title", "goal", "steps", "brief"]) {
         expect(TASK_GRAPH_CREATE_JSON_HINT).toContain(`"${field}"`);
       }
       for (const field of ["goal", "addSteps", "updateSteps", "removeSteps", "skipSteps"]) {
@@ -934,9 +934,9 @@ describe("hub cli", () => {
   });
 
   describe("hub worker start 用法", () => {
-    it("写明独立审查用单步审查图（审查步骤），不要派普通 Worker 审", async () => {
+    it("说明需要隔离检出与防篡改核对的独立审查可使用任务图审查步骤", async () => {
       const r = await hub(["help", "--all"]);
-      expect(r.stdout).toContain("独立审查请建单步审查图（审查步骤，写被审分支），不要派普通 Worker 审");
+      expect(r.stdout).toContain('需要隔离检出与防篡改核对的独立审查，可在任务图中使用审查步骤（"review": true）');
     });
   });
 
