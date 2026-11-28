@@ -22,6 +22,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 - [Top-bar Router input and reply popover](router-topbar-design.md): Centered translucent-to-solid quick Router input in the `40px` desktop wood top bar, non-modal reply popover with follow-up chat and `Expand` handoff, shared Router command dispatch and turn rendering, and cross-platform window-drag boundaries.
 - [Workbench shell design](workbench-shell-design.md): Rail, Project Manager column with pins, resizable columns, work panel integration, narrow-window tiers, phone tab bar, and a visual language that keeps pixel art for characters while controls use smooth lines.
 - [Layout switch without a rebuild](layout-switch-design.md): Surfaces rendered once above the layout and moved between outlets, one navigation state for the page, settings, and the page behind settings, and the acceptance scenarios for crossing the one-column width.
+- [Concentric inner corners for clipped card and strip rows](card-inner-corners-design.md): Root-cause audit of clipped focus and error rings inside rounded `overflow-hidden` cards, popovers, event strips, and code block headers, concentric CSS recipes (`--card-inner-radius`, `.card-reply-row`, `.event-strip-shell`, `.event-strip-trigger`), and visual verification plan.
 
 ## Architecture and security
 

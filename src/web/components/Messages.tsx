@@ -330,7 +330,7 @@ type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 const EVENT_ROW = "flex w-full items-start gap-3 px-3.5 py-2.5 text-left text-minor leading-5";
 const EVENT_TEXT = "min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]";
 const EVENT_TRIGGER =
-  "cursor-pointer rounded-none transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent pointer-coarse:min-h-11";
+  "event-strip-trigger cursor-pointer transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus focus-visible:outline-offset-[-2px] disabled:cursor-default disabled:hover:bg-transparent pointer-coarse:min-h-11";
 const EVENT_ACTION =
   "touch-target inline-flex h-7 shrink-0 cursor-pointer items-center rounded-sm px-2 text-minor font-medium text-brand-ink transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-border-focus disabled:cursor-default disabled:opacity-60";
 
@@ -413,7 +413,7 @@ function EventStripShell({
     <div
       data-event-group={grouped ? "true" : undefined}
       className={cn(
-        "w-full min-w-0 overflow-hidden rounded-sm",
+        "event-strip-shell w-full min-w-0 overflow-hidden rounded-sm",
         inTurn ? "mt-1" : "mt-4",
         danger ? "divide-y divide-danger/15 bg-danger-soft" : "divide-y divide-border bg-panel",
       )}
