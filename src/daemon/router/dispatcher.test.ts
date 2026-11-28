@@ -1363,4 +1363,128 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       expect(prompt).not.toContain("- summary:");
     });
   });
+
+  it("handles a peer returning a malformed digest across Track A and Track B without crashing, then succeeds on a second turn after recovery", async () => {
+    const { Agent, createServer } = await import("node:http");
+    const { connect: netConnect } = await import("node:net");
+    const { ROUTER_PEER_OFFLINE_BACKOFF_MS } = await import("../../shared/index.ts");
+
+    let remoteMalformed = true;
+    let fakeNow = 100_000;
+    const peerServer = createServer((req, res) => {
+      const url = req.url ?? "";
+      if (url.endsWith("/api/router/digest")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        if (remoteMalformed) {
+          res.end(
+            JSON.stringify({
+              generatedAt: fakeNow,
+              pms: [{ pmId: 20, name: "推理PM", mode: "hands_on", activity: "idle", pendingDecisionCount: 0, activeWorkers: null }],
+            }),
+          );
+        } else {
+          res.end(
+            JSON.stringify({
+              generatedAt: fakeNow,
+              pms: [
+                {
+                  pmId: 20,
+                  name: "推理PM",
+                  mode: "hands_on",
+                  vendor: "claude",
+                  model: null,
+                  conversationId: 200,
+                  activity: "idle",
+                  project: { id: 30, name: "gpu-worker", description: null, mainFolder: "/srv/gpu-worker", otherFolders: [] },
+                  activeWorkers: [],
+                  activeWorkerTotal: 0,
+                  pendingDecisionCount: 0,
+                  recentBrief: null,
+                  lastActiveAt: fakeNow,
+                },
+              ],
+            }),
+          );
+        }
+        return;
+      }
+      if (url.endsWith("/api/router/target-ops")) {
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({
+            result: {
+              kind: "pm.forward",
+              pmId: 20,
+              pmName: "推理PM",
+              projectId: 30,
+              projectName: "gpu-worker",
+              conversationId: 200,
+              messageId: 901,
+            },
+          }),
+        );
+        return;
+      }
+      res.writeHead(404).end("not found");
+    });
+    await new Promise<void>((resolve) => peerServer.listen(0, "127.0.0.1", resolve));
+    const peerPortNum = (peerServer.address() as { port: number }).port;
+    class LoopbackAgent extends Agent {
+      override createConnection() {
+        return netConnect(peerPortNum, "127.0.0.1");
+      }
+    }
+    const peerAgent = new LoopbackAgent();
+    const realRegistry = createRouterTargetRegistry({
+      localPort,
+      peers: {
+        selfId: "dev-local",
+        list: () => [
+          { id: "dev-local", name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+          { id: "dev-linux", name: "LinuxBox", platform: "linux", self: false, online: true, link: "lan", fingerprint: null },
+        ],
+        target: (id) => (id === "dev-linux" ? { name: "LinuxBox", agent: peerAgent } : null),
+      },
+      uploadsDir,
+      now: () => fakeNow,
+    });
+    const realDispatcher = createRouterDispatcher({
+      ledger,
+      runTurn: createRouterTurnRunner({ ledger, driver, tokens, purposes: createRouterTurnPurposes(), stateDir, launchDir }),
+      sandboxGuard,
+      targetRegistry: realRegistry,
+      models: { list: async () => catalogs },
+      resolveAttachment: (id) => attachmentMetaOf(uploadsDir, id),
+      agentTimeoutMs: 500,
+    });
+    try {
+      // Turn 1a (Track A targeting the bad peer): clean Chinese failure instead of TypeError crash.
+      const trackAFail = await realDispatcher.submitCommand({ clientId: "bad-peer-a1", text: "@LinuxBox/gpu-worker 检查日志" });
+      expect(trackAFail.status).toBe("failed");
+      expect(trackAFail.error).toContain("LinuxBox");
+
+      // Turn 1b (Track B across fleet): prompt renders without crashing and marks LinuxBox offline.
+      let capturedPrompt = "";
+      driver.onTurn = async ({ input, emit }) => {
+        capturedPrompt = input.text;
+        emit({ type: "agent.text", uuid: "ok-1", text: "本机正常，LinuxBox 暂时异常", at: Date.now() });
+        emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+      };
+      const trackB = await realDispatcher.submitCommand({ clientId: "bad-peer-b1", text: "现在哪些项目在线" });
+      expect(trackB.status).toBe("answered");
+      expect(capturedPrompt).toContain("LinuxBox (device=dev-linux, online: false)");
+
+      // Turn 2 after backoff and peer recovery: Track A to @LinuxBox/gpu-worker succeeds.
+      remoteMalformed = false;
+      fakeNow += ROUTER_PEER_OFFLINE_BACKOFF_MS + 100;
+      const trackARecovered = await realDispatcher.submitCommand({ clientId: "bad-peer-a2", text: "@LinuxBox/gpu-worker 检查日志" });
+      expect(trackARecovered.status).toBe("dispatched");
+      expect(trackARecovered.dispatched?.[0]).toMatchObject({ deviceId: "dev-linux", pmId: 20, messageId: 901 });
+    } finally {
+      await realDispatcher.close();
+      realRegistry.close();
+      peerAgent.destroy();
+      peerServer.closeAllConnections();
+      await new Promise<void>((resolve) => peerServer.close(() => resolve()));
+    }
+  });
 });

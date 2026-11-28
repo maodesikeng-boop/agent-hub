@@ -258,4 +258,36 @@ describe("createBranchCleanup", () => {
     });
     expect(await missing.inspect()).toEqual({ held: [], repos: [], complete: false });
   });
+
+  it("does not delete an earlier relay branch when a later squash-merged branch reverted its file edit and made another edit to that same file", async () => {
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "ten lines");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "checkout", "-q", "-b", "hub/50-part1");
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => (i === 4 ? "part1 work" : `line ${i + 1}`)).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "part1");
+
+    git(repo, "checkout", "-q", "-b", "hub/51-part2");
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => (i === 8 ? "unrelated edit" : `line ${i + 1}`)).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "revert part1 and edit line 9");
+
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", "hub/51-part2");
+    git(repo, "commit", "-q", "-m", "squash part2");
+
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 50, projectId: 1, branch: "hub/50-part1", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+      { workerId: 51, projectId: 1, branch: "hub/51-part2", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const run = await cleanup.runOnce();
+
+    expect(run.deleted.map((d) => d.branch)).toEqual(["hub/51-part2"]);
+    expect(branchExists("hub/50-part1")).toBe(true);
+    expect(run.held.map((h) => h.branch)).toEqual(["hub/50-part1"]);
+  });
 });

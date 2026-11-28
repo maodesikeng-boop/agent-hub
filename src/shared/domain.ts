@@ -714,7 +714,8 @@ export interface AgentSessionRow {
   updatedAt: number;
 }
 
-export type SessionActivity = "idle" | "working" | "stopping" | "preparing" | "background";
+export const SESSION_ACTIVITIES = ["idle", "working", "stopping", "preparing", "background"] as const;
+export type SessionActivity = (typeof SESSION_ACTIVITIES)[number];
 
 export type StopId = number;
 
