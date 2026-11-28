@@ -10,6 +10,7 @@ import {
 import { runShortSubcommand } from "../../vendors/_common/setup/file-helpers.ts";
 
 const EMPTY: QuotaResponse = { groups: [] };
+const EMPTY_SNAPSHOT: FetchedQuotaSnapshot = { response: EMPTY, probedAt: null };
 
 export function parseFetchedQuota(text: string, spec: FetchedQuotaSpec, vendor: AgentVendor): QuotaResponse {
   const groups: QuotaResponse["groups"] = spec.groups.map((g) => ({ vendor, id: g.key, windows: {} }));
@@ -83,6 +84,12 @@ function currentWindows(value: QuotaResponse, at: number): { value: QuotaRespons
   return groups.length ? { value: { groups }, until } : { value: EMPTY, until: at + FETCHED_QUOTA_RETRY_MS };
 }
 
+interface CachedQuotaEntry {
+  readonly value: QuotaResponse;
+  readonly until: number;
+  readonly probedAt: number | null;
+}
+
 export function createFetchedQuota(options: {
   query: ((signal: AbortSignal) => Promise<QuotaResponse | null>) | undefined;
   fingerprint?: () => string;
@@ -93,8 +100,8 @@ export function createFetchedQuota(options: {
   const now = options.now ?? Date.now;
   const fingerprint = options.fingerprint ?? (() => "");
   let scope: string | undefined;
-  let cached: ReturnType<typeof currentWindows> | undefined;
-  let inflight: { abort: AbortController; result: Promise<QuotaResponse> } | undefined;
+  let cached: CachedQuotaEntry | undefined;
+  let inflight: { abort: AbortController; result: Promise<FetchedQuotaSnapshot> } | undefined;
   let closed = false;
   const draining = new Set<{ abort: AbortController; done: Promise<void> }>();
   const invalidate = () => {
@@ -102,41 +109,52 @@ export function createFetchedQuota(options: {
     inflight = undefined;
     cached = undefined;
   };
+  const getSnapshot = (): Promise<FetchedQuotaSnapshot> => {
+    if (closed || options.query === undefined) return Promise.resolve(EMPTY_SNAPSHOT);
+    const key = fingerprint();
+    if (key !== scope) {
+      const hadScope = scope !== undefined;
+      invalidate();
+      scope = key;
+      if (hadScope) options.onScopeChanged?.();
+    }
+    if (cached !== undefined && now() < cached.until) {
+      return Promise.resolve({ response: cached.value, probedAt: cached.probedAt });
+    }
+    if (inflight !== undefined) return inflight.result;
+    const startedAt = now();
+    const abort = new AbortController();
+    const run = { abort, done: Promise.resolve() };
+    const result = options
+      .query(abort.signal)
+      .catch(() => EMPTY)
+      .then((value): FetchedQuotaSnapshot => {
+        if (closed || inflight?.abort !== abort) return EMPTY_SNAPSHOT;
+        inflight = undefined;
+        if (key !== fingerprint()) return EMPTY_SNAPSHOT;
+        if (value === null) {
+          cached = { value: EMPTY, until: Infinity, probedAt: null };
+          return EMPTY_SNAPSHOT;
+        }
+        const next = currentWindows(value, now());
+        const probedAt = next.value.groups.length > 0 ? startedAt : null;
+        cached = { ...next, probedAt };
+        if (probedAt !== null) options.onFetched?.(cached.value, probedAt);
+        return { response: cached.value, probedAt };
+      });
+    run.done = result.then(() => undefined, () => undefined).finally(() => {
+      draining.delete(run);
+    });
+    draining.add(run);
+    inflight = { abort, result };
+    return result;
+  };
 
   return {
-    getSnapshot(): Promise<FetchedQuotaSnapshot> {
-      throw new Error("Not implemented");
-    },
+    getSnapshot,
     invalidate,
     isCurrent: (value) => !closed && cached?.value === value && now() < cached.until && scope === fingerprint(),
-    get() {
-      if (closed || options.query === undefined) return Promise.resolve(EMPTY);
-      const key = fingerprint();
-      if (key !== scope) {
-        invalidate();
-        scope = key;
-      }
-      if (cached !== undefined && now() < cached.until) return Promise.resolve(cached.value);
-      if (inflight !== undefined) return inflight.result;
-      const abort = new AbortController();
-      const run = { abort, done: Promise.resolve() };
-      const result = options
-        .query(abort.signal)
-        .catch(() => EMPTY)
-        .then((value) => {
-          if (closed || inflight?.abort !== abort) return EMPTY;
-          inflight = undefined;
-          if (key !== fingerprint()) return EMPTY;
-          cached = value === null ? { value: EMPTY, until: Infinity } : currentWindows(value, now());
-          return cached.value;
-        });
-      run.done = result.then(() => undefined, () => undefined).finally(() => {
-        draining.delete(run);
-      });
-      draining.add(run);
-      inflight = { abort, result };
-      return result;
-    },
+    get: () => getSnapshot().then((snapshot) => snapshot.response),
     async close(closeOptions?: { readonly timeoutMs?: number }): Promise<void> {
       closed = true;
       invalidate();

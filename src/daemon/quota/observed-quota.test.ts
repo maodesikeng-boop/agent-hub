@@ -3,7 +3,7 @@ import type { QuotaResponse } from "../../shared/api.ts";
 import { MAX_QUOTA_REASON_CHARS, OBSERVED_QUOTA_FALLBACK_TTL_MS } from "../../shared/limits.ts";
 import { AGENT_VENDORS } from "../../shared/vendors.ts";
 import { workerOpsFixture } from "../ledger/test-helpers.ts";
-import { createObservedQuotaStore, formatVendorQuotaStatus, mergeVendorQuota, observeDriverQuota, parseQuotaResetAt } from "./observed-quota.ts";
+import { createObservedQuotaStore, formatVendorQuotaStatus, loadPersistedSessionRateLimits, mergeVendorQuota, observeDriverQuota, parseQuotaResetAt } from "./observed-quota.ts";
 
 const NOW = Date.parse("2026-11-25T09:00:00Z");
 const CHINA_RESET = Date.parse("2026-11-25T11:10:00Z") / 1000;
@@ -59,7 +59,7 @@ describe("bounded observed quota", () => {
     observeDriverQuota(usage, "claude", { type: "turn.ended", messageIds: [], at: NOW, ok: true, interrupted: false, durationMs: 1 });
     expect(usage.getActive("claude")).toBeNull();
     usage.observeRateLimit("claude", reject);
-    usage.observeRateLimit("claude", { ...reject, status: "allowed" });
+    usage.observeRateLimit("claude", { ...reject, status: "allowed" }, NOW + 1);
     expect(usage.getActive("claude")).toBeNull();
     usage.observeRateLimit("claude", reject);
     usage.clearVendor("claude");
@@ -119,5 +119,21 @@ describe("hub models quota inventory", () => {
     expect((await models()).text).toContain("限额已用完");
     observed.observeTurnSuccess("claude");
     expect((await models()).text).toContain("状态: 可用");
+  });
+
+  it("loads persisted session rate limits from SQLite, skips malformed rows, and hydrates unexpired limits on restart", () => {
+    const valid = JSON.stringify({ status: "rejected", resetsAt: CHINA_RESET, windows: {} });
+    f.db.run("UPDATE agent_sessions SET rate_limit = ?, updated_at = ? WHERE id = ?", valid, NOW - 10_000, f.pm.sessionId);
+    f.db.run(
+      `INSERT INTO agent_sessions (role, vendor, vendor_session_id, cwd, add_dirs, generation, status, rate_limit, created_at, updated_at)
+       VALUES ('worker', 'codex', '', ?, '[]', 1, 'ended', '{bad-json', ?, ?)`,
+      f.folder, NOW - 5_000, NOW - 5_000,
+    );
+    const loaded = loadPersistedSessionRateLimits(f.db);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({ vendor: "claude", updatedAt: NOW - 10_000 });
+    const store = createObservedQuotaStore({ now: () => NOW });
+    expect(store.hydrateFromRateLimits(loaded, NOW)).toBe(1);
+    expect(store.getActive("claude", NOW)).toMatchObject({ vendor: "claude", resetsAt: CHINA_RESET, observedAt: NOW - 10_000 });
   });
 });
