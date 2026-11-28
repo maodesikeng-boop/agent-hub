@@ -50,6 +50,20 @@ function makeBaseReader(baseSources: ReadonlyMap<string, string>): (path: string
   return (path) => baseSources.get(path);
 }
 
+function scansRepoSourceTree(text: string): boolean {
+  const hasRecursiveReaddirSourceRoot =
+    /\breaddir(?:Sync)?\s*\(/.test(text) &&
+    (/\b(?:resolve|join)\s*\(\s*(?:(?:REPO_ROOT|ROOT|process\.cwd\s*\(\s*\))\s*,\s*)?["'`](?:src|scripts|test)(?:\/|["'`])/.test(text) ||
+      /\b(?:resolve|join)\s*\(\s*(?:import\.meta\.dirname|__dirname)\b/.test(text) ||
+      /\bnew\s+URL\s*\(\s*["'`][^"'`]*(?:src|scripts|test)(?:\/|["'`])/.test(text));
+  return (
+    /execFileSync\s*\(\s*["']git["']\s*,\s*\[[^\]]*ls-files[^\]]*(?:src|scripts|test)/.test(text) ||
+    /\bglob(?:Sync)?\s*\([^)]*(?:src|scripts|test)/.test(text) ||
+    /readdir(?:Sync)?\s*\(\s*(?:["']src\b|["']scripts\b|["']test\b|join\s*\(\s*REPO_ROOT\s*,\s*["'](?:src|scripts|test)["']|srcDir)/.test(text) ||
+    hasRecursiveReaddirSourceRoot
+  );
+}
+
 describe("scripts/related-graph.ts review follow-up regressions", () => {
   const tempDirs: string[] = [];
   afterEach(() => {
@@ -314,18 +328,7 @@ describe("scripts/related-graph.ts review follow-up regressions", () => {
     const uncovered: string[] = [];
     for (const [file, text] of loadRepoSources()) {
       if (!/\.test\.tsx?$/.test(file) || covered.has(file)) continue;
-      const hasRecursiveReaddirSourceRoot =
-        /\breaddir(?:Sync)?\s*\(/.test(text) &&
-        (/\b(?:resolve|join)\s*\(\s*(?:(?:REPO_ROOT|ROOT|import\.meta\.dirname|process\.cwd\s*\(\s*\))\s*,\s*)?["'`](?:src|scripts|test)(?:\/|["'`])/.test(
-          text,
-        ) ||
-          /\bnew\s+URL\s*\(\s*["'`][^"'`]*(?:src|scripts|test)(?:\/|["'`])/.test(text));
-      const scansRepoSources =
-        /execFileSync\s*\(\s*["']git["']\s*,\s*\[[^\]]*ls-files[^\]]*(?:src|scripts|test)/.test(text) ||
-        /\bglob(?:Sync)?\s*\([^)]*(?:src|scripts|test)/.test(text) ||
-        /readdir(?:Sync)?\s*\(\s*(?:["']src\b|["']scripts\b|["']test\b|join\s*\(\s*REPO_ROOT\s*,\s*["'](?:src|scripts|test)["']|srcDir)/.test(text) ||
-        hasRecursiveReaddirSourceRoot;
-      if (scansRepoSources) uncovered.push(file);
+      if (scansRepoSourceTree(text)) uncovered.push(file);
     }
     expect(uncovered).toEqual([]);
   });
@@ -739,5 +742,256 @@ process.exit(code);
         }
       }
     }
+  });
+
+  it("8) traverses non-callback arguments (thisArg, .each title/extra args, default params) in static array iteration calls", () => {
+    const baseSources = new Map<string, string>([
+      ["src/review-fixture-data.ts", 'export const mode = "allowed";\n'],
+      ["src/title-fixture.ts", 'export const label = "case";\n'],
+      ["src/default-arg.ts", 'export const fallback = "ok";\n'],
+      ["src/items/alpha.ts", "export const a = 1;\n"],
+      ["src/items/beta.ts", "export const b = 1;\n"],
+      [
+        "test/this-arg.test.ts",
+        [
+          'import { readFileSync } from "node:fs";',
+          'const matches = ["allowed"].map(',
+          "  function (this: string, expected) { return this.includes(expected); },",
+          '  readFileSync(new URL("../src/review-fixture-data.ts", import.meta.url), "utf8"),',
+          ");",
+          "export { matches };",
+        ].join("\n"),
+      ],
+      [
+        "test/each-extra.test.ts",
+        [
+          'import { readFileSync } from "node:fs";',
+          'import { it } from "vitest";',
+          'it.each(["alpha"])(',
+          '  readFileSync(new URL("../src/title-fixture.ts", import.meta.url), "utf8"),',
+          '  (item, extra = readFileSync(new URL("../src/default-arg.ts", import.meta.url), "utf8")) => {',
+          '    void [extra, readFileSync(new URL(`../src/items/${item}.ts`, import.meta.url), "utf8")];',
+          "  },",
+          ");",
+        ].join("\n"),
+      ],
+      ["test/clean-env.ts", "export {};\n"],
+      ["test/spawn-guard.ts", "export {};\n"],
+      ["src/web/test-setup.ts", "export {};\n"],
+      ["src/guard.test.ts", "export {};\n"],
+    ]);
+
+    const runEdit = (file: string, nextContent: string) => {
+      const currentSources = new Map(baseSources);
+      currentSources.set(file, nextContent);
+      return resolveAffectedTests({
+        repoRoot: REPO_ROOT,
+        baseRef: "origin/main",
+        changedFiles: [file],
+        projects: SYNTHETIC_PROJECTS,
+        alwaysRunTests: ["src/guard.test.ts"],
+        sources: currentSources,
+        readBaseFile: makeBaseReader(baseSources),
+      });
+    };
+
+    expect(runEdit("src/review-fixture-data.ts", 'export const mode = "denied";\n').testFiles).toContain("test/this-arg.test.ts");
+    expect(runEdit("src/title-fixture.ts", 'export const label = "changed";\n').testFiles).toContain("test/each-extra.test.ts");
+    expect(runEdit("src/default-arg.ts", 'export const fallback = "changed";\n').testFiles).toContain("test/each-extra.test.ts");
+    expect(runEdit("src/items/alpha.ts", "export const a = 2;\n").testFiles).toContain("test/each-extra.test.ts");
+    expect(runEdit("src/items/beta.ts", "export const b = 2;\n").testFiles).not.toContain("test/each-extra.test.ts");
+  });
+
+  it("9) waits for the Vitest process group to exit before deleting the temp dir when SIGTERM hits Vitest directly", { timeout: 45_000 }, async () => {
+    if (process.platform === "win32") return;
+    const scratchTmp = mkdtempSync(join(tmpdir(), "related-direct-sigterm-"));
+    tempDirs.push(scratchTmp);
+
+    const readyFile = join(scratchTmp, "ready.json");
+    const beforeRemoveFile = join(scratchTmp, "before-remove.json");
+    const probeTest = join(scratchTmp, "direct-sigterm-probe.test.mjs");
+    const vitestConfig = join(scratchTmp, "vitest.direct.config.mjs");
+    const observer = join(scratchTmp, "observer.mjs");
+    const driver = join(scratchTmp, "run-direct-driver.mjs");
+
+    writeFileSync(
+      vitestConfig,
+      'export default { test: { pool: "forks", include: ["direct-sigterm-probe.test.mjs"], testTimeout: 30000 } };\n',
+    );
+    writeFileSync(
+      probeTest,
+      `import { writeFileSync } from "node:fs";
+import { it } from "vitest";
+it("holds briefly on SIGTERM", () => new Promise(() => {
+  let exiting = false;
+  process.on("SIGTERM", () => {
+    if (exiting) return;
+    exiting = true;
+    setTimeout(() => process.exit(0), 180);
+  });
+  writeFileSync(${JSON.stringify(readyFile)}, JSON.stringify({ vitestPid: process.ppid, workerPid: process.pid }));
+}));
+`,
+    );
+    writeFileSync(
+      observer,
+      `import fs, { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return err.code === "EPERM"; }
+};
+const origRmSync = fs.rmSync;
+fs.rmSync = (targetPath, options) => {
+  if (typeof targetPath === "string" && targetPath.startsWith(${JSON.stringify(join(scratchTmp, "test-related-"))})) {
+    const info = existsSync(${JSON.stringify(readyFile)}) ? JSON.parse(readFileSync(${JSON.stringify(readyFile)}, "utf8")) : null;
+    writeFileSync(
+      ${JSON.stringify(beforeRemoveFile)},
+      JSON.stringify({
+        targetPath,
+        groupAliveBeforeRemove: info ? alive(-info.vitestPid) : null,
+        workerAliveBeforeRemove: info ? alive(info.workerPid) : null,
+      }),
+    );
+  }
+  return origRmSync(targetPath, options);
+};
+syncBuiltinESMExports();
+`,
+    );
+    writeFileSync(
+      driver,
+      `import { runVitest } from ${JSON.stringify(resolve(REPO_ROOT, "scripts/test-related.ts"))};
+const code = await runVitest(
+  ["run", "--pool=forks", "--config", ${JSON.stringify(vitestConfig)}, ${JSON.stringify(probeTest)}],
+  { cwd: ${JSON.stringify(scratchTmp)}, tmpRoot: ${JSON.stringify(scratchTmp)} },
+);
+process.exit(code);
+`,
+    );
+
+    const child = spawn(process.execPath, ["--import", observer, driver], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let vitestPid: number | null = null;
+    let workerPid: number | null = null;
+    try {
+      const deadline = performance.now() + 20_000;
+      while (!existsSync(readyFile) && performance.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(existsSync(readyFile)).toBe(true);
+      const info = JSON.parse(readFileSync(readyFile, "utf8")) as { vitestPid: number; workerPid: number };
+      vitestPid = info.vitestPid;
+      workerPid = info.workerPid;
+      expect(vitestPid).toBeGreaterThan(1);
+      expect(workerPid).toBeGreaterThan(1);
+      expect(readdirSync(scratchTmp).some((name) => name.startsWith("test-related-"))).toBe(true);
+
+      const exitPromise = new Promise<number | null>((resolveExit, rejectExit) => {
+        child.once("error", rejectExit);
+        child.once("close", (code) => resolveExit(code));
+      });
+      // Signal Vitest directly rather than runVitest so Vitest handles SIGTERM and closes with { code: 143, signal: null }.
+      process.kill(vitestPid, "SIGTERM");
+      const exitCode = await exitPromise;
+
+      expect(exitCode).toBe(143);
+      expect(readdirSync(scratchTmp).filter((name) => name.startsWith("test-related-"))).toEqual([]);
+      expect(existsSync(beforeRemoveFile)).toBe(true);
+      const snapshot = JSON.parse(readFileSync(beforeRemoveFile, "utf8")) as {
+        groupAliveBeforeRemove: boolean | null;
+        workerAliveBeforeRemove: boolean | null;
+      };
+      expect(snapshot.groupAliveBeforeRemove).toBe(false);
+      expect(snapshot.workerAliveBeforeRemove).toBe(false);
+    } finally {
+      for (const pid of [vitestPid, workerPid]) {
+        if (pid !== null && pid > 1) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // Already exited.
+          }
+        }
+      }
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Already exited.
+        }
+      }
+    }
+  });
+
+  it("10) detects recursive readdir source scans rooted at resolve(import.meta.dirname, ...) or __dirname combined paths", () => {
+    for (const sourceGuardText of [
+      'const dir = resolve(import.meta.dirname, "..", "src");\nreaddirSync(dir, { recursive: true });\n',
+      'const dir = resolve(import.meta.dirname, "../src/web");\nreaddirSync(dir);\n',
+      'const dir = join(__dirname, "..", "..", "scripts");\nreaddirSync(dir);\n',
+      'const dir = resolve(__dirname, "../test");\nreaddirSync(dir);\n',
+      'const dir = resolve(import.meta.dirname);\nreaddirSync(dir, { withFileTypes: true });\n',
+      'const dir = join(import.meta.dirname, "..", "components");\nreaddirSync(dir);\n',
+    ]) {
+      expect(scansRepoSourceTree(sourceGuardText), sourceGuardText).toBe(true);
+    }
+    for (const benignTestText of [
+      'const dir = mkdtempSync(join(tmpdir(), "guard-"));\nreaddirSync(dir);\n',
+      'const file = resolve(import.meta.dirname, "..", "src/foo.ts");\nreadFileSync(file, "utf8");\n',
+    ]) {
+      expect(scansRepoSourceTree(benignTestText), benignTestText).toBe(false);
+    }
+  });
+
+  it("11) treats retargeted named re-exports whose source module changes as module-level changes even when staticModuleDeps stays identical", () => {
+    const known = new Set(["src/setup.ts", "src/other.ts", "src/runner.ts", "src/index.ts"]);
+
+    // Both ./setup.ts and ./runner.ts remain in staticModuleDeps, while `extra` moves from ./setup.ts to ./runner.ts.
+    const oldSharedDepsBarrel = 'export { config, extra } from "./setup.ts";\nexport { run } from "./runner.ts";\n';
+    const newSharedDepsBarrel = 'export { config } from "./setup.ts";\nexport { extra, run } from "./runner.ts";\n';
+    expect(diffChangedExports("src/index.ts", oldSharedDepsBarrel, newSharedDepsBarrel, known).kind).toBe("all");
+
+    const baseSources = new Map<string, string>([
+      ["src/setup.ts", "export const config = 1;\nexport const extra = 2;\n"],
+      ["src/runner.ts", "export const run = () => 1;\n"],
+      ["src/index.ts", oldSharedDepsBarrel],
+      ["src/config.test.ts", 'import { config } from "./index.ts";\nvoid config;\n'],
+      ["src/run.test.ts", 'import { run } from "./index.ts";\nvoid run;\n'],
+      ["test/clean-env.ts", "export {};\n"],
+      ["test/spawn-guard.ts", "export {};\n"],
+      ["src/web/test-setup.ts", "export {};\n"],
+      ["src/guard.test.ts", "export {};\n"],
+    ]);
+    const currentSources = new Map(baseSources);
+    currentSources.set("src/index.ts", newSharedDepsBarrel);
+    const result = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/index.ts"],
+      projects: SYNTHETIC_PROJECTS,
+      alwaysRunTests: ["src/guard.test.ts"],
+      sources: currentSources,
+      readBaseFile: makeBaseReader(baseSources),
+    });
+    expect(result.testFiles).toContain("src/config.test.ts");
+    expect(result.testFiles).toContain("src/run.test.ts");
+
+    // Re-export retargeted to an already-imported module still triggers module-level invalidation.
+    const oldWithImports =
+      'import { a } from "./setup.ts";\nimport { b } from "./other.ts";\nexport const both = [a, b];\nexport { config } from "./setup.ts";\n';
+    const newWithImports =
+      'import { a } from "./setup.ts";\nimport { b } from "./other.ts";\nexport const both = [a, b];\nexport { config } from "./other.ts";\n';
+    expect(diffChangedExports("src/index.ts", oldWithImports, newWithImports, known).kind).toBe("all");
+
+    // Adding a new re-export from the same already-loaded module remains symbol-scoped (preserving S2).
+    const oldSameSource = 'export { config } from "./setup.ts";\nexport { run } from "./runner.ts";\n';
+    const newSameSource = 'export { config, extra } from "./setup.ts";\nexport { run } from "./runner.ts";\n';
+    expect(diffChangedExports("src/index.ts", oldSameSource, newSameSource, known)).toEqual({
+      kind: "symbols",
+      symbols: ["extra"],
+    });
   });
 });

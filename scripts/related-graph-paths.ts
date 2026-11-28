@@ -553,6 +553,7 @@ function walkDynamicMockAndFileRefs(
       if (resolved !== ctx.file) ctx.addFileDep(resolved);
     }
   }
+  let callbackScope: { readonly cb: AstNode; readonly scope: Map<string, readonly string[]> } | null = null;
   if (node.type === "ImportExpression") {
     const spec = staticStringValue(node.source);
     if (spec !== null) {
@@ -602,8 +603,7 @@ function walkDynamicMockAndFileRefs(
       if (list !== null && paramName !== null && isAstNode(cb)) {
         const nextScope = new Map(scopedLists);
         nextScope.set(paramName, list);
-        walkDynamicMockAndFileRefs(cb.body, ctx, nextScope);
-        return;
+        callbackScope = { cb, scope: nextScope };
       }
     }
     if (
@@ -621,8 +621,7 @@ function walkDynamicMockAndFileRefs(
       if (list !== null && paramName !== null && isAstNode(cb)) {
         const nextScope = new Map(scopedLists);
         nextScope.set(paramName, list);
-        walkDynamicMockAndFileRefs(cb.body, ctx, nextScope);
-        return;
+        callbackScope = { cb, scope: nextScope };
       }
     }
     if (
@@ -689,9 +688,11 @@ function walkDynamicMockAndFileRefs(
   for (const [key, value] of Object.entries(node)) {
     if (ctx.skippedKeys.has(key)) continue;
     if (Array.isArray(value)) {
-      for (const item of value) walkDynamicMockAndFileRefs(item, ctx, scopedLists);
+      for (const item of value) {
+        walkDynamicMockAndFileRefs(item, ctx, callbackScope !== null && item === callbackScope.cb ? callbackScope.scope : scopedLists);
+      }
     } else {
-      walkDynamicMockAndFileRefs(value, ctx, scopedLists);
+      walkDynamicMockAndFileRefs(value, ctx, callbackScope !== null && value === callbackScope.cb ? callbackScope.scope : scopedLists);
     }
   }
 }

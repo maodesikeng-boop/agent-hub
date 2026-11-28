@@ -466,13 +466,18 @@ function recordDeclaration(
   return declared;
 }
 
+interface ReexportBinding {
+  readonly source: string;
+  readonly imported: string;
+}
+
 interface DetailedModuleAnalysis {
   readonly summary: ModuleSummary;
   readonly localFingerprints: ReadonlyMap<string, string>;
   readonly importBindingFingerprints: ReadonlyMap<string, string>;
   readonly sideEffectImportTargets: ReadonlySet<string>;
   readonly staticModuleDeps: readonly string[];
-  readonly namedReexportFingerprints: ReadonlyMap<string, string>;
+  readonly namedReexportFingerprints: ReadonlyMap<string, ReexportBinding>;
   readonly wildcardReexportTargets: ReadonlySet<string>;
   readonly topLevelSideEffectFingerprints: readonly string[];
 }
@@ -537,7 +542,7 @@ function analyzeModuleDetailed(
   const localFingerprints = new Map<string, string>();
   const importBindingFingerprints = new Map<string, string>();
   const sideEffectImportTargets = new Set<string>();
-  const namedReexportFingerprints = new Map<string, string>();
+  const namedReexportFingerprints = new Map<string, ReexportBinding>();
   const wildcardReexportTargets = new Set<string>();
   const topLevelSideEffectFingerprints: string[] = [];
 
@@ -630,7 +635,7 @@ function analyzeModuleDetailed(
         wildcardReexportTargets.add(target ?? spec);
         if (target !== null) reexports.push({ target, exported: "*", imported: "*" });
       } else {
-        namedReexportFingerprints.set(exported, `${target ?? spec}#*`);
+        namedReexportFingerprints.set(exported, { source: target ?? spec, imported: "*" });
         if (target !== null) reexports.push({ target, exported, imported: "*" });
       }
       continue;
@@ -650,7 +655,7 @@ function analyzeModuleDetailed(
           const exported = exportOrImportName(s.exported);
           if (imported === null || exported === null) continue;
           hasRuntimeSpecifier = true;
-          namedReexportFingerprints.set(exported, `${target ?? spec}#${imported}`);
+          namedReexportFingerprints.set(exported, { source: target ?? spec, imported });
           if (target !== null) reexports.push({ target, exported, imported });
         }
         if (hasRuntimeSpecifier) addStaticModuleDep(target ?? spec);
@@ -920,7 +925,13 @@ export function diffChangedExports(
     }
   }
   for (const exp of new Set([...prev.namedReexportFingerprints.keys(), ...next.namedReexportFingerprints.keys()])) {
-    if (prev.namedReexportFingerprints.get(exp) !== next.namedReexportFingerprints.get(exp)) changedExports.add(exp);
+    const oldBinding = prev.namedReexportFingerprints.get(exp);
+    const newBinding = next.namedReexportFingerprints.get(exp);
+    if (oldBinding?.source === newBinding?.source && oldBinding?.imported === newBinding?.imported) continue;
+    if (oldBinding !== undefined && newBinding !== undefined && oldBinding.source !== newBinding.source) {
+      return { kind: "all", reason: `re-export ${exp} changed source module` };
+    }
+    changedExports.add(exp);
   }
 
   if (changedExports.size === 0) return { kind: "none" };

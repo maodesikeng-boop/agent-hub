@@ -199,8 +199,24 @@ export async function runVitest(
     env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
   });
   let receivedSignal: NodeJS.Signals | null = null;
+  let exitCode: number | null = null;
+  let exitSignal: NodeJS.Signals | null = null;
   let escalateTimer: ReturnType<typeof setTimeout> | undefined;
   let win32KillPromise: Promise<void> | undefined;
+  let childrenSettled = false;
+  const settleChildren = async (): Promise<void> => {
+    if (childrenSettled) return;
+    childrenSettled = true;
+    const pid = child.pid;
+    if (pid === undefined) return;
+    if (useProcessGroup) {
+      // Check the process group unconditionally so direct SIGTERM to Vitest ({ code: 143, signal: null }) still waits for forks workers before removing dir.
+      const stopSignal: NodeJS.Signals = receivedSignal ?? exitSignal ?? (exitCode === 130 ? "SIGINT" : "SIGTERM");
+      await waitForProcessGroupExit(pid, KILL_WAIT_MS, stopSignal);
+    } else if (receivedSignal !== null || exitSignal !== null || win32KillPromise !== undefined || exitCode === 130 || exitCode === 143) {
+      await (win32KillPromise ?? killWindowsProcessTree(pid));
+    }
+  };
   const forwardSignal = (sig: NodeJS.Signals): void => {
     receivedSignal = sig;
     const pid = child.pid;
@@ -224,18 +240,13 @@ export async function runVitest(
       child.once("error", rejectExit);
       child.once("close", (code, signal) => resolveExit({ code, signal }));
     });
+    exitCode = exit.code;
+    exitSignal = exit.signal;
     if (escalateTimer !== undefined) {
       clearTimeout(escalateTimer);
       escalateTimer = undefined;
     }
-    const pid = child.pid;
-    if (pid !== undefined && (receivedSignal !== null || exit.signal !== null)) {
-      if (useProcessGroup) {
-        await waitForProcessGroupExit(pid, KILL_WAIT_MS, receivedSignal ?? exit.signal ?? "SIGTERM");
-      } else {
-        await (win32KillPromise ?? killWindowsProcessTree(pid));
-      }
-    }
+    await settleChildren();
     const report = sandboxSkipReport(existsSync(log) ? readFileSync(log, "utf8") : "");
     if (report) console.log(report);
     if (receivedSignal === "SIGINT") return 130;
@@ -248,6 +259,7 @@ export async function runVitest(
     if (escalateTimer !== undefined) clearTimeout(escalateTimer);
     process.off("SIGINT", onSigInt);
     process.off("SIGTERM", onSigTerm);
+    await settleChildren();
     rmSync(dir, { recursive: true, force: true });
   }
 }

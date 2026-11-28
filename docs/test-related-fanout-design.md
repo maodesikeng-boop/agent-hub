@@ -225,6 +225,14 @@ None.
 |---|---:|---|
 | `TEST_RELATED_LOCAL_MAX_WORKERS` | `4` | On 8 to 16 core developer machines running 2 to 3 concurrent Bellwood Workers, capping each local `pnpm test:related` run to `min(4, floor(cpus / 2), selectedTestFiles)` keeps peak forks bounded to 2 to 4 per Worker. Measured on 10 cores: `ALWAYS_RUN_TESTS` (18 files) runs 35% faster (`7.15s` vs `10.94s`) and uses 33% less CPU at 4 workers than 9; `src/daemon/feishu/service.ts` (30 files) stays within 1.4% wall time (`75.33s` vs `74.29s`) while cutting system CPU by 18% and peak forks by 56%. |
 
+### Known static-analysis and process-cleanup boundaries
+
+To keep local selection fast and maintainable without adding speculative runtime emulation, three narrow edge cases are explicitly out of scope for `pnpm test:related` and remain covered by cloud CI's full-suite shards (`check (ubuntu 1/4..4/4)`):
+
+1. **Computed static class fields resolving to `"prototype"` (`class { static [KEY] = ... }`)**: Static AST purity analysis does not evaluate arbitrary computed static property keys to detect the JavaScript `TypeError` thrown if a computed static field name evaluates to `"prototype"` at runtime.
+2. **Dynamic template `new URL(...)` runtime `../` directory escape**: Dynamic template URL fallback scopes file dependencies to the normalized static prefix directory and does not assume runtime interpolated values inject `../` traversal segments to escape outside that prefix directory.
+3. **Tests spawning `detached: true` orphan processes**: `scripts/test-related.ts` waits for and reaps Vitest and every worker in Vitest's own process group (`-pgid` on POSIX, `taskkill /t /f` on Windows) before removing its temporary sandbox-skip directory, but does not track separate process groups explicitly detached by test code via `spawn(..., { detached: true })` (which remain the responsibility of the test and `test/spawn-guard.ts`).
+
 ---
 
 ## 5. Cross-vendor and cross-platform unification
