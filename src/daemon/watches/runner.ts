@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { KILL_WAIT_MS, WATCH_PROBE_TIMEOUT_MS, WATCH_PRUNE_EVERY_MS, WATCH_TICK_MS, WATCHES_RUNNING_MAX } from "../../shared/limits.ts";
+import { PROBE_SHUTDOWN_DRAIN_MS, WATCH_PROBE_TIMEOUT_MS, WATCH_PRUNE_EVERY_MS, WATCH_TICK_MS, WATCHES_RUNNING_MAX } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { PmWatchId, PmWatchOutcome, PmWatchRecord } from "../../shared/pm-watch.ts";
 import type { PmWatchRunnerLedger } from "../ledger/pm-watch-commands.ts";
@@ -191,7 +191,7 @@ export function createWatchRunner(options: WatchRunnerOptions): WatchRunner {
       if (timer !== undefined) clearInterval(timer);
       for (const entry of running.values()) entry.controller.abort();
       let wait: NodeJS.Timeout | undefined;
-      await Promise.race([idle(), new Promise((resolve) => (wait = setTimeout(resolve, KILL_WAIT_MS)))]);
+      await Promise.race([idle(), new Promise((resolve) => (wait = setTimeout(resolve, PROBE_SHUTDOWN_DRAIN_MS)))]);
       clearTimeout(wait);
     },
   };

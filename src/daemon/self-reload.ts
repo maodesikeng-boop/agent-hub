@@ -48,7 +48,10 @@ export interface SelfReloadController {
    */
   cancel(input: { by: string }): { text: string; status: SelfReloadStatus };
   status(): SelfReloadStatus;
-  close(): void;
+  /**
+   * Postcondition: stops drain timers, aborts any in-flight staged web build, and resolves only after the build subprocess has exited.
+   */
+  close(): Promise<void>;
 }
 
 export function createSelfReload(options: SelfReloadOptions): SelfReloadController {
@@ -69,6 +72,7 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
   let requestedAt: number | null = null;
   let lastFailure = options.initialFailure == null ? null : truncateChars(options.initialFailure, SELF_RELOAD_FAILURE_MAX_CHARS);
   let closed = false;
+  let closing: Promise<void> | null = null;
   let activeBuild: ActiveBuild | null = null;
   let settlingBuild: Promise<void> | null = null;
   let quietTimer: ReturnType<typeof setTimeout> | null = null;
@@ -259,20 +263,21 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
     },
     status,
     close() {
-      if (closed) return;
+      if (closing !== null) return closing;
       closed = true;
       if (state === "restarting") {
         stopWatching();
-        return;
-      }
-      if (state === "building") {
+      } else if (state === "building") {
         fail("守护进程在网页构建完成前被关停，新网页没换上");
-        return;
+      } else {
+        if (state === "draining") {
+          log(`${LOG_PREFIX} 热重启：等全库空闲时守护进程被关停，${built ? "已构建通过的网页下次启动时换上" : "下次启动即运行新代码"}。`);
+        }
+        reset();
       }
-      if (state === "draining") {
-        log(`${LOG_PREFIX} 热重启：等全库空闲时守护进程被关停，${built ? "已构建通过的网页下次启动时换上" : "下次启动即运行新代码"}。`);
-      }
-      reset();
+      const pending = settlingBuild;
+      closing = pending === null ? Promise.resolve() : pending.catch(() => undefined);
+      return closing;
     },
   };
 }

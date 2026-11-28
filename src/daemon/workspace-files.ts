@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { LRUCache } from "lru-cache";
@@ -10,7 +9,10 @@ import {
   WORKSPACE_FILES_FRESH_MS,
   WORKSPACE_LIST_TIMEOUT_MS,
 } from "../shared/index.ts";
+import { killChildAndWait, termGroupAfterExit } from "./driver/process.ts";
 import { GIT_READONLY_ARGS, GIT_READONLY_ENV } from "./git/index.ts";
+import { spawnOwnedProcess } from "./platform/index.ts";
+import { trackChild } from "./process-ledger.ts";
 
 const SKIPPED_DIRS = new Set(["node_modules", ".git"]);
 
@@ -38,11 +40,28 @@ export interface WorkspaceFiles {
 
 function gitListFiles(root: string, maxFiles: number, timeoutMs: number): Promise<FileList | null> {
   return new Promise((resolve) => {
-    const child = spawn("git", [...GIT_READONLY_ARGS, "-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
-      cwd: root,
-      env: { ...process.env, ...GIT_READONLY_ENV },
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    let spawned: ReturnType<typeof spawnOwnedProcess>;
+    try {
+      spawned = spawnOwnedProcess(
+        "git",
+        [...GIT_READONLY_ARGS, "-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        {
+          cwd: root,
+          env: { ...process.env, ...GIT_READONLY_ENV },
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    const { child, detached } = spawned;
+    if (!child.stdout) {
+      void killChildAndWait(child).finally(() => resolve(null));
+      return;
+    }
+    trackChild(child, "probe:workspace-files", { detached });
+    child.once("exit", () => termGroupAfterExit(child));
     const files = new Set<string>();
     let rest = "";
     let truncated = false;
@@ -51,7 +70,10 @@ function gitListFiles(root: string, maxFiles: number, timeoutMs: number): Promis
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) {
+        void killChildAndWait(child).finally(() => resolve(result));
+        return;
+      }
       resolve(result);
     };
     const timer = setTimeout(() => finish(files.size > 0 ? { files: [...files], truncated: true } : null), timeoutMs);

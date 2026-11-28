@@ -3,15 +3,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   COMMANDS_QUERY_TIMEOUT_MS,
-  KILL_WAIT_MS,
   MAX_COMMANDS,
   MAX_COMMAND_DESCRIPTION_CHARS,
   MAX_COMMAND_HINT_CHARS,
   truncateChars,
   type ComposerCommand,
 } from "../../shared/index.ts";
-import { STDERR_TAIL_CHARS, killThenSettle } from "../../daemon/driver/model-catalog.ts";
-import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { STDERR_TAIL_CHARS } from "../../daemon/driver/model-catalog.ts";
+import { closeAndWaitChild, killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv, userContent } from "../../daemon/driver/protocol.ts";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
@@ -113,25 +112,19 @@ function queryPiRpcCommands(options: PiCommandsQueryOptions): Promise<unknown> {
     let buffer = "";
     let stderr = "";
     let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    let exitTimer: NodeJS.Timeout | undefined;
 
     const finish = (error: Error | null, data?: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(exitTimer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
-        killThenSettle(child, () => reject(error));
+        void killChildAndWait(child).finally(() => reject(error));
         return;
       }
-      child.stdin.end();
-      if (!exited()) {
-        killTimer = setTimeout(() => void forceKill(child), KILL_WAIT_MS);
-        killTimer.unref();
-        child.once("exit", () => clearTimeout(killTimer));
-      }
-      resolve(data);
+      void closeAndWaitChild(child, { signal }).finally(() => resolve(data));
     };
 
     const onAbort = () => finish(new Error("cancelled"));
@@ -179,7 +172,7 @@ function queryPiRpcCommands(options: PiCommandsQueryOptions): Promise<unknown> {
     });
     child.once("exit", (code, sig) => {
       termGroupAfterExit(child);
-      setTimeout(
+      exitTimer = setTimeout(
         () =>
           finish(
             new Error(

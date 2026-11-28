@@ -1,12 +1,11 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { LRUCache } from "lru-cache";
 import {
   AGENT_VENDORS,
-  KILL_WAIT_MS,
   MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_MAX_PROBE_ATTEMPTS,
   MODEL_CATALOG_RETRY_MS,
+  PROBE_SHUTDOWN_DRAIN_MS,
   VENDOR_RECHECK_BUDGET_MS,
   bundledModelCatalog,
   isSelectable,
@@ -17,7 +16,6 @@ import {
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { CatalogFingerprint } from "../../shared/paths.ts";
-import { forceKill, killFreshGroup } from "./process.ts";
 
 export const STDERR_TAIL_CHARS = 500;
 
@@ -30,13 +28,6 @@ export function effortsOf(entry: Record<string, unknown>): string[] | null {
     return [...new Set(entry.supportedEffortLevels.filter((e): e is string => typeof e === "string"))];
   }
   return entry.supportsEffort === false ? [] : null;
-}
-
-/** Settle only after the whole group is SIGKILLed; forceKill SIGSTOPs first, so settling early leaves stopped orphans when the caller exits. */
-export function killThenSettle(child: ChildProcessWithoutNullStreams, settle: () => void): void {
-  forceKill(child)
-    .catch(() => killFreshGroup(child))
-    .finally(settle);
 }
 
 export function parseJsonOutput(stdout: string): { ok: true; value: unknown } | { ok: false } {
@@ -288,7 +279,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       await Promise.race([
         Promise.allSettled(pending),
         new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, KILL_WAIT_MS);
+          timer = setTimeout(resolve, PROBE_SHUTDOWN_DRAIN_MS);
           timer.unref();
         }),
       ]);

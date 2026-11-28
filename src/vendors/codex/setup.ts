@@ -2,8 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { posix, win32 } from "node:path";
-import { killThenSettle } from "../../daemon/driver/model-catalog.ts";
-import { termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
@@ -219,7 +218,7 @@ function driveCodexLoginServer(options: CodexLoginOptions, childEnv: Record<stri
           } catch {
           }
         }
-        killThenSettle(child, () => (err ? reject(err) : resolve()));
+        void killChildAndWait(child).finally(() => (err ? reject(err) : resolve()));
       } else if (err) {
         reject(err);
       } else {

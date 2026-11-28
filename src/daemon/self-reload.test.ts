@@ -238,7 +238,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
       },
     });
     h.reload.request({ build: true, by: "pm" });
-    h.reload.close();
+    void h.reload.close();
     expect(signals[0]?.aborted).toBe(true);
     expect(h.lines.join("\n")).toContain("热重启已取消：守护进程在网页构建完成前被关停，新网页没换上");
     expect(h.reload.status().lastFailure).toContain("新网页没换上");
@@ -251,7 +251,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
     const idle = harness();
     idle.reload.request({ build: false, by: "pm" });
     vi.advanceTimersByTime(SELF_RELOAD_QUIET_MS - 1);
-    idle.reload.close();
+    void idle.reload.close();
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(SELF_RELOAD_QUIET_MS);
     expect(idle.restart).not.toHaveBeenCalled();
@@ -263,7 +263,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
     h.setBusy(["1 个会话还在跑"]);
     h.reload.request({ build: true, by: "pm" });
     await vi.waitFor(() => expect(h.reload.status().state).toBe("draining"));
-    h.reload.close();
+    await h.reload.close();
     vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS);
     expect(h.restart).not.toHaveBeenCalled();
     expect(applyBuild).not.toHaveBeenCalled();
@@ -272,7 +272,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
     const plain = harness();
     plain.setBusy(["1 个会话还在跑"]);
     plain.reload.request({ build: false, by: "pm" });
-    plain.reload.close();
+    await plain.reload.close();
     expect(plain.lines.at(-1)).toContain("等全库空闲时守护进程被关停，下次启动即运行新代码");
   });
 
