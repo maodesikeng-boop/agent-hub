@@ -69,6 +69,14 @@ describe("各家怎么从名单那次查询里看登录状态", () => {
         }
         writeFileSync(join(dir, "config.toml"), "cli_auth_credentials_store='keyring'\n");
         expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused")).toBe("unknown");
+        for (const content of [
+          '"cli_auth_credentials_store" = "keyring"\n',
+          "'cli_auth_credentials_store' = 'auto'\n",
+          'note = """\n[not-a-section]\n"""\ncli_auth_credentials_store = """keyring"""\n',
+        ]) {
+          writeFileSync(join(dir, "config.toml"), content);
+          expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused"), content).toBe("unknown");
+        }
       });
     });
 

@@ -474,12 +474,20 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
     expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
 
-    // Leftover auth.json when config.toml specifies keyring store.
+    // Leftover auth.json when config.toml specifies keyring store (including quoted TOML keys and multiline values).
     writeFileSync(authFile, JSON.stringify({ auth_mode: "chatgpt" }));
     utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
-    writeFileSync(configFile, 'cli_auth_credentials_store = "keyring"\n');
-    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).toBeNull();
-    expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
+    for (const toml of [
+      'cli_auth_credentials_store = "keyring"\n',
+      '"cli_auth_credentials_store" = "keyring"\n',
+      "'cli_auth_credentials_store' = 'keyring'\n",
+      'cli_auth_credentials_store = """keyring"""\n',
+      'note = """\n[not-a-section]\n"""\n"cli_auth_credentials_store" = "keyring"\n',
+    ]) {
+      writeFileSync(configFile, toml);
+      expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs }), toml).toBeNull();
+      expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs }), toml).toBeNull();
+    }
 
     // Mismatched email between auth.json JWT and account/read result.
     writeFileSync(configFile, 'cli_auth_credentials_store = "auto"\n');

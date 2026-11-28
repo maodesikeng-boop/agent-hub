@@ -1,7 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { parse as parseToml } from "@decimalturn/toml-patch";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
   CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS,
@@ -9,6 +10,7 @@ import {
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
   MAX_CODEX_MODELS_CACHE_BYTES,
+  MAX_VENDOR_SYNC_CONFIG_BYTES,
   MODEL_CATALOG_TIMEOUT_MS,
   PROVIDER_SECRETS_FILE_MAX_BYTES,
   bundledModelCatalog,
@@ -434,19 +436,17 @@ export const codexCatalogProbe: VendorCatalogProbe = {
 };
 
 function codexCredentialsStore(codexHome: string): string | null {
-  let text: string;
+  const file = readBoundedFile(join(codexHome, "config.toml"), MAX_VENDOR_SYNC_CONFIG_BYTES);
+  if (file === null) return null;
+  let parsed: unknown;
   try {
-    text = readFileSync(join(codexHome, "config.toml"), "utf8");
+    parsed = parseToml(file.text.replace(/^\uFEFF/, ""), { integersAsBigInt: false });
   } catch {
     return null;
   }
-  for (const line of text.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("[")) return null;
-    const match = /^cli_auth_credentials_store\s*=\s*(?:"([^"]*)"|'([^']*)')/u.exec(trimmed);
-    if (match) return match[1] ?? match[2] ?? null;
-  }
-  return null;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const value = (parsed as Record<string, unknown>).cli_auth_credentials_store;
+  return typeof value === "string" ? value : null;
 }
 
 // auth.json may be absent when cli_auth_credentials_store is keyring or auto.
