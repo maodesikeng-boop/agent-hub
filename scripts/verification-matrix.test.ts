@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -515,6 +516,44 @@ describe("regression: unchanged Feishu runtime, Settings UI, and CI workflow fac
     expect(benchVendors).toEqual([...AGENT_VENDORS].sort());
     for (const platform of VERIFICATION_PLATFORMS) {
       expect(["macos", "windows", "linux"]).toContain(platform satisfies VerificationPlatform);
+    }
+  });
+
+  it("R4: rejects source-only Quick Start Feishu instructions and detects Markdown drift in CLI check", () => {
+    const cmds = packagedFeishuCommands(DEFAULT_FEISHU_LAYOUT);
+    const oldEn = [
+      "### 4. Connect Feishu, Linux, or other computers (optional)",
+      "- **Feishu bot and project groups.** While the daemon is running, run `node src/feishu/main.ts connect` and scan the QR code in Feishu. Run `node src/feishu/main.ts status` to inspect bindings.",
+      "## Feishu on mobile and in team groups",
+      "- **One shared bot per account.** Run `node src/feishu/main.ts connect` and scan the QR code to create your bot.",
+    ].join("\n");
+    const oldZh = [
+      "### 4. 接入飞书、Linux 或其他电脑（可选）",
+      "- **飞书机器人与项目群**：守护进程运行时执行 `node src/feishu/main.ts connect` 并用飞书扫码；执行 `node src/feishu/main.ts status` 查看绑定状态。",
+      "## 飞书入口",
+      "- **全账号共用一个机器人**：执行 `node src/feishu/main.ts connect` 扫码即可创建。",
+    ].join("\n");
+
+    const problems = validateFeishuQuickStartDocs({ readmeEn: oldEn, readmeZh: oldZh, commands: cmds });
+    expect(problems.some((p) => p.includes("README.md") && p.includes("macConnect"))).toBe(true);
+    expect(problems.some((p) => p.includes("README.md") && p.includes("winConnectPowerShell"))).toBe(true);
+    expect(problems.some((p) => p.includes("README.md") && p.includes("docs/verification-matrix.md"))).toBe(true);
+    expect(problems.some((p) => p.includes("README.zh-CN.md") && p.includes("macConnect"))).toBe(true);
+    expect(problems.some((p) => p.includes("README.zh-CN.md") && p.includes("unqualified"))).toBe(true);
+
+    const driftRoot = mkdtempSync(join(tmpdir(), "bellwood-matrix-drift-"));
+    try {
+      mkdirSync(join(driftRoot, "docs"), { recursive: true });
+      mkdirSync(join(driftRoot, ".github", "workflows"), { recursive: true });
+      mkdirSync(join(driftRoot, "apps", "windows"), { recursive: true });
+      writeFileSync(join(driftRoot, "apps", "windows", "Cargo.toml"), readFileSync(join(REPO_ROOT, "apps", "windows", "Cargo.toml")));
+      writeFileSync(join(driftRoot, ".github", "workflows", "windows.yml"), readFileSync(join(REPO_ROOT, ".github", "workflows", "windows.yml")));
+      writeFileSync(join(driftRoot, ".github", "workflows", "nightly.yml"), readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml")));
+      writeFileSync(join(driftRoot, "docs", "verification-matrix.json"), readFileSync(join(REPO_ROOT, "docs", "verification-matrix.json")));
+      writeFileSync(join(driftRoot, "docs", "verification-matrix.md"), "# Hand edited drift\n");
+      expect(runVerificationMatrixCli(["check"], { repoRoot: driftRoot })).toBe(1);
+    } finally {
+      rmSync(driftRoot, { recursive: true, force: true });
     }
   });
 });

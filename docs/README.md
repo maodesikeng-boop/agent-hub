@@ -5,6 +5,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 ## User guides and references
 
 - [Running Bellwood on Linux](linux.md): Ubuntu user-mode setup, Node 24.12+ and `bubblewrap` configuration, CLI lookup paths, `systemd --user` service management, and remote access.
+- [Verification matrix](verification-matrix.md): Commit-bound `8 vendors x 3 platforms` verification status separating live vendor service runs, real-CLI mock-LLM CI, offline driver tests, and unverified gaps.
 - [Worker write and read scope](write-scope.md): Write boundaries across protected roots and least-privilege data-directory read and socket isolation across macOS, Linux, and Windows.
 - [Security policy](../SECURITY.md): Supported versions, private vulnerability reporting, local loopback and socket boundaries, OS sandboxes, Computer Use approvals, account mesh, and Feishu guest tiers.
 - [Contributing guide](../CONTRIBUTING.md): Bug reports, local setup, mandatory gate commands, and pull request workflow.

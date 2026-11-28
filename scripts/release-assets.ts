@@ -16,6 +16,7 @@ import { RELEASE_INSTALLER_FILES } from "../src/shared/update.ts";
 import { publishRelease, readReleaseFacts, yankRelease, type ReleaseContext } from "./release-github.ts";
 import { planRelease, releaseNotesFor, type ReleasePlan } from "./release-plan.ts";
 import { REPO_ROOT, readDesktopAppVersion, sha256FileHex } from "./stage-runtime-common.ts";
+import { validateRepoVerificationMatrix } from "./verification-matrix.ts";
 
 export interface ReleaseAssetSpec {
   platform: "windows" | "macos";
@@ -149,9 +150,19 @@ function releaseContext(dryRun: boolean): ReleaseContext {
   };
 }
 
+function assertVerificationMatrixValid(repoRoot: string, appVersion: string): void {
+  const problems = validateRepoVerificationMatrix(repoRoot, appVersion);
+  if (problems.length > 0) {
+    throw new Error(
+      `Verification matrix check failed:\n${problems.map((p) => `- [${p.code}] ${p.path}: ${p.message}`).join("\n")}`,
+    );
+  }
+}
+
 function planTag(tag: string, ctx: ReleaseContext): ReleasePlan {
   const appVersion = readDesktopAppVersion();
   assertVersionSourcesMatch(REPO_ROOT, appVersion);
+  assertVerificationMatrixValid(REPO_ROOT, appVersion);
   const facts = readReleaseFacts(tag, appVersion, ctx);
   const plan = planRelease(facts, { dryRun: ctx.dryRun });
   if (!ctx.dryRun && facts.commit !== process.env["GITHUB_SHA"]) {
@@ -210,7 +221,8 @@ function main(): void {
     const appVersion = readDesktopAppVersion();
     assertVersionSourcesMatch(REPO_ROOT, appVersion);
     releaseNotesFor(readChangelog(), appVersion);
-    console.log(`version=${appVersion}: version sources agree and CHANGELOG.md has a v${appVersion} section`);
+    assertVerificationMatrixValid(REPO_ROOT, appVersion);
+    console.log(`version=${appVersion}: version sources, CHANGELOG.md, and verification matrix agree`);
     setGithubOutput("version", appVersion);
     return;
   }

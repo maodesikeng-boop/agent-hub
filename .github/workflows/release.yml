@@ -27,10 +27,16 @@ on:
       - "scripts/release-github.test.ts"
       - "scripts/release-plan.ts"
       - "scripts/release-plan.test.ts"
+      - "scripts/verification-matrix.ts"
+      - "scripts/verification-matrix.test.ts"
       - "scripts/stage-runtime-common.ts"
       - "src/shared/update.ts"
       - "package.json"
       - "SECURITY.md"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "docs/verification-matrix.json"
+      - "docs/verification-matrix.md"
       - "apps/windows/Cargo.toml"
       - "apps/windows/crates/fusa-desktop/tauri.conf.json"
 
@@ -63,8 +69,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Release script unit tests
-        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts
-      - name: Version sources and CHANGELOG.md agree
+        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts scripts/verification-matrix.test.ts
+      - name: Version sources, CHANGELOG.md, and verification matrix agree
         run: node scripts/release-assets.ts check
       - name: Plan the tag
         id: plan

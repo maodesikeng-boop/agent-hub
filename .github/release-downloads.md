@@ -11,3 +11,9 @@ These installers are unsigned previews. After checking the checksum, use **Open 
 
 - macOS: `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256`
 - Windows: `Get-FileHash Bellwood-windows-x64-setup.exe -Algorithm SHA256`. Compare `Hash` with the value in the `.sha256` file.
+
+### 多端验收矩阵 / Verification matrix
+
+查看绑定提交号的逐厂商 × 逐平台实测与覆盖边界（区分真实服务、真 CLI 模拟模型与离线测试）：[`docs/verification-matrix.md`](https://github.com/maodesikeng-boop/agent-hub/blob/main/docs/verification-matrix.md)。
+
+See the commit-bound per-vendor x per-platform verification matrix (separating live vendor service runs, real-CLI mock-LLM CI, offline tests, and unverified gaps): [`docs/verification-matrix.md`](https://github.com/maodesikeng-boop/agent-hub/blob/main/docs/verification-matrix.md).

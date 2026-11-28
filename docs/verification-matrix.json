@@ -1,0 +1,331 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "0.4.0",
+  "commit": "6f6eed41",
+  "recordedAt": "2026-11-28",
+  "surfaces": [
+    {
+      "id": "pr-check",
+      "label": "PR check and verify-smoke",
+      "platform": "linux",
+      "cliKind": "fake",
+      "modelBackend": "fake",
+      "workflowOrCommand": ".github/workflows/check.yml",
+      "scope": "Ubuntu 4-shard unit/e2e suite and pnpm verify smoke using test/fake-claude/fake-claude.ts."
+    },
+    {
+      "id": "macos-ci",
+      "label": "macOS CI test suite",
+      "platform": "macos",
+      "cliKind": "fake",
+      "modelBackend": "fake",
+      "workflowOrCommand": ".github/workflows/macos.yml",
+      "scope": "Full pnpm test:ci on macos-15 with offline driver protocol tests and no real vendor CLIs."
+    },
+    {
+      "id": "windows-ci",
+      "label": "Windows integration and real-CLI mock-LLM",
+      "platform": "windows",
+      "cliKind": "real",
+      "modelBackend": "mock_llm",
+      "workflowOrCommand": ".github/workflows/windows.yml",
+      "scope": "Real codex and pi CLIs inside fusa-run.exe against loopback mock LLM, plus core unit and sandbox integration tests."
+    },
+    {
+      "id": "nightly-real-cli",
+      "label": "Nightly Ubuntu real-CLI mock-LLM",
+      "platform": "linux",
+      "cliKind": "real",
+      "modelBackend": "mock_llm",
+      "workflowOrCommand": ".github/workflows/nightly.yml",
+      "scope": "Real claude, codex, pi, and deepseek CLIs in Linux bwrap against loopback mock LLM, plus Codex schema drift check."
+    },
+    {
+      "id": "resident-bench",
+      "label": "Resident live-service bench",
+      "platform": "multi",
+      "cliKind": "real",
+      "modelBackend": "live_service",
+      "workflowOrCommand": "pnpm tester",
+      "scope": "Real Feishu, real relay, and real vendor turns on owner Mac (claude, agy, codex) and Tokyo Linux host (claude); ingested on demand."
+    }
+  ],
+  "cells": [
+    {
+      "vendor": "claude",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in macos.yml; resident Mac live-service turn (pnpm tester) is configured in test/tester/vendors.ts and not yet ingested for this commit.",
+      "fallbackTests": [
+        "src/vendors/claude/protocol.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "claude",
+      "platform": "windows",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by Windows settings and guard tests in windows.yml; no real Claude CLI turn runs in Windows CI or on a resident Windows bench.",
+      "fallbackTests": [
+        "src/vendors/claude/settings.test.ts",
+        "src/shared/vendor-guard.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "claude",
+      "platform": "linux",
+      "tier": "real_cli_mock_llm",
+      "cliVersion": "latest",
+      "workflow": "nightly.yml",
+      "command": "BELLWOOD_REQUIRE_REAL_CLI=claude,codex,pi,deepseek pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+      "evidenceRef": ".github/workflows/nightly.yml",
+      "gapReason": "Nightly Ubuntu CI runs real Claude CLI against loopback mock LLM only; resident Linux live-service turn (pnpm tester) is not yet ingested for this commit.",
+      "fallbackTests": [
+        "test/mock-llm/real-cli-e2e.test.ts",
+        "src/vendors/claude/protocol.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "agy",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline ACP driver and contract tests in macos.yml; resident Mac live-service turn (pnpm tester) is configured in test/tester/vendors.ts and not yet ingested for this commit.",
+      "fallbackTests": [
+        "src/vendors/agy/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "agy",
+      "platform": "windows",
+      "tier": "unverified",
+      "gapReason": "Neither real Antigravity CLI nor agy-specific driver tests run in windows.yml, and no resident Windows live-account bench exists.",
+      "fallbackTests": [
+        "src/shared/vendor-guard.test.ts",
+        "src/vendors/agy/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "agy",
+      "platform": "linux",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline ACP driver and contract tests in check.yml; not installed in nightly.yml and marked accepted_gap on the Tokyo Linux bench.",
+      "fallbackTests": [
+        "src/vendors/agy/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "codex",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline app-server driver and contract tests in macos.yml; resident Mac live-service turn (pnpm tester) is configured in test/tester/vendors.ts and not yet ingested for this commit.",
+      "fallbackTests": [
+        "src/vendors/codex/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "codex",
+      "platform": "windows",
+      "tier": "real_cli_mock_llm",
+      "cliVersion": "0.169.0",
+      "workflow": "windows.yml",
+      "command": "BELLWOOD_REQUIRE_REAL_CLI=codex,pi pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+      "evidenceRef": ".github/workflows/windows.yml",
+      "gapReason": "Windows CI runs real Codex CLI inside fusa-run.exe against loopback mock LLM only; no resident Windows live-account bench exists.",
+      "fallbackTests": [
+        "test/mock-llm/real-cli-e2e.test.ts",
+        "src/vendors/codex/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "codex",
+      "platform": "linux",
+      "tier": "real_cli_mock_llm",
+      "cliVersion": "latest",
+      "workflow": "nightly.yml",
+      "command": "BELLWOOD_REQUIRE_REAL_CLI=claude,codex,pi,deepseek pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+      "evidenceRef": ".github/workflows/nightly.yml",
+      "gapReason": "Nightly Ubuntu CI runs real Codex CLI against loopback mock LLM (plus 0.169.0 vs latest schema drift); marked accepted_gap on the Tokyo Linux bench.",
+      "fallbackTests": [
+        "test/mock-llm/real-cli-e2e.test.ts",
+        "src/vendors/codex/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "pi",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline RPC driver and contract tests in macos.yml; no real-CLI macOS CI and marked accepted_gap on the resident Mac bench.",
+      "fallbackTests": [
+        "src/vendors/pi/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "pi",
+      "platform": "windows",
+      "tier": "real_cli_mock_llm",
+      "cliVersion": "1.5.2",
+      "workflow": "windows.yml",
+      "command": "BELLWOOD_REQUIRE_REAL_CLI=codex,pi pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+      "evidenceRef": ".github/workflows/windows.yml",
+      "gapReason": "Windows CI runs real Pi CLI inside fusa-run.exe against loopback mock LLM only; no resident Windows live-account bench exists.",
+      "fallbackTests": [
+        "test/mock-llm/real-cli-e2e.test.ts",
+        "src/vendors/pi/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "pi",
+      "platform": "linux",
+      "tier": "real_cli_mock_llm",
+      "cliVersion": "latest",
+      "workflow": "nightly.yml",
+      "command": "BELLWOOD_REQUIRE_REAL_CLI=claude,codex,pi,deepseek pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+      "evidenceRef": ".github/workflows/nightly.yml",
+      "gapReason": "Nightly Ubuntu CI runs real Pi CLI against loopback mock LLM only; marked accepted_gap on the Tokyo Linux bench.",
+      "fallbackTests": [
+        "test/mock-llm/real-cli-e2e.test.ts",
+        "src/vendors/pi/driver.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "deepseek",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in macos.yml; no real-CLI macOS CI and marked accepted_gap on the resident Mac bench (no test account).",
+      "fallbackTests": [
+        "src/vendors/deepseek/deepseek.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "deepseek",
+      "platform": "windows",
+      "tier": "unverified",
+      "gapReason": "Neither real DeepSeek Harness CLI nor deepseek-specific driver tests run in windows.yml, and no resident Windows live-account bench exists.",
+      "fallbackTests": [
+        "src/shared/vendor-guard.test.ts",
+        "src/vendors/deepseek/deepseek.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "deepseek",
+      "platform": "linux",
+      "tier": "real_cli_mock_llm",
+      "cliVersion": "0.2.2-rc.1",
+      "workflow": "nightly.yml",
+      "command": "BELLWOOD_REQUIRE_REAL_CLI=claude,codex,pi,deepseek pnpm exec vitest run --project=node test/mock-llm/real-cli-e2e.test.ts",
+      "evidenceRef": ".github/workflows/nightly.yml",
+      "gapReason": "Nightly Ubuntu CI runs real DeepSeek Harness CLI against loopback mock LLM only; marked accepted_gap on the resident bench (no test account).",
+      "fallbackTests": [
+        "test/mock-llm/real-cli-e2e.test.ts",
+        "src/vendors/deepseek/deepseek.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "cursor",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in macos.yml; cursor-agent uses proprietary Protobuf/ConnectRPC (unsupported_protocol in mock-LLM) and is accepted_gap on the resident bench.",
+      "fallbackTests": [
+        "src/vendors/cursor/cursor.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "cursor",
+      "platform": "windows",
+      "tier": "unverified",
+      "gapReason": "Neither real cursor-agent CLI nor cursor-specific driver tests run in windows.yml; cursor-agent is unsupported_protocol for mock-LLM and no Windows live bench exists.",
+      "fallbackTests": [
+        "src/shared/vendor-guard.test.ts",
+        "src/vendors/cursor/cursor.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "cursor",
+      "platform": "linux",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in check.yml; cursor-agent uses proprietary Protobuf/ConnectRPC (unsupported_protocol in mock-LLM) and is accepted_gap on the resident bench.",
+      "fallbackTests": [
+        "src/vendors/cursor/cursor.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "opencode",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in macos.yml; no real-CLI macOS CI and marked accepted_gap on the resident Mac bench (no test account).",
+      "fallbackTests": [
+        "src/vendors/opencode/opencode.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "opencode",
+      "platform": "windows",
+      "tier": "unverified",
+      "gapReason": "Neither real OpenCode CLI nor opencode-specific driver tests run in windows.yml, and no resident Windows live-account bench exists.",
+      "fallbackTests": [
+        "src/shared/vendor-guard.test.ts",
+        "src/vendors/opencode/opencode.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "opencode",
+      "platform": "linux",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in check.yml; not installed in nightly.yml and marked accepted_gap on the resident bench (no test account).",
+      "fallbackTests": [
+        "src/vendors/opencode/opencode.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "kimi",
+      "platform": "macos",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in macos.yml; no real-CLI macOS CI and marked accepted_gap on the resident Mac bench (no test account).",
+      "fallbackTests": [
+        "src/vendors/kimi/kimi.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "kimi",
+      "platform": "windows",
+      "tier": "unverified",
+      "gapReason": "Neither real Kimi Code CLI nor kimi-specific driver tests run in windows.yml, and no resident Windows live-account bench exists.",
+      "fallbackTests": [
+        "src/shared/vendor-guard.test.ts",
+        "src/vendors/kimi/kimi.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    },
+    {
+      "vendor": "kimi",
+      "platform": "linux",
+      "tier": "fake_cli_offline",
+      "gapReason": "Covered by offline driver and contract tests in check.yml; not installed in nightly.yml and marked accepted_gap on the resident bench (no test account).",
+      "fallbackTests": [
+        "src/vendors/kimi/kimi.test.ts",
+        "src/vendors/contract.test.ts"
+      ]
+    }
+  ]
+}
