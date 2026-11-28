@@ -135,7 +135,7 @@ export function parseScheduleCommand({ group, action, rest, values }: GroupArgs)
     const scheduleId = idOf(rest[0], "schedule edit", "定时任务");
     const body: Record<string, unknown> = { scheduleId };
     if (values.name !== undefined) {
-      const checkedName = validateScheduleName(values.name);
+      const checkedName = validateScheduleName(values.name, { rejectRawControlChars: true });
       if (!checkedName.ok) throw new UsageError(checkedName.error);
       body.name = checkedName.name;
     }

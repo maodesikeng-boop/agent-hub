@@ -182,6 +182,22 @@ describe("S6 & S4 (Agent API): POST /v1/schedule.edit validation and round-trip"
     expect(routerRes.json()).toMatchObject({ ok: false, code: "forbidden" });
     expect((await postEdit({ scheduleId: 99_999, name: "无" })).statusCode).toBe(404);
   });
+
+  it("S8/S6.api (regression): schedule.add trims trailing U+2028/U+2029 while schedule.edit rejects them with 400", async () => {
+    expect((await postEdit({ scheduleId, name: "Unicode\u2028" })).statusCode).toBe(400);
+    expect((await postEdit({ scheduleId, name: "Unicode\u2029" })).statusCode).toBe(400);
+
+    for (const rawName of ["Unicode\u2028", "Unicode\u2029"]) {
+      const addRes = await app.inject({
+        method: "POST",
+        url: "/v1/schedule.add",
+        headers: { authorization: `Bearer ${tokenLin}` },
+        payload: { name: rawName, prompt: "v1", daily: "09:00" },
+      });
+      expect(addRes.statusCode).toBe(200);
+      expect(addRes.json()).toMatchObject({ ok: true, data: { schedule: { name: "Unicode" } } });
+    }
+  });
 });
 
 describe("S6 (CLI end-to-end): authenticated hub schedule edit exits 2 on invalid name or oversized prompt with zero ledger writes", () => {
@@ -272,6 +288,24 @@ describe("S6 (CLI end-to-end): authenticated hub schedule edit exits 2 on invali
     const after = ledger.hubCall(sessionId, "schedule.show", { scheduleId }).data.schedule;
     expect(after.name).toBe(exactName);
     expect(after.prompt).toBe(exactPrompt);
+  });
+
+  it("S8/S6 (regression): schedule add trims trailing U+2028/U+2029 while schedule edit rejects trailing control chars with exit 2", async () => {
+    const addLs = await invokeHub(["schedule", "add", "--name", "Unicode\u2028", "--daily", "09:00", "--stdin"], "每天检查", pmEnv);
+    expect(addLs.code).toBe(HUB_EXIT.ok);
+    const addPs = await invokeHub(["schedule", "add", "--name", "Unicode\u2029", "--daily", "09:30", "--stdin"], "每天检查", pmEnv);
+    expect(addPs.code).toBe(HUB_EXIT.ok);
+    const names = ledger.hubCall(sessionId, "schedule.list", {}).data.schedules.map((s) => s.name);
+    expect(names).toEqual(["日报", "Unicode", "Unicode"]);
+
+    const before = ledger.hubCall(sessionId, "schedule.show", { scheduleId }).data.schedule;
+    for (const badName of ["Unicode\u2028", "Unicode\u2029", "日报\n", "日报\r", "日报\t", "日报\u0007"]) {
+      const res = await invokeHub(["schedule", "edit", String(scheduleId), "--name", badName], "", pmEnv);
+      expect(res.code, `name=${JSON.stringify(badName)}`).toBe(HUB_EXIT.usage);
+      expect(res.stderr).toMatch(/控制字符|换行/);
+    }
+    expect(editCallCount()).toBe(0);
+    expect(ledger.hubCall(sessionId, "schedule.show", { scheduleId }).data.schedule).toEqual(before);
   });
 });
 

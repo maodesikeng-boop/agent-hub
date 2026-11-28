@@ -571,4 +571,29 @@ describe("S8: regression checks for existing schedule commands", () => {
     hub(lin.sessionId, "schedule.remove", { scheduleId: first.id });
     expect(hub(lin.sessionId, "schedule.list", {}).data.schedules.map((s) => s.id)).toEqual([second.id]);
   });
+
+  it("regression: schedule.add and addSchedule keep trailing whitespace/control-char trim semantics while schedule.edit rejects them", () => {
+    const fromLf = ledger.addSchedule(lin.pmId, { name: "日报\n", daily: "09:00", prompt: "写日报" });
+    const fromTabsCrLf = ledger.addSchedule(lin.pmId, { name: "\t周报\r\n", daily: "09:30", prompt: "写周报" });
+    const fromLs = ledger.addSchedule(lin.pmId, { name: "Unicode\u2028", daily: "10:00", prompt: "检查" });
+    const fromPs = hub(lin.sessionId, "schedule.add", { name: "Unicode\u2029", daily: "10:30", prompt: "检查" }).data.schedule;
+    expect([fromLf.name, fromTabsCrLf.name, fromLs.name, fromPs.name]).toEqual(["日报", "周报", "Unicode", "Unicode"]);
+
+    for (const badAdd of ["a\nb", "a\u2028b", "日报\u0007", "   \n\u2028  "]) {
+      expectLedgerError(
+        () => ledger.addSchedule(lin.pmId, { name: badAdd, daily: "09:00", prompt: "写日报" }),
+        "invalid",
+        /控制字符|换行/,
+      );
+    }
+
+    for (const badEdit of ["日报\n", "\t日报\r\n", "Unicode\u2028", "Unicode\u2029", "日报\u0007"]) {
+      expectLedgerError(
+        () => hub(lin.sessionId, "schedule.edit", { scheduleId: fromLf.id, name: badEdit }),
+        "invalid",
+        /控制字符|换行/,
+      );
+    }
+    expect(hub(lin.sessionId, "schedule.show", { scheduleId: fromLf.id }).data.schedule.name).toBe("日报");
+  });
 });

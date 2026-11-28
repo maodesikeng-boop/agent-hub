@@ -60,8 +60,16 @@ export interface ScheduleEditPlan {
 
 export type ScheduleFrequency = Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">;
 
-export function validateScheduleName(raw: unknown): { ok: true; name: string } | { ok: false; error: string } {
-  if (typeof raw !== "string" || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(raw)) {
+const SCHEDULE_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+export function validateScheduleName(
+  raw: unknown,
+  options?: { rejectRawControlChars?: boolean },
+): { ok: true; name: string } | { ok: false; error: string } {
+  if (typeof raw !== "string") {
+    return { ok: false, error: "定时任务的名字不能是空的，也不能带换行等控制字符" };
+  }
+  if (options?.rejectRawControlChars && SCHEDULE_NAME_CONTROL_CHARS.test(raw)) {
     return { ok: false, error: "定时任务的名字不能是空的，也不能带换行等控制字符" };
   }
   const trimmed = raw.trim();
@@ -119,7 +127,7 @@ export function planScheduleEdit(
   }
   let name = current.name;
   if (patch.name !== undefined) {
-    const checked = validateScheduleName(patch.name);
+    const checked = validateScheduleName(patch.name, { rejectRawControlChars: true });
     if (!checked.ok) return checked;
     name = checked.name;
   }
