@@ -27,10 +27,12 @@ const TS_OPTIONAL_NODE_TYPES = new Set([
   "AccessorProperty",
   "MethodDefinition",
 ]);
-const PURE_UNARY_OPS = new Set(["+", "-", "!", "~", "void", "typeof"]);
 const PURE_GLOBAL_IDENTS = new Set(["undefined", "NaN", "Infinity"]);
 const SAFE_SUPERCLASSES = new Set(["Error", "TypeError", "RangeError", "SyntaxError"]);
 const PURE_CONTAINER_CTORS = new Set(["Map", "Set", "WeakMap", "WeakSet"]);
+const TRACKED_BUILTINS = new Set([...PURE_GLOBAL_IDENTS, ...SAFE_SUPERCLASSES, ...PURE_CONTAINER_CTORS]);
+const RELATIONAL_OR_LOOSE_EQ_OPS = new Set(["==", "!=", "<", "<=", ">", ">="]);
+type PureValueKind = "primitive" | "bigint" | "object";
 const SKIPPED_AST_KEYS = new Set([
   "start",
   "end",
@@ -213,7 +215,18 @@ function canonicalizeRuntimeAst(node: unknown): unknown {
 
 const canonicalFingerprint = (node: unknown): string => JSON.stringify(canonicalizeRuntimeAst(node));
 
-function isPureContainerNewExpr(node: AstNode, pureLocals: ReadonlySet<string>, shadowedBuiltins: ReadonlySet<string>): boolean {
+function joinPureKinds(a: PureValueKind, b: PureValueKind): PureValueKind {
+  if (a === "object" || b === "object") return "object";
+  if (a === "bigint" || b === "bigint") return "bigint";
+  return "primitive";
+}
+
+function isPureContainerNewExpr(
+  node: AstNode,
+  pureLocals: ReadonlyMap<string, PureValueKind>,
+  shadowedBuiltins: ReadonlySet<string>,
+  lexicalDecls: ReadonlySet<string>,
+): boolean {
   if (!isAstNode(node.callee) || node.callee.type !== "Identifier") return false;
   const ctor = node.callee.name as string;
   if (!PURE_CONTAINER_CTORS.has(ctor) || shadowedBuiltins.has(ctor)) return false;
@@ -223,7 +236,9 @@ function isPureContainerNewExpr(node: AstNode, pureLocals: ReadonlySet<string>, 
   const first = args[0];
   if (!isAstNode(first) || first.type !== "ArrayExpression" || !Array.isArray(first.elements)) return false;
   if (ctor === "Set") {
-    return first.elements.every((el) => el === null || (isAstNode(el) && el.type !== "SpreadElement" && isPureModuleInitializer(el, pureLocals, shadowedBuiltins)));
+    return first.elements.every(
+      (el) => el === null || (isAstNode(el) && el.type !== "SpreadElement" && isPureModuleInitializer(el, pureLocals, shadowedBuiltins, lexicalDecls)),
+    );
   }
   return first.elements.every(
     (entry) =>
@@ -231,100 +246,142 @@ function isPureContainerNewExpr(node: AstNode, pureLocals: ReadonlySet<string>, 
       entry.type === "ArrayExpression" &&
       Array.isArray(entry.elements) &&
       entry.elements.length === 2 &&
-      entry.elements.every((item) => isAstNode(item) && item.type !== "SpreadElement" && isPureModuleInitializer(item, pureLocals, shadowedBuiltins)),
+      entry.elements.every(
+        (item) => isAstNode(item) && item.type !== "SpreadElement" && isPureModuleInitializer(item, pureLocals, shadowedBuiltins, lexicalDecls),
+      ),
   );
 }
 
-function isPureModuleInitializer(
+// Tracks primitive vs bigint vs object so throwing ops (1n / 0n, +1n, mixed bigint/number, TDZ typeof, or object coercion) fail closed.
+function pureInitializerKind(
   node: unknown,
-  pureLocals: ReadonlySet<string>,
+  pureLocals: ReadonlyMap<string, PureValueKind>,
   shadowedBuiltins: ReadonlySet<string>,
-): boolean {
-  if (node === null || node === undefined) return true;
-  if (!isAstNode(node)) return false;
-  if (TS_WRAPPER_TYPES.has(node.type)) return isPureModuleInitializer(node.expression, pureLocals, shadowedBuiltins);
+  lexicalDecls: ReadonlySet<string>,
+): PureValueKind | null {
+  if (node === null || node === undefined) return "primitive";
+  if (!isAstNode(node)) return null;
+  if (TS_WRAPPER_TYPES.has(node.type)) return pureInitializerKind(node.expression, pureLocals, shadowedBuiltins, lexicalDecls);
   switch (node.type) {
     case "Literal":
+      if (typeof node.value === "bigint" || node.bigint !== undefined) return "bigint";
+      if (node.regex !== undefined) return "object";
+      if (typeof node.value === "number" || typeof node.value === "string" || typeof node.value === "boolean" || node.value === null) {
+        return "primitive";
+      }
+      return null;
     case "ArrowFunctionExpression":
     case "FunctionExpression":
-      return true;
-    case "Identifier":
-      return PURE_GLOBAL_IDENTS.has(node.name as string) || pureLocals.has(node.name as string);
+      return "object";
+    case "Identifier": {
+      const name = node.name as string;
+      if (PURE_GLOBAL_IDENTS.has(name) && !shadowedBuiltins.has(name)) return "primitive";
+      return pureLocals.get(name) ?? null;
+    }
     case "TemplateLiteral":
-      return Array.isArray(node.expressions) && node.expressions.every((expr) => isPureModuleInitializer(expr, pureLocals, shadowedBuiltins));
+      return Array.isArray(node.expressions) &&
+        node.expressions.every((expr) => {
+          const kind = pureInitializerKind(expr, pureLocals, shadowedBuiltins, lexicalDecls);
+          return kind === "primitive" || kind === "bigint";
+        })
+        ? "primitive"
+        : null;
     case "UnaryExpression": {
       const op = String(node.operator ?? "");
-      if (!PURE_UNARY_OPS.has(op)) return false;
-      if (op === "typeof" && isAstNode(node.argument) && node.argument.type === "Identifier") return true;
-      return isPureModuleInitializer(node.argument, pureLocals, shadowedBuiltins);
+      if (op === "typeof") {
+        if (isAstNode(node.argument) && node.argument.type === "Identifier") {
+          const name = node.argument.name as string;
+          return !lexicalDecls.has(name) || pureLocals.has(name) ? "primitive" : null;
+        }
+        return pureInitializerKind(node.argument, pureLocals, shadowedBuiltins, lexicalDecls) !== null ? "primitive" : null;
+      }
+      const kind = pureInitializerKind(node.argument, pureLocals, shadowedBuiltins, lexicalDecls);
+      if (kind === null) return null;
+      if (op === "!" || op === "void") return "primitive";
+      if (op === "+") return kind === "primitive" ? "primitive" : null;
+      if (op === "-" || op === "~") return kind === "object" ? null : kind;
+      return null;
     }
-    case "BinaryExpression":
-      return (
-        node.operator !== "in" &&
-        node.operator !== "instanceof" &&
-        isPureModuleInitializer(node.left, pureLocals, shadowedBuiltins) &&
-        isPureModuleInitializer(node.right, pureLocals, shadowedBuiltins)
-      );
-    case "LogicalExpression":
-      return (
-        isPureModuleInitializer(node.left, pureLocals, shadowedBuiltins) &&
-        isPureModuleInitializer(node.right, pureLocals, shadowedBuiltins)
-      );
-    case "ConditionalExpression":
-      return (
-        isPureModuleInitializer(node.test, pureLocals, shadowedBuiltins) &&
-        isPureModuleInitializer(node.consequent, pureLocals, shadowedBuiltins) &&
-        isPureModuleInitializer(node.alternate, pureLocals, shadowedBuiltins)
-      );
+    case "BinaryExpression": {
+      const op = String(node.operator ?? "");
+      if (op === "in" || op === "instanceof") return null;
+      const left = pureInitializerKind(node.left, pureLocals, shadowedBuiltins, lexicalDecls);
+      const right = pureInitializerKind(node.right, pureLocals, shadowedBuiltins, lexicalDecls);
+      if (left === null || right === null) return null;
+      if (op === "===" || op === "!==") return "primitive";
+      if (RELATIONAL_OR_LOOSE_EQ_OPS.has(op)) return left !== "object" && right !== "object" ? "primitive" : null;
+      return left === "primitive" && right === "primitive" ? "primitive" : null;
+    }
+    case "LogicalExpression": {
+      const left = pureInitializerKind(node.left, pureLocals, shadowedBuiltins, lexicalDecls);
+      const right = pureInitializerKind(node.right, pureLocals, shadowedBuiltins, lexicalDecls);
+      return left !== null && right !== null ? joinPureKinds(left, right) : null;
+    }
+    case "ConditionalExpression": {
+      const test = pureInitializerKind(node.test, pureLocals, shadowedBuiltins, lexicalDecls);
+      const consequent = pureInitializerKind(node.consequent, pureLocals, shadowedBuiltins, lexicalDecls);
+      const alternate = pureInitializerKind(node.alternate, pureLocals, shadowedBuiltins, lexicalDecls);
+      return test !== null && consequent !== null && alternate !== null ? joinPureKinds(consequent, alternate) : null;
+    }
     case "ArrayExpression":
-      return (
-        Array.isArray(node.elements) &&
-        node.elements.every((el) => el === null || (isAstNode(el) && el.type !== "SpreadElement" && isPureModuleInitializer(el, pureLocals, shadowedBuiltins)))
-      );
+      return Array.isArray(node.elements) &&
+        node.elements.every(
+          (el) => el === null || (isAstNode(el) && el.type !== "SpreadElement" && isPureModuleInitializer(el, pureLocals, shadowedBuiltins, lexicalDecls)),
+        )
+        ? "object"
+        : null;
     case "ObjectExpression":
-      return (
-        Array.isArray(node.properties) &&
+      return Array.isArray(node.properties) &&
         node.properties.every(
           (prop) =>
             isAstNode(prop) &&
             prop.type === "Property" &&
             prop.kind === "init" &&
-            (prop.computed !== true || isPureModuleInitializer(prop.key, pureLocals, shadowedBuiltins)) &&
-            isPureModuleInitializer(prop.value, pureLocals, shadowedBuiltins),
+            (prop.computed !== true || pureInitializerKind(prop.key, pureLocals, shadowedBuiltins, lexicalDecls) === "primitive") &&
+            isPureModuleInitializer(prop.value, pureLocals, shadowedBuiltins, lexicalDecls),
         )
-      );
+        ? "object"
+        : null;
     case "NewExpression":
-      return isPureContainerNewExpr(node, pureLocals, shadowedBuiltins);
+      return isPureContainerNewExpr(node, pureLocals, shadowedBuiltins, lexicalDecls) ? "object" : null;
     default:
-      return false;
+      return null;
   }
+}
+
+function isPureModuleInitializer(
+  node: unknown,
+  pureLocals: ReadonlyMap<string, PureValueKind>,
+  shadowedBuiltins: ReadonlySet<string>,
+  lexicalDecls: ReadonlySet<string>,
+): boolean {
+  return pureInitializerKind(node, pureLocals, shadowedBuiltins, lexicalDecls) !== null;
 }
 
 function isPureClassDeclaration(
   decl: AstNode,
-  pureLocals: ReadonlySet<string>,
+  pureLocals: ReadonlyMap<string, PureValueKind>,
+  pureConstructors: ReadonlySet<string>,
   shadowedBuiltins: ReadonlySet<string>,
+  lexicalDecls: ReadonlySet<string>,
 ): boolean {
   if (Array.isArray(decl.decorators) && decl.decorators.length > 0) return false;
   if (decl.superClass !== null && decl.superClass !== undefined) {
-    if (
-      !isAstNode(decl.superClass) ||
-      decl.superClass.type !== "Identifier" ||
-      (!SAFE_SUPERCLASSES.has(decl.superClass.name as string) && !pureLocals.has(decl.superClass.name as string))
-    ) {
-      return false;
-    }
+    if (!isAstNode(decl.superClass) || decl.superClass.type !== "Identifier") return false;
+    const superName = decl.superClass.name as string;
+    const isSafeBuiltin = SAFE_SUPERCLASSES.has(superName) && !shadowedBuiltins.has(superName);
+    if (!isSafeBuiltin && !pureConstructors.has(superName)) return false;
   }
   const members = isAstNode(decl.body) && Array.isArray(decl.body.body) ? (decl.body.body as AstNode[]) : [];
   for (const member of members) {
     if (!isAstNode(member)) continue;
     if (member.type === "StaticBlock") return false;
     if (Array.isArray(member.decorators) && member.decorators.length > 0) return false;
-    if (member.computed === true && !isPureModuleInitializer(member.key, pureLocals, shadowedBuiltins)) return false;
+    if (member.computed === true && pureInitializerKind(member.key, pureLocals, shadowedBuiltins, lexicalDecls) !== "primitive") return false;
     if (
       (member.type === "PropertyDefinition" || member.type === "AccessorProperty") &&
       member.static === true &&
-      !isPureModuleInitializer(member.value, pureLocals, shadowedBuiltins)
+      !isPureModuleInitializer(member.value, pureLocals, shadowedBuiltins, lexicalDecls)
     ) {
       return false;
     }
@@ -335,8 +392,10 @@ function isPureClassDeclaration(
 function recordDeclaration(
   decl: AstNode,
   localDecls: Map<string, Set<string>>,
-  pureLocals: Set<string>,
+  pureLocals: Map<string, PureValueKind>,
+  pureConstructors: Set<string>,
   shadowedBuiltins: ReadonlySet<string>,
+  lexicalDecls: ReadonlySet<string>,
   topLevelSideEffectRefs: Set<string>,
   localFingerprints?: Map<string, string>,
   topLevelSideEffectFingerprints?: string[],
@@ -351,18 +410,18 @@ function recordDeclaration(
       const refs = new Set<string>();
       collectPatternNames(declarator.id, names, refs);
       collectRuntimeRefs(declarator.init, refs);
-      const pure =
-        isAstNode(declarator.id) &&
-        declarator.id.type === "Identifier" &&
-        isPureModuleInitializer(declarator.init, pureLocals, shadowedBuiltins);
+      const initKind =
+        isAstNode(declarator.id) && declarator.id.type === "Identifier"
+          ? pureInitializerKind(declarator.init, pureLocals, shadowedBuiltins, lexicalDecls)
+          : null;
       const fp = localFingerprints ? `${kind}:${canonicalFingerprint(declarator)}` : "";
       for (const name of names) {
         declared.push(name);
         localDecls.set(name, refs);
         if (localFingerprints) localFingerprints.set(name, fp);
       }
-      if (pure) {
-        if (kind === "const" && names[0]) pureLocals.add(names[0]);
+      if (initKind !== null) {
+        if (kind === "const" && names[0]) pureLocals.set(names[0], initKind);
       } else {
         for (const ref of refs) topLevelSideEffectRefs.add(ref);
         if (topLevelSideEffectFingerprints) topLevelSideEffectFingerprints.push(`init:${fp}`);
@@ -383,18 +442,20 @@ function recordDeclaration(
     const fp = localFingerprints ? canonicalFingerprint(decl) : "";
     if (localFingerprints) localFingerprints.set(name, fp);
     if (decl.type === "FunctionDeclaration") {
-      pureLocals.add(name);
+      pureLocals.set(name, "object");
+      pureConstructors.add(name);
     } else if (decl.type === "ClassDeclaration") {
-      if (isPureClassDeclaration(decl, pureLocals, shadowedBuiltins)) {
-        pureLocals.add(name);
+      if (isPureClassDeclaration(decl, pureLocals, pureConstructors, shadowedBuiltins, lexicalDecls)) {
+        pureLocals.set(name, "object");
+        pureConstructors.add(name);
       } else {
         for (const ref of refs) topLevelSideEffectRefs.add(ref);
         if (topLevelSideEffectFingerprints) topLevelSideEffectFingerprints.push(`class:${fp}`);
       }
     } else if (decl.type === "TSEnumDeclaration") {
       const members = Array.isArray(decl.members) ? (decl.members as AstNode[]) : [];
-      const enumPure = members.every((m) => isPureModuleInitializer(m.initializer, pureLocals, shadowedBuiltins));
-      if (enumPure) pureLocals.add(name);
+      const enumPure = members.every((m) => isPureModuleInitializer(m.initializer, pureLocals, shadowedBuiltins, lexicalDecls));
+      if (enumPure) pureLocals.set(name, "object");
       else {
         for (const ref of refs) topLevelSideEffectRefs.add(ref);
         if (topLevelSideEffectFingerprints) topLevelSideEffectFingerprints.push(`enum:${fp}`);
@@ -410,6 +471,7 @@ interface DetailedModuleAnalysis {
   readonly localFingerprints: ReadonlyMap<string, string>;
   readonly importBindingFingerprints: ReadonlyMap<string, string>;
   readonly sideEffectImportTargets: ReadonlySet<string>;
+  readonly staticModuleDeps: readonly string[];
   readonly namedReexportFingerprints: ReadonlyMap<string, string>;
   readonly wildcardReexportTargets: ReadonlySet<string>;
   readonly topLevelSideEffectFingerprints: readonly string[];
@@ -438,6 +500,7 @@ function analyzeModuleDetailed(
       localFingerprints: new Map(),
       importBindingFingerprints: new Map(),
       sideEffectImportTargets: new Set(),
+      staticModuleDeps: [],
       namedReexportFingerprints: new Map(),
       wildcardReexportTargets: new Set(),
       topLevelSideEffectFingerprints: [],
@@ -459,6 +522,13 @@ function analyzeModuleDetailed(
     seenFileDeps.add(target);
     fileDeps.push(target);
   };
+  const staticModuleDeps: string[] = [];
+  const seenStaticModuleDeps = new Set<string>();
+  const addStaticModuleDep = (dep: string): void => {
+    if (seenStaticModuleDeps.has(dep)) return;
+    seenStaticModuleDeps.add(dep);
+    staticModuleDeps.push(dep);
+  };
 
   const reexports: ModuleReexportEdge[] = [];
   const localDecls = new Map<string, Set<string>>();
@@ -472,30 +542,42 @@ function analyzeModuleDetailed(
   const topLevelSideEffectFingerprints: string[] = [];
 
   const body = (parsed.program as unknown as { body: AstNode[] }).body;
-  const pureLocals = new Set<string>();
+  const pureLocals = new Map<string, PureValueKind>();
+  const pureConstructors = new Set<string>();
   const shadowedBuiltins = new Set<string>();
+  const lexicalDecls = new Set<string>();
   for (const stmt of body) {
     const inner =
       (stmt.type === "ExportNamedDeclaration" || stmt.type === "ExportDefaultDeclaration") && isAstNode(stmt.declaration)
         ? stmt.declaration
         : stmt;
     if (inner.type === "FunctionDeclaration" && isAstNode(inner.id) && inner.id.type === "Identifier") {
-      pureLocals.add(inner.id.name as string);
-      if (PURE_CONTAINER_CTORS.has(inner.id.name as string)) shadowedBuiltins.add(inner.id.name as string);
+      const name = inner.id.name as string;
+      pureLocals.set(name, "object");
+      pureConstructors.add(name);
+      if (TRACKED_BUILTINS.has(name)) shadowedBuiltins.add(name);
     } else if (inner.type === "ImportDeclaration" && Array.isArray(inner.specifiers)) {
       for (const s of inner.specifiers as AstNode[]) {
-        if (isAstNode(s.local) && s.local.type === "Identifier" && PURE_CONTAINER_CTORS.has(s.local.name as string)) {
-          shadowedBuiltins.add(s.local.name as string);
+        if (s.importKind === "type") continue;
+        if (isAstNode(s.local) && s.local.type === "Identifier") {
+          const name = s.local.name as string;
+          if (TRACKED_BUILTINS.has(name)) shadowedBuiltins.add(name);
         }
       }
     } else if (inner.type === "VariableDeclaration" && Array.isArray(inner.declarations)) {
+      const isLexical = inner.kind === "const" || inner.kind === "let";
       for (const d of inner.declarations as AstNode[]) {
-        if (isAstNode(d.id) && d.id.type === "Identifier" && PURE_CONTAINER_CTORS.has(d.id.name as string)) {
-          shadowedBuiltins.add(d.id.name as string);
+        const names: string[] = [];
+        collectPatternNames(d.id, names, new Set());
+        for (const name of names) {
+          if (isLexical) lexicalDecls.add(name);
+          if (TRACKED_BUILTINS.has(name)) shadowedBuiltins.add(name);
         }
       }
     } else if ((inner.type === "ClassDeclaration" || inner.type === "TSEnumDeclaration") && isAstNode(inner.id) && inner.id.type === "Identifier") {
-      if (PURE_CONTAINER_CTORS.has(inner.id.name as string)) shadowedBuiltins.add(inner.id.name as string);
+      const name = inner.id.name as string;
+      lexicalDecls.add(name);
+      if (TRACKED_BUILTINS.has(name)) shadowedBuiltins.add(name);
     }
   }
 
@@ -513,11 +595,14 @@ function analyzeModuleDetailed(
       const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
       if (specifiers.length === 0) {
         sideEffectImportTargets.add(target ?? spec);
+        addStaticModuleDep(target ?? spec);
         if (target !== null) addImport({ target, imported: "*", local: null });
         continue;
       }
+      let hasRuntimeSpecifier = false;
       for (const s of specifiers) {
         if (s.importKind === "type" || !isAstNode(s.local) || s.local.type !== "Identifier") continue;
+        hasRuntimeSpecifier = true;
         const local = s.local.name as string;
         let imported: string | "*" = "*";
         if (s.type === "ImportDefaultSpecifier") imported = "default";
@@ -530,6 +615,7 @@ function analyzeModuleDetailed(
         importBindingFingerprints.set(local, `${target ?? spec}#${imported}`);
         if (target !== null) addImport({ target, imported, local });
       }
+      if (hasRuntimeSpecifier) addStaticModuleDep(target ?? spec);
       continue;
     }
 
@@ -538,6 +624,7 @@ function analyzeModuleDetailed(
       const spec = staticStringValue(stmt.source);
       if (spec === null) continue;
       const target = resolveRelativeModule(file, spec, knownFiles);
+      addStaticModuleDep(target ?? spec);
       const exported = exportOrImportName(stmt.exported);
       if (exported === null) {
         wildcardReexportTargets.add(target ?? spec);
@@ -556,18 +643,31 @@ function analyzeModuleDetailed(
         if (spec === null) continue;
         const target = resolveRelativeModule(file, spec, knownFiles);
         const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
+        let hasRuntimeSpecifier = specifiers.length === 0;
         for (const s of specifiers) {
           if (s.exportKind === "type") continue;
           const imported = exportOrImportName(s.local);
           const exported = exportOrImportName(s.exported);
           if (imported === null || exported === null) continue;
+          hasRuntimeSpecifier = true;
           namedReexportFingerprints.set(exported, `${target ?? spec}#${imported}`);
           if (target !== null) reexports.push({ target, exported, imported });
         }
+        if (hasRuntimeSpecifier) addStaticModuleDep(target ?? spec);
         continue;
       }
       if (isAstNode(stmt.declaration)) {
-        const names = recordDeclaration(stmt.declaration, localDecls, pureLocals, shadowedBuiltins, topLevelSideEffectRefs, fpOut, sideEffectFpOut);
+        const names = recordDeclaration(
+          stmt.declaration,
+          localDecls,
+          pureLocals,
+          pureConstructors,
+          shadowedBuiltins,
+          lexicalDecls,
+          topLevelSideEffectRefs,
+          fpOut,
+          sideEffectFpOut,
+        );
         for (const name of names) exportedLocals.set(name, name);
       }
       const specifiers = Array.isArray(stmt.specifiers) ? (stmt.specifiers as AstNode[]) : [];
@@ -586,7 +686,17 @@ function analyzeModuleDetailed(
       if (decl.type === "Identifier") {
         exportedLocals.set("default", decl.name as string);
       } else if ((decl.type === "FunctionDeclaration" || decl.type === "ClassDeclaration") && isAstNode(decl.id) && decl.id.type === "Identifier") {
-        const names = recordDeclaration(decl, localDecls, pureLocals, shadowedBuiltins, topLevelSideEffectRefs, fpOut, sideEffectFpOut);
+        const names = recordDeclaration(
+          decl,
+          localDecls,
+          pureLocals,
+          pureConstructors,
+          shadowedBuiltins,
+          lexicalDecls,
+          topLevelSideEffectRefs,
+          fpOut,
+          sideEffectFpOut,
+        );
         if (names[0]) exportedLocals.set("default", names[0]);
       } else {
         const refs = new Set<string>();
@@ -598,8 +708,8 @@ function analyzeModuleDetailed(
         const pure =
           decl.type === "FunctionDeclaration" ||
           (decl.type === "ClassDeclaration" || decl.type === "ClassExpression"
-            ? isPureClassDeclaration(decl, pureLocals, shadowedBuiltins)
-            : isPureModuleInitializer(decl, pureLocals, shadowedBuiltins));
+            ? isPureClassDeclaration(decl, pureLocals, pureConstructors, shadowedBuiltins, lexicalDecls)
+            : isPureModuleInitializer(decl, pureLocals, shadowedBuiltins, lexicalDecls));
         if (!pure) {
           for (const ref of refs) topLevelSideEffectRefs.add(ref);
           if (sideEffectFpOut) sideEffectFpOut.push(`default:${fp}`);
@@ -609,7 +719,17 @@ function analyzeModuleDetailed(
     }
 
     if (stmt.type === "VariableDeclaration" || stmt.type === "FunctionDeclaration" || stmt.type === "ClassDeclaration" || stmt.type === "TSEnumDeclaration") {
-      recordDeclaration(stmt, localDecls, pureLocals, shadowedBuiltins, topLevelSideEffectRefs, fpOut, sideEffectFpOut);
+      recordDeclaration(
+        stmt,
+        localDecls,
+        pureLocals,
+        pureConstructors,
+        shadowedBuiltins,
+        lexicalDecls,
+        topLevelSideEffectRefs,
+        fpOut,
+        sideEffectFpOut,
+      );
       continue;
     }
 
@@ -626,6 +746,7 @@ function analyzeModuleDetailed(
     localFingerprints,
     importBindingFingerprints,
     sideEffectImportTargets,
+    staticModuleDeps,
     namedReexportFingerprints,
     wildcardReexportTargets,
     topLevelSideEffectFingerprints,
@@ -766,6 +887,9 @@ export function diffChangedExports(
 
   if (!setsEqual(prev.sideEffectImportTargets, next.sideEffectImportTargets)) {
     return { kind: "all", reason: "side-effect import changed" };
+  }
+  if (!arraysEqual(prev.staticModuleDeps, next.staticModuleDeps)) {
+    return { kind: "all", reason: "static module dependencies changed" };
   }
   if (!arraysEqual(prev.topLevelSideEffectFingerprints, next.topLevelSideEffectFingerprints)) {
     return { kind: "all", reason: "top-level side effect changed" };

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { GIT_MAX_BUFFER_BYTES, TEST_RELATED_LOCAL_MAX_WORKERS } from "../src/shared/limits.ts";
+import { GIT_MAX_BUFFER_BYTES, KILL_WAIT_MS, TEST_RELATED_LOCAL_MAX_WORKERS } from "../src/shared/limits.ts";
 import { SANDBOX_SKIP_LOG_ENV } from "../test/sandbox-probes.ts";
 import {
   findReferencingFiles,
@@ -126,6 +126,63 @@ export function sandboxSkipReport(logText: string): string | undefined {
   ].join("\n");
 }
 
+const PROCESS_POLL_MS = 25;
+
+function isProcessGroupAlive(pgid: number): boolean {
+  if (process.platform === "win32" || pgid <= 1) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+function signalProcessGroup(pgid: number, signal: NodeJS.Signals): void {
+  if (pgid <= 1) return;
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    // Process group already exited.
+  }
+}
+
+async function waitForProcessGroupExit(pgid: number, graceMs: number, signal: NodeJS.Signals): Promise<void> {
+  if (process.platform === "win32" || pgid <= 1 || !isProcessGroupAlive(pgid)) return;
+  // Re-signal once in case a Vitest worker forked just before the CLI process exited.
+  signalProcessGroup(pgid, signal);
+  const deadline = performance.now() + graceMs;
+  while (isProcessGroupAlive(pgid)) {
+    if (performance.now() >= deadline) {
+      signalProcessGroup(pgid, "SIGKILL");
+      const killDeadline = performance.now() + graceMs;
+      while (isProcessGroupAlive(pgid) && performance.now() < killDeadline) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, PROCESS_POLL_MS));
+      }
+      return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, PROCESS_POLL_MS));
+  }
+}
+
+function killWindowsProcessTree(pid: number): Promise<void> {
+  if (pid <= 1) return Promise.resolve();
+  return new Promise((resolveKill) => {
+    const sysRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+    const taskkill = join(sysRoot, "System32", "taskkill.exe");
+    const killer = spawn(taskkill, ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    killer.once("error", () => {
+      try {
+        process.kill(pid);
+      } catch {
+        // Already exited.
+      }
+      resolveKill();
+    });
+    killer.once("close", () => resolveKill());
+  });
+}
+
 export async function runVitest(
   args: readonly string[],
   options?: { readonly scriptPath?: string; readonly cwd?: string; readonly tmpRoot?: string },
@@ -134,15 +191,29 @@ export async function runVitest(
   const cwd = options?.cwd ?? REPO_ROOT;
   const dir = mkdtempSync(join(options?.tmpRoot ?? tmpdir(), "test-related-"));
   const log = join(dir, "sandbox-skips.txt");
+  const useProcessGroup = process.platform !== "win32";
   const child = spawn(process.execPath, [vitest, ...args], {
     cwd,
     stdio: "inherit",
+    detached: useProcessGroup,
     env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
   });
   let receivedSignal: NodeJS.Signals | null = null;
+  let escalateTimer: ReturnType<typeof setTimeout> | undefined;
+  let win32KillPromise: Promise<void> | undefined;
   const forwardSignal = (sig: NodeJS.Signals): void => {
     receivedSignal = sig;
-    if (child.exitCode === null && child.signalCode === null) child.kill(sig);
+    const pid = child.pid;
+    if (pid === undefined) return;
+    if (useProcessGroup) {
+      signalProcessGroup(pid, sig);
+      if (escalateTimer === undefined) {
+        escalateTimer = setTimeout(() => signalProcessGroup(pid, "SIGKILL"), KILL_WAIT_MS);
+        escalateTimer.unref();
+      }
+    } else {
+      win32KillPromise ??= killWindowsProcessTree(pid);
+    }
   };
   const onSigInt = (): void => forwardSignal("SIGINT");
   const onSigTerm = (): void => forwardSignal("SIGTERM");
@@ -153,13 +224,28 @@ export async function runVitest(
       child.once("error", rejectExit);
       child.once("close", (code, signal) => resolveExit({ code, signal }));
     });
+    if (escalateTimer !== undefined) {
+      clearTimeout(escalateTimer);
+      escalateTimer = undefined;
+    }
+    const pid = child.pid;
+    if (pid !== undefined && (receivedSignal !== null || exit.signal !== null)) {
+      if (useProcessGroup) {
+        await waitForProcessGroupExit(pid, KILL_WAIT_MS, receivedSignal ?? exit.signal ?? "SIGTERM");
+      } else {
+        await (win32KillPromise ?? killWindowsProcessTree(pid));
+      }
+    }
     const report = sandboxSkipReport(existsSync(log) ? readFileSync(log, "utf8") : "");
     if (report) console.log(report);
+    if (receivedSignal === "SIGINT") return 130;
+    if (receivedSignal === "SIGTERM") return 143;
     if (exit.code !== null) return exit.code;
-    if (receivedSignal === "SIGINT" || exit.signal === "SIGINT") return 130;
-    if (receivedSignal === "SIGTERM" || exit.signal === "SIGTERM") return 143;
+    if (exit.signal === "SIGINT") return 130;
+    if (exit.signal === "SIGTERM") return 143;
     return 1;
   } finally {
+    if (escalateTimer !== undefined) clearTimeout(escalateTimer);
     process.off("SIGINT", onSigInt);
     process.off("SIGTERM", onSigTerm);
     rmSync(dir, { recursive: true, force: true });

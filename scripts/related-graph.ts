@@ -57,6 +57,11 @@ export const SCOPED_SOURCE_GUARDS: readonly ScopedSourceGuard[] = [
     exclude: ["**/*.test.ts", "**/*.test.tsx"],
   },
   {
+    testFile: "src/web/card-corners.test.tsx",
+    include: ["src/web/**/*.ts", "src/web/**/*.tsx"],
+    exclude: ["**/*.test.ts", "**/*.test.tsx"],
+  },
+  {
     testFile: "src/web/info-style.test.tsx",
     include: ["src/web/**/*.tsx"],
     exclude: ["**/*.test.tsx"],

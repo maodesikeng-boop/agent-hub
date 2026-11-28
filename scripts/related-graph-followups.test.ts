@@ -219,6 +219,7 @@ describe("scripts/related-graph.ts review follow-up regressions", () => {
       sources: webSources,
       readBaseFile: makeBaseReader(baseSources),
     });
+    expect(webResult.testFiles).toContain("src/web/card-corners.test.tsx");
     expect(webResult.testFiles).toContain("src/web/info-style.test.tsx");
     expect(webResult.testFiles).toContain("src/web/lib/palette.test.ts");
     expect(webResult.testFiles).toContain("src/web/ui/icons.test.ts");
@@ -313,9 +314,17 @@ describe("scripts/related-graph.ts review follow-up regressions", () => {
     const uncovered: string[] = [];
     for (const [file, text] of loadRepoSources()) {
       if (!/\.test\.tsx?$/.test(file) || covered.has(file)) continue;
+      const hasRecursiveReaddirSourceRoot =
+        /\breaddir(?:Sync)?\s*\(/.test(text) &&
+        (/\b(?:resolve|join)\s*\(\s*(?:(?:REPO_ROOT|ROOT|import\.meta\.dirname|process\.cwd\s*\(\s*\))\s*,\s*)?["'`](?:src|scripts|test)(?:\/|["'`])/.test(
+          text,
+        ) ||
+          /\bnew\s+URL\s*\(\s*["'`][^"'`]*(?:src|scripts|test)(?:\/|["'`])/.test(text));
       const scansRepoSources =
         /execFileSync\s*\(\s*["']git["']\s*,\s*\[[^\]]*ls-files[^\]]*(?:src|scripts|test)/.test(text) ||
-        /readdir(?:Sync)?\s*\(\s*(?:["']src\b|["']scripts\b|["']test\b|join\s*\(\s*REPO_ROOT\s*,\s*["']src["']|srcDir)/.test(text);
+        /\bglob(?:Sync)?\s*\([^)]*(?:src|scripts|test)/.test(text) ||
+        /readdir(?:Sync)?\s*\(\s*(?:["']src\b|["']scripts\b|["']test\b|join\s*\(\s*REPO_ROOT\s*,\s*["'](?:src|scripts|test)["']|srcDir)/.test(text) ||
+        hasRecursiveReaddirSourceRoot;
       if (scansRepoSources) uncovered.push(file);
     }
     expect(uncovered).toEqual([]);
@@ -479,6 +488,256 @@ process.exit(code);
         platform: posixPlatform,
       });
       for (const file of winExcluded) expect(posixResult.testFiles, posixPlatform).toContain(file);
+    }
+  });
+
+  it("5) treats throwing BigInt binary/unary expressions and retargeted barrel re-exports as module-evaluation side effects while preserving low fan-out", { timeout: 45_000 }, async () => {
+    const known = new Set(["src/mod.ts", "src/setup.ts", "src/other.ts", "src/runner.ts", "src/index.ts"]);
+
+    const baseMod = "export const value = 10;\nexport const other = 20;\n";
+    for (const riskyInit of [
+      "export const value = 1n / 0n;\nexport const other = 20;\n",
+      "export const value = 100n / 0n;\nexport const other = 20;\n",
+      "export const value = 1n % 0n;\nexport const other = 20;\n",
+      "export const value = 2n ** -1n;\nexport const other = 20;\n",
+      "export const value = +1n;\nexport const other = 20;\n",
+      "export const value = 1n + 1;\nexport const other = 20;\n",
+      "const ZERO = 0n;\nexport const value = 1n / ZERO;\nexport const other = 20;\n",
+      "const obj = { toString() { throw new Error('boom'); } };\nexport const value = `${obj}`;\nexport const other = 20;\n",
+      "export const value = typeof later;\nconst later = 1;\nexport const other = 20;\n",
+      "const Base = 123 as never;\nexport class Bad extends Base {}\nexport const value = 10;\nexport const other = 20;\n",
+    ]) {
+      expect(diffChangedExports("src/mod.ts", baseMod, riskyInit, known).kind, riskyInit).toBe("all");
+    }
+
+    // Normal pure number and string arithmetic stays symbol-scoped.
+    expect(
+      diffChangedExports("src/mod.ts", baseMod, "export const value = 5 * 60_000;\nexport const other = 20;\n", known),
+    ).toEqual({ kind: "symbols", symbols: ["value"] });
+    expect(
+      diffChangedExports("src/mod.ts", baseMod, 'export const value = "a" + "b";\nexport const other = 20;\n', known),
+    ).toEqual({ kind: "symbols", symbols: ["value"] });
+
+    // Real repo: throwing BigInt initializer in src/web/query-client.ts must trigger all web tests.
+    const projects = await loadVitestProjectSpecs(REPO_ROOT);
+    const repoBase = loadRepoSources();
+    const oldQueryClient = repoBase.get("src/web/query-client.ts")!;
+    const literalBigIntQueryClient = oldQueryClient.replace(
+      'export const ACCOUNT_QUERY_KEY = ["account"] as const;',
+      'export const ACCOUNT_QUERY_KEY = [100n / 0n] as const;',
+    );
+    expect(literalBigIntQueryClient).not.toBe(oldQueryClient);
+    const bigIntSources = new Map(repoBase);
+    bigIntSources.set("src/web/query-client.ts", literalBigIntQueryClient);
+    const bigIntResult = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/web/query-client.ts"],
+      projects,
+      alwaysRunTests: ALWAYS_RUN_TESTS,
+      sources: bigIntSources,
+      readBaseFile: makeBaseReader(repoBase),
+    });
+    expect(bigIntResult.testFiles).toContain("src/web/notify.test.ts");
+
+    // Retargeting a barrel re-export to another module (whose top-level evaluation may throw) must propagate to all barrel consumers.
+    const oldBarrel = 'export { config } from "./setup.ts";\nexport { run } from "./runner.ts";\n';
+    const newBarrel = 'export { config } from "./other.ts";\nexport { run } from "./runner.ts";\n';
+    expect(diffChangedExports("src/index.ts", oldBarrel, newBarrel, known).kind).toBe("all");
+
+    const barrelBase = new Map<string, string>([
+      ["src/setup.ts", "export const config = 1;\n"],
+      ["src/other.ts", 'throw new Error("boom");\nexport const config = 2;\n'],
+      ["src/runner.ts", "export const run = () => 1;\n"],
+      ["src/index.ts", oldBarrel],
+      ["src/config.test.ts", 'import { config } from "./index.ts";\nvoid config;\n'],
+      ["src/run.test.ts", 'import { run } from "./index.ts";\nvoid run;\n'],
+      ["test/clean-env.ts", "export {};\n"],
+      ["test/spawn-guard.ts", "export {};\n"],
+      ["src/web/test-setup.ts", "export {};\n"],
+      ["src/guard.test.ts", "export {};\n"],
+    ]);
+    const barrelCurrent = new Map(barrelBase);
+    barrelCurrent.set("src/index.ts", newBarrel);
+    const barrelResult = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/index.ts"],
+      projects: SYNTHETIC_PROJECTS,
+      alwaysRunTests: ["src/guard.test.ts"],
+      sources: barrelCurrent,
+      readBaseFile: makeBaseReader(barrelBase),
+    });
+    expect(barrelResult.testFiles).toContain("src/config.test.ts");
+    expect(barrelResult.testFiles).toContain("src/run.test.ts");
+  });
+
+  it("6) resolves template URL source reads in test/skeleton.test.ts and falls back conservatively for dynamic template URLs", { timeout: 45_000 }, async () => {
+    const projects = await loadVitestProjectSpecs(REPO_ROOT);
+    const repoBase = loadRepoSources();
+
+    const setupSources = new Map(repoBase);
+    setupSources.set("src/web/test-setup.ts", `${repoBase.get("src/web/test-setup.ts")!}\n// comment edit\n`);
+    const setupResult = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/web/test-setup.ts"],
+      projects,
+      alwaysRunTests: ALWAYS_RUN_TESTS,
+      sources: setupSources,
+      readBaseFile: makeBaseReader(repoBase),
+    });
+    expect(setupResult.testFiles).toContain("test/skeleton.test.ts");
+
+    const mainSources = new Map(repoBase);
+    mainSources.set("src/daemon/main.ts", `${repoBase.get("src/daemon/main.ts")!}\nexport const _probe = 1;\n`);
+    const mainResult = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/daemon/main.ts"],
+      projects,
+      alwaysRunTests: ALWAYS_RUN_TESTS,
+      sources: mainSources,
+      readBaseFile: makeBaseReader(repoBase),
+    });
+    expect(mainResult.testFiles).toContain("test/skeleton.test.ts");
+
+    // Dynamic template URL falls back conservatively to the resolved directory scope without leaking into sibling directories.
+    const synthBase = new Map<string, string>([
+      ["src/fixtures/alpha.ts", "export const a = 1;\n"],
+      ["src/other/beta.ts", "export const b = 1;\n"],
+      [
+        "test/dynamic-url.test.ts",
+        'import { readFileSync } from "node:fs";\nfunction pick() { return "alpha"; }\nexport const raw = () => readFileSync(new URL(`../src/fixtures/${pick()}.ts`, import.meta.url), "utf8");\n',
+      ],
+      ["test/clean-env.ts", "export {};\n"],
+      ["test/spawn-guard.ts", "export {};\n"],
+      ["src/web/test-setup.ts", "export {};\n"],
+      ["src/guard.test.ts", "export {};\n"],
+    ]);
+    const synthAlpha = new Map(synthBase);
+    synthAlpha.set("src/fixtures/alpha.ts", "export const a = 2;\n");
+    const alphaResult = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/fixtures/alpha.ts"],
+      projects: SYNTHETIC_PROJECTS,
+      alwaysRunTests: ["src/guard.test.ts"],
+      sources: synthAlpha,
+      readBaseFile: makeBaseReader(synthBase),
+    });
+    expect(alphaResult.testFiles).toContain("test/dynamic-url.test.ts");
+
+    const synthBeta = new Map(synthBase);
+    synthBeta.set("src/other/beta.ts", "export const b = 2;\n");
+    const betaResult = resolveAffectedTests({
+      repoRoot: REPO_ROOT,
+      baseRef: "origin/main",
+      changedFiles: ["src/other/beta.ts"],
+      projects: SYNTHETIC_PROJECTS,
+      alwaysRunTests: ["src/guard.test.ts"],
+      sources: synthBeta,
+      readBaseFile: makeBaseReader(synthBase),
+    });
+    expect(betaResult.testFiles).not.toContain("test/dynamic-url.test.ts");
+  });
+
+  it("7 & S8) waits for real Vitest forks worker processes to terminate on SIGTERM so workers stop responding to file events", { timeout: 45_000 }, async () => {
+    if (process.platform === "win32") return;
+    const scratchTmp = mkdtempSync(join(tmpdir(), "related-s8-forks-"));
+    tempDirs.push(scratchTmp);
+
+    const readyFile = join(scratchTmp, "worker-ready.txt");
+    const triggerFile = join(scratchTmp, "trigger.txt");
+    const respondedFile = join(scratchTmp, "worker-responded.txt");
+    const probeTest = join(scratchTmp, "forks-probe.test.mjs");
+    const vitestConfig = join(scratchTmp, "vitest.probe.config.mjs");
+    const driver = join(scratchTmp, "run-forks-driver.mjs");
+
+    writeFileSync(
+      vitestConfig,
+      `export default { test: { pool: "forks", include: ["forks-probe.test.mjs"], testTimeout: 30000 } };\n`,
+    );
+    writeFileSync(
+      probeTest,
+      `import { existsSync, watch, writeFileSync } from "node:fs";
+import { it } from "vitest";
+it("waits on file event", () => new Promise((resolveTest) => {
+  const watcher = watch(${JSON.stringify(scratchTmp)}, (_event, name) => {
+    if (name === "trigger.txt" || existsSync(${JSON.stringify(triggerFile)})) {
+      writeFileSync(${JSON.stringify(respondedFile)}, String(process.pid));
+      watcher.close();
+      resolveTest();
+    }
+  });
+  writeFileSync(${JSON.stringify(readyFile)}, String(process.pid));
+}));
+`,
+    );
+    writeFileSync(
+      driver,
+      `import { runVitest } from ${JSON.stringify(resolve(REPO_ROOT, "scripts/test-related.ts"))};
+const code = await runVitest(
+  ["run", "--pool=forks", "--config", ${JSON.stringify(vitestConfig)}, ${JSON.stringify(probeTest)}],
+  { cwd: ${JSON.stringify(scratchTmp)}, tmpRoot: ${JSON.stringify(scratchTmp)} },
+);
+process.exit(code);
+`,
+    );
+
+    const child = spawn(process.execPath, [driver], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let workerPid: number | null = null;
+    try {
+      const readyDeadline = performance.now() + 20_000;
+      while (!existsSync(readyFile) && performance.now() < readyDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(existsSync(readyFile)).toBe(true);
+      workerPid = Number.parseInt(readFileSync(readyFile, "utf8").trim(), 10);
+      expect(Number.isInteger(workerPid) && workerPid > 1).toBe(true);
+      expect(readdirSync(scratchTmp).some((name) => name.startsWith("test-related-"))).toBe(true);
+
+      const exitPromise = new Promise<number | null>((resolveExit, rejectExit) => {
+        child.once("error", rejectExit);
+        child.once("close", (code) => resolveExit(code));
+      });
+      child.kill("SIGTERM");
+      const exitCode = await exitPromise;
+
+      expect(exitCode).toBe(143);
+      expect(readdirSync(scratchTmp).filter((name) => name.startsWith("test-related-"))).toEqual([]);
+
+      let workerStillAlive = false;
+      try {
+        process.kill(workerPid, 0);
+        workerStillAlive = true;
+      } catch {
+        workerStillAlive = false;
+      }
+      expect(workerStillAlive).toBe(false);
+
+      writeFileSync(triggerFile, "ping");
+      await new Promise((r) => setTimeout(r, 250));
+      expect(existsSync(respondedFile)).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Already exited.
+        }
+      }
+      if (workerPid !== null && workerPid > 1) {
+        try {
+          process.kill(workerPid, "SIGKILL");
+        } catch {
+          // Already exited.
+        }
+      }
     }
   });
 });
