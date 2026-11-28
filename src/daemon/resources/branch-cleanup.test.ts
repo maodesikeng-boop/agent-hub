@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addWorktree } from "../git/index.ts";
+import { addWorktree, isBranchSquashMergedToMain } from "../git/index.ts";
 import {
   createBranchCleanup,
   type BranchCleanupLedger,
@@ -257,5 +257,160 @@ describe("createBranchCleanup", () => {
       now: () => nowMs,
     });
     expect(await missing.inspect()).toEqual({ held: [], repos: [], complete: false });
+  });
+
+  it("does not delete an earlier relay branch when a later squash-merged branch reverted its file edit and made another edit to that same file", async () => {
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "ten lines");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "checkout", "-q", "-b", "hub/50-part1");
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => (i === 4 ? "part1 work" : `line ${i + 1}`)).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "part1");
+
+    git(repo, "checkout", "-q", "-b", "hub/51-part2");
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => (i === 8 ? "unrelated edit" : `line ${i + 1}`)).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "revert part1 and edit line 9");
+
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", "hub/51-part2");
+    git(repo, "commit", "-q", "-m", "squash part2");
+
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 50, projectId: 1, branch: "hub/50-part1", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+      { workerId: 51, projectId: 1, branch: "hub/51-part2", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const run = await cleanup.runOnce();
+
+    expect(run.deleted.map((d) => d.branch)).toEqual(["hub/51-part2"]);
+    expect(branchExists("hub/50-part1")).toBe(true);
+    expect(run.held.map((h) => h.branch)).toEqual(["hub/50-part1"]);
+  });
+
+  it("holds rather than deletes an earlier relay branch when a later squash-merged branch reverted one of two adjacent edited lines", async () => {
+    writeFileSync(join(repo, "README.md"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "ten lines");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "checkout", "-q", "-b", "hub/52-part1");
+    writeFileSync(
+      join(repo, "README.md"),
+      Array.from({ length: 10 }, (_, i) => (i === 4 ? "part1 lost" : i === 5 ? "part1 kept" : `line ${i + 1}`)).join("\n") + "\n",
+    );
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "edit adjacent lines 5 and 6");
+
+    git(repo, "checkout", "-q", "-b", "hub/53-part2");
+    writeFileSync(
+      join(repo, "README.md"),
+      Array.from({ length: 10 }, (_, i) => (i === 5 ? "part1 kept" : `line ${i + 1}`)).join("\n") + "\n",
+    );
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "revert line 5 and retain line 6");
+
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", "hub/53-part2");
+    git(repo, "commit", "-q", "-m", "squash part2");
+
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 52, projectId: 1, branch: "hub/52-part1", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+      { workerId: 53, projectId: 1, branch: "hub/53-part2", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const run = await cleanup.runOnce();
+
+    expect(run.deleted.map((d) => d.branch)).toEqual(["hub/53-part2"]);
+    expect(branchExists("hub/52-part1")).toBe(true);
+    expect(run.held.map((h) => h.branch)).toEqual(["hub/52-part1"]);
+  });
+
+  it("holds rather than deletes an earlier relay branch when a main-merge conflict kept main's line in the interior of a contiguous hunk", async () => {
+    const lines = (edits: Record<number, string>) =>
+      Array.from({ length: 10 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join("\n") + "\n";
+    writeFileSync(join(repo, "README.md"), lines({}));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "ten lines");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "checkout", "-q", "-b", "hub/54-part1");
+    writeFileSync(join(repo, "README.md"), lines({ 5: "first edit 5" }));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "first edit 5");
+
+    git(repo, "checkout", "-q", "main");
+    writeFileSync(join(repo, "README.md"), lines({ 5: "main edit 5" }));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "main edit 5");
+
+    git(repo, "checkout", "-q", "-b", "hub/55-part2", "hub/54-part1");
+    try {
+      git(repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5.
+    }
+    writeFileSync(join(repo, "README.md"), lines({ 4: "other relay edit 4", 5: "main edit 5", 6: "other relay edit 6" }));
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "resolve conflict keeping main line 5 with adjacent edits");
+
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", "hub/55-part2");
+    git(repo, "commit", "-q", "-m", "squash part2");
+
+    const workers: ManagedBranchWorkerRef[] = [
+      { workerId: 54, projectId: 1, branch: "hub/54-part1", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+      { workerId: 55, projectId: 1, branch: "hub/55-part2", baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS },
+    ];
+    const cleanup = createBranchCleanup({ ledger: makeLedger(workers), log: () => {}, now: () => nowMs });
+    const run = await cleanup.runOnce();
+
+    expect(run.deleted.map((d) => d.branch)).toEqual(["hub/55-part2"]);
+    expect(branchExists("hub/54-part1")).toBe(true);
+    expect(run.held.map((h) => h.branch)).toEqual(["hub/54-part1"]);
+  });
+
+  it.each([
+    { shape: "expansion with partial overlap", main: { 5: "main 5", 6: "main 6" }, line4: ["relay 4a", "relay 4b"] },
+    { shape: "expansion with the same old range", main: { 4: "main 4", 5: "main 5", 6: "main 6" }, line4: ["relay 4a", "relay 4b"] },
+    { shape: "deletion with the same old range", main: { 4: "main 4", 5: "main 5", 6: "main 6" }, line4: [] },
+  ])("holds a relay branch after $shape keeps a main conflict line verbatim", async ({ main, line4 }) => {
+    const commit = (edits: Record<number, string | string[] | undefined>, message: string) => {
+      const lines = Array.from({ length: 10 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).flat();
+      writeFileSync(join(repo, "README.md"), `${lines.join("\n")}\n`);
+      git(repo, "add", "README.md");
+      git(repo, "commit", "-q", "-m", message);
+    };
+    commit({}, "base lines");
+    const base = git(repo, "rev-parse", "HEAD");
+    const first = "hub/56-part1";
+    const final = "hub/57-part2";
+    git(repo, "checkout", "-qb", first);
+    commit({ 5: "first edit 5" }, "first relay edit");
+    git(repo, "checkout", "-q", "main");
+    commit(main, "main edits");
+    git(repo, "checkout", "-qb", final, first);
+    expect(() => git(repo, "merge", "-q", "--no-edit", "main")).toThrow();
+    expect(git(repo, "diff", "--name-only", "--diff-filter=U")).toBe("README.md");
+    commit({ 4: line4, 5: "main 5", 6: "relay 6" }, "resolve conflict keeping main line 5");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--squash", final);
+    git(repo, "commit", "-qm", "squash relay");
+
+    const worker: ManagedBranchWorkerRef = {
+      workerId: 56, projectId: 1, branch: first, baseCommit: base, status: "ended", inActiveGraph: false, endedAt: T0 - 8 * DAY_MS,
+    };
+    const cleanup = createBranchCleanup({ ledger: makeLedger([worker]), log: () => {}, now: () => nowMs });
+    const merged = await isBranchSquashMergedToMain(repo, first, base);
+    const run = await cleanup.runOnce();
+    expect({
+      merged,
+      held: run.held.map((entry) => entry.branch),
+      deleted: run.deleted.map((entry) => entry.branch),
+      exists: branchExists(first),
+    }).toEqual({ merged: false, held: [first], deleted: [final], exists: true });
   });
 });

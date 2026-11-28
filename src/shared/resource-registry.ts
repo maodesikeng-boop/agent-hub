@@ -352,7 +352,7 @@ const SQLITE_TABLE_ENTRIES: readonly ResourceRegistryEntry[] = [
 const HUB_PATH_ENTRIES: readonly ResourceRegistryEntry[] = [
   pathEntry("home", "data_dir", "bounded_config", "src/daemon/daemon.ts", "src/daemon/daemon.ts", "overwrite"),
   pathEntry("stateDir", "data_dir", "bounded_config", "src/daemon/daemon.ts", "src/daemon/daemon.ts", "overwrite"),
-  pathEntry("dbFile", "data_dir", "growing", "src/daemon/store/index.ts", "src/daemon/db-retention.ts, src/daemon/store/backup.ts", "automatic", [
+  pathEntry("dbFile", "data_dir", "growing", "src/daemon/store/index.ts", "src/daemon/db-retention.ts, src/daemon/store/backup-rotation.ts", "automatic", [
     limit("MAX_DB_BACKUPS", MAX_DB_BACKUPS, "files"),
   ]),
   pathEntry("lockFile", "data_dir", "bounded_config", "src/daemon/store/lock.ts", "src/daemon/store/lock.ts", "overwrite"),

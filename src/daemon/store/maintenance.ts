@@ -1,4 +1,5 @@
-import { DB_INCREMENTAL_VACUUM_PAGES, DB_INCREMENTAL_VACUUM_ROUND_MAX_PAGES } from "../../shared/limits.ts";
+import { DB_INCREMENTAL_VACUUM_PAGES, DB_INCREMENTAL_VACUUM_ROUND_MAX_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
+import { clearBackupStaging, pruneDatabaseBackups } from "./backup-rotation.ts";
 import type { Db } from "./db.ts";
 import { backupDatabase, mainDbFile, userVersion } from "./migrate.ts";
 
@@ -26,10 +27,12 @@ export function ensureIncrementalVacuum(db: Db, options: EnsureIncrementalOption
   if (db.inTransaction) throw new Error("ensureIncrementalVacuum() must not be called inside a transaction: VACUUM cannot run in one.");
   const before = autoVacuumMode(db);
   if (before === AUTO_VACUUM_INCREMENTAL) return { converted: false };
-  if (mainDbFile(db) === null) return { converted: false };
+  const dbFile = mainDbFile(db);
+  if (dbFile === null) return { converted: false };
+  const version = userVersion(db);
   let backupFile: string | undefined;
   try {
-    backupFile = options.backup === false ? undefined : backupDatabase(db, userVersion(db), options.now ?? Date.now);
+    backupFile = options.backup === false ? undefined : backupDatabase(db, version, options.now ?? Date.now);
     db.exec(`PRAGMA auto_vacuum = ${AUTO_VACUUM_INCREMENTAL}`);
     db.exec("VACUUM");
     if (autoVacuumMode(db) !== AUTO_VACUUM_INCREMENTAL) {
@@ -39,6 +42,8 @@ export function ensureIncrementalVacuum(db: Db, options: EnsureIncrementalOption
         error: "VACUUM did not switch the database to auto_vacuum = INCREMENTAL",
       };
     }
+    clearBackupStaging(dbFile);
+    if (backupFile !== undefined) pruneDatabaseBackups(dbFile, backupFile, MAX_DB_BACKUPS);
     return { converted: true, ...(backupFile !== undefined ? { backupFile } : {}) };
   } catch (error) {
     try {

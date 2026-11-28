@@ -48,8 +48,7 @@ function readme(edits: Record<number, string>): string {
 }
 
 function makeRepo(): { repo: string; base: string } {
-  const repo = join(root, "repo");
-  mkdirSync(repo);
+  const repo = mkdtempSync(join(root, "repo-"));
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), readme({}));
   git(repo, "add", "-A");
@@ -244,6 +243,152 @@ describe("isBranchSquashMergedToMain only trusts a containing ref that carried t
     squashInto(repo, "hub/4-fix", "impl (#2)");
     git(repo, "branch", "-q", "-D", "hub/4-fix");
     expect(await isBranchSquashMergedToMain(repo, "hub/2-impl", base)).toBe(true);
+  });
+
+  it("does not vouch for a relay branch when a later branch reverted its edit to a file and made another edit to that same file", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-part1");
+    commitFiles(repo, { "README.md": readme({ 5: "feature A" }) }, "feature A");
+
+    // Reverts line 5 and edits a different line (line 9) of README.md.
+    git(repo, "checkout", "-q", "-b", "hub/2-part2");
+    commitFiles(repo, { "README.md": readme({ 9: "unrelated B" }) }, "revert line 5 and edit line 9");
+    squashInto(repo, "hub/2-part2", "unrelated B (#2)");
+
+    const before = repoSnapshot(repo);
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-part1", base)).toBe(false);
+    expect(repoSnapshot(repo)).toEqual(before);
+  });
+
+  it("does not vouch when a later branch reverts line 5 and edits adjacent line 6, or reverts one of two hunks in the same file", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-adj");
+    commitFiles(repo, { "README.md": readme({ 5: "feature A" }) }, "feature A");
+    git(repo, "checkout", "-q", "-b", "hub/2-adj");
+    commitFiles(repo, { "README.md": readme({ 6: "adjacent edit" }) }, "revert 5 and edit 6");
+    squashInto(repo, "hub/2-adj", "adjacent (#2)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-adj", base)).toBe(false);
+
+    git(repo, "checkout", "-q", "-b", "hub/3-multi", base);
+    commitFiles(repo, { "README.md": readme({ 2: "hunk 1", 9: "hunk 2" }) }, "two hunks");
+    git(repo, "checkout", "-q", "-b", "hub/4-partial");
+    commitFiles(repo, { "README.md": readme({ 9: "hunk 2 refined" }) }, "revert hunk 1, refine hunk 2");
+    squashInto(repo, "hub/4-partial", "partial (#4)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/3-multi", base)).toBe(false);
+  });
+
+  it("does not vouch when a later branch reverts the earlier commit and then rewrites the exact same line in a follow-up commit", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-orig");
+    const orig = commitFiles(repo, { "README.md": readme({ 5: "original work" }) }, "original work");
+    git(repo, "checkout", "-q", "-b", "hub/2-revert-rewrite");
+    git(repo, "revert", "--no-edit", orig);
+    commitFiles(repo, { "README.md": readme({ 5: "unrelated rewrite" }) }, "unrelated rewrite on same line");
+    squashInto(repo, "hub/2-revert-rewrite", "unrelated (#2)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-orig", base)).toBe(false);
+  });
+
+  it("does not vouch when a later branch restores and edits a deleted file, diverges a binary file, or drops a branch edit when merging main", async () => {
+    // Deletion reverted then file edited.
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-del");
+    git(repo, "rm", "-q", "README.md");
+    git(repo, "commit", "-q", "-m", "delete readme");
+    git(repo, "checkout", "-q", "-b", "hub/2-restore");
+    commitFiles(repo, { "README.md": readme({ 9: "restored and edited" }) }, "restore and edit");
+    squashInto(repo, "hub/2-restore", "restore (#2)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-del", base)).toBe(false);
+
+    // Binary file changed differently by later relay branch fails closed.
+    const binRepo = makeRepo();
+    writeFileSync(join(binRepo.repo, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    git(binRepo.repo, "add", "-A");
+    git(binRepo.repo, "commit", "-q", "-m", "add binary");
+    const binBase = git(binRepo.repo, "rev-parse", "HEAD");
+    git(binRepo.repo, "checkout", "-q", "-b", "hub/1-bin");
+    writeFileSync(join(binRepo.repo, "asset.bin"), Buffer.from([0, 1, 9, 9]));
+    git(binRepo.repo, "add", "-A");
+    git(binRepo.repo, "commit", "-q", "-m", "branch binary");
+    git(binRepo.repo, "checkout", "-q", "-b", "hub/2-bin");
+    writeFileSync(join(binRepo.repo, "asset.bin"), Buffer.from([0, 2, 8, 8]));
+    git(binRepo.repo, "add", "-A");
+    git(binRepo.repo, "commit", "-q", "-m", "other binary");
+    squashInto(binRepo.repo, "hub/2-bin", "other binary (#2)");
+    expect(await isBranchSquashMergedToMain(binRepo.repo, "hub/1-bin", binBase)).toBe(false);
+
+    // Main-merge conflict resolution drops branch edit on line 5 in favor of main while keeping an edit on line 9.
+    const conflictRepo = makeRepo();
+    git(conflictRepo.repo, "checkout", "-q", "-b", "hub/1-c");
+    commitFiles(conflictRepo.repo, { "README.md": readme({ 5: "branch feature" }) }, "branch feature");
+    git(conflictRepo.repo, "checkout", "-q", "main");
+    commitFiles(conflictRepo.repo, { "README.md": readme({ 5: "main edit" }) }, "main edit");
+    git(conflictRepo.repo, "checkout", "-q", "-b", "hub/2-c", "hub/1-c");
+    try {
+      git(conflictRepo.repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5; resolve by dropping branch feature and editing line 9.
+    }
+    commitFiles(conflictRepo.repo, { "README.md": readme({ 5: "main edit", 9: "other tweak" }) }, "merge main dropping line 5");
+    squashInto(conflictRepo.repo, "hub/2-c", "other tweak (#2)");
+    expect(await isBranchSquashMergedToMain(conflictRepo.repo, "hub/1-c", conflictRepo.base)).toBe(false);
+  });
+
+  it("does not vouch when a later branch reverts one of two adjacent modified lines in a single contiguous hunk, but vouches when both lines are refined", async () => {
+    const { repo, base } = makeRepo();
+    git(repo, "checkout", "-q", "-b", "hub/1-contig");
+    commitFiles(repo, { "README.md": readme({ 5: "part1 lost", 6: "part1 kept" }) }, "edit adjacent lines 5 and 6");
+    git(repo, "checkout", "-q", "-b", "hub/2-partial-contig");
+    commitFiles(repo, { "README.md": readme({ 6: "part1 kept" }) }, "revert line 5 and keep line 6");
+    squashInto(repo, "hub/2-partial-contig", "partial contig (#2)");
+    expect(await isBranchSquashMergedToMain(repo, "hub/1-contig", base)).toBe(false);
+
+    const refined = makeRepo();
+    git(refined.repo, "checkout", "-q", "-b", "hub/3-contig");
+    commitFiles(refined.repo, { "README.md": readme({ 5: "part1 line 5", 6: "part1 line 6" }) }, "edit lines 5 and 6");
+    git(refined.repo, "checkout", "-q", "-b", "hub/4-refined");
+    commitFiles(refined.repo, { "README.md": readme({ 5: "refined line 5", 6: "refined line 6" }) }, "refine lines 5 and 6");
+    squashInto(refined.repo, "hub/4-refined", "refined contig (#4)");
+    expect(await isBranchSquashMergedToMain(refined.repo, "hub/3-contig", refined.base)).toBe(true);
+  });
+
+  it("does not vouch when a main-merge conflict drops the branch line in the interior of a contiguous hunk, but vouches when the conflict line is refined", async () => {
+    const dropped = makeRepo();
+    git(dropped.repo, "checkout", "-q", "-b", "hub/1-interior");
+    commitFiles(dropped.repo, { "README.md": readme({ 5: "first edit 5" }) }, "first edit 5");
+    git(dropped.repo, "checkout", "-q", "main");
+    commitFiles(dropped.repo, { "README.md": readme({ 5: "main edit 5" }) }, "main edit 5");
+    git(dropped.repo, "checkout", "-q", "-b", "hub/2-interior", "hub/1-interior");
+    try {
+      git(dropped.repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5; keep main's line 5 verbatim while editing adjacent lines 4 and 6.
+    }
+    commitFiles(
+      dropped.repo,
+      { "README.md": readme({ 4: "other relay edit 4", 5: "main edit 5", 6: "other relay edit 6" }) },
+      "merge main dropping line 5 inside contiguous hunk",
+    );
+    squashInto(dropped.repo, "hub/2-interior", "interior drop (#2)");
+    expect(await isBranchSquashMergedToMain(dropped.repo, "hub/1-interior", dropped.base)).toBe(false);
+
+    const resolved = makeRepo();
+    git(resolved.repo, "checkout", "-q", "-b", "hub/3-interior");
+    commitFiles(resolved.repo, { "README.md": readme({ 5: "first edit 5" }) }, "first edit 5");
+    git(resolved.repo, "checkout", "-q", "main");
+    commitFiles(resolved.repo, { "README.md": readme({ 5: "main edit 5" }) }, "main edit 5");
+    git(resolved.repo, "checkout", "-q", "-b", "hub/4-interior", "hub/3-interior");
+    try {
+      git(resolved.repo, "merge", "-q", "main");
+    } catch {
+      // Expected conflict on line 5; combine main and branch edits on line 5 while editing lines 4 and 6.
+    }
+    commitFiles(
+      resolved.repo,
+      { "README.md": readme({ 4: "other relay edit 4", 5: "combined edit 5", 6: "other relay edit 6" }) },
+      "merge main combining line 5 inside contiguous hunk",
+    );
+    squashInto(resolved.repo, "hub/4-interior", "interior combine (#4)");
+    expect(await isBranchSquashMergedToMain(resolved.repo, "hub/3-interior", resolved.base)).toBe(true);
   });
 });
 
