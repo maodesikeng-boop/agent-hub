@@ -1,13 +1,23 @@
-// Runs every test affected by this branch's changes. Vitest's import graph covers code; a path search links
-// files loaded at runtime (SQL migrations, workflow YAML, fixtures) to the tests and modules that read them.
-import { execFileSync, spawnSync } from "node:child_process";
+// Runs every test affected by this branch's changes using a symbol-aware static impact graph and bounded local concurrency.
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, posix, resolve } from "node:path";
+import { availableParallelism, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { GIT_MAX_BUFFER_BYTES } from "../src/shared/limits.ts";
+import { GIT_MAX_BUFFER_BYTES, KILL_WAIT_MS, TEST_RELATED_LOCAL_MAX_WORKERS } from "../src/shared/limits.ts";
 import { SANDBOX_SKIP_LOG_ENV } from "../test/sandbox-probes.ts";
+import {
+  findReferencingFiles,
+  loadVitestProjectSpecs,
+  parseTestRelatedArgs,
+  referenceNeedles,
+  resolveAffectedTests,
+  resolveLocalConcurrency,
+  type AffectedTestsResult,
+} from "./related-graph.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
+
+export { findReferencingFiles, referenceNeedles };
 
 /** Guards that scan the whole tree instead of importing what they check, so no import graph reaches them. */
 export const ALWAYS_RUN_TESTS = [
@@ -34,11 +44,8 @@ export const ALWAYS_RUN_TESTS = [
   "test/smoke/ledger-access.test.ts",
 ] as const;
 
-const DEFAULT_BASE = "origin/main";
 const MODULE_FILE = /\.[cm]?[jt]sx?$/;
-const TEST_FILE = /\.test\.tsx?$/;
 const SEARCH_ROOTS = ["src", "scripts", "test"];
-const MANIFEST_OR_LOCKFILE_NAMES = new Set(["package.json", "pnpm-lock.yaml"]);
 
 function gitLines(cwd: string, args: string[]): string[] {
   return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER_BYTES }).split("\0").filter(Boolean);
@@ -54,39 +61,27 @@ export function listChangedFiles(cwd: string, base: string): string[] {
   return [...new Set(files)].sort();
 }
 
-/** Strings a test or module that loads `file` at runtime would contain; empty for code that the import graph already covers. */
-export function referenceNeedles(file: string): string[] {
-  if (MODULE_FILE.test(file)) return [];
-  const dir = posix.dirname(file);
-  // Prompts and fixtures mention Markdown files as prose, so only an exact path below the root counts.
-  if (file.endsWith(".md")) return dir === "." ? [] : [file];
-  if (dir === ".") return [file];
-  return [file, `${dir}/`];
-}
-
-function isManifestOrLockfile(file: string): boolean {
-  return MANIFEST_OR_LOCKFILE_NAMES.has(posix.basename(file));
-}
-
-function matchesReferenceTarget(changedFile: string, candidatePath: string): boolean {
-  if (changedFile.endsWith(".md")) return TEST_FILE.test(candidatePath);
-  // Root manifests and lockfiles link only to tests and build scripts so literal "package.json" in src/ runtime code does not fan out across unrelated suites.
-  if (isManifestOrLockfile(changedFile)) return TEST_FILE.test(candidatePath) || candidatePath.startsWith("scripts/");
-  return true;
-}
-
-/** Code files whose source mentions a needle. Markdown matches tests only; manifests and lockfiles match tests and `scripts/` modules. */
-export function findReferencingFiles(changed: readonly string[], sources: ReadonlyMap<string, string>): string[] {
-  const hits = new Set<string>();
-  for (const file of changed) {
-    const needles = referenceNeedles(file);
-    if (needles.length === 0) continue;
-    for (const [path, text] of sources) {
-      if (path === file || !matchesReferenceTarget(file, path)) continue;
-      if (needles.some((needle) => text.includes(needle))) hits.add(path);
-    }
+function resolveMergeBase(cwd: string, base: string): string {
+  try {
+    return execFileSync("git", ["merge-base", base, "HEAD"], { cwd, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER_BYTES }).trim() || base;
+  } catch {
+    return base;
   }
-  return [...hits].sort();
+}
+
+function createBaseFileReader(cwd: string, baseRef: string): (repoRelativePath: string) => string | undefined {
+  const cache = new Map<string, string | undefined>();
+  return (repoRelativePath: string): string | undefined => {
+    if (cache.has(repoRelativePath)) return cache.get(repoRelativePath);
+    const out = spawnSync("git", ["show", `${baseRef}:${repoRelativePath}`], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER_BYTES,
+    });
+    const content = out.status === 0 && !out.error ? out.stdout : undefined;
+    cache.set(repoRelativePath, content);
+    return content;
+  };
 }
 
 function readCodeSources(cwd: string): Map<string, string> {
@@ -101,23 +96,24 @@ function readCodeSources(cwd: string): Map<string, string> {
   return sources;
 }
 
-function splitArgs(argv: string[]): { base: string; vitestArgs: string[] } {
-  const at = argv.indexOf("--base");
-  if (at === -1) return { base: DEFAULT_BASE, vitestArgs: argv };
-  const base = argv[at + 1];
-  if (!base) throw new Error("--base needs a git ref");
-  return { base, vitestArgs: [...argv.slice(0, at), ...argv.slice(at + 2)] };
-}
-
-/** Selects `vitest related` targets while omitting `package.json` and `pnpm-lock.yaml`, because Vitest's `forceRerunTriggers` expands `package.json` to the full suite and path linking plus `ALWAYS_RUN_TESTS` already cover manifest and lockfile consumers. */
-export function selectRelatedTargets(
-  changed: readonly string[],
-  sources: ReadonlyMap<string, string>,
-): { linked: string[]; targets: string[] } {
-  const linked = changed.some((file) => referenceNeedles(file).length > 0) ? findReferencingFiles(changed, sources) : [];
-  const direct = changed.filter((file) => !isManifestOrLockfile(file));
-  const targets = [...new Set([...direct, ...linked, ...ALWAYS_RUN_TESTS])];
-  return { linked, targets };
+/** Formats per-test causal paths for `--explain`. */
+export function formatExplainLines(result: AffectedTestsResult, alwaysRun: readonly string[] = ALWAYS_RUN_TESTS): string[] {
+  const guardSet = new Set(alwaysRun);
+  const lines: string[] = [];
+  for (const testFile of result.testFiles) {
+    const reasons = result.reasons.get(testFile);
+    if (!reasons || reasons.length === 0) {
+      lines.push(`  ${testFile}  [${guardSet.has(testFile) ? "always-run guard" : "selected"}]`);
+      continue;
+    }
+    const formatted = reasons
+      .slice(0, 3)
+      .map((r) => `${r.changedFile}#${r.symbol} (${r.path.join(" -> ")})`)
+      .join("; ");
+    const suffix = reasons.length > 3 ? ` (+${reasons.length - 3} more)` : "";
+    lines.push(`  ${testFile}  <- ${formatted}${suffix}`);
+  }
+  return lines;
 }
 
 /** The closing note when the sandbox made tests skip: CI still runs them, so this run cannot vouch for them. */
@@ -131,27 +127,146 @@ export function sandboxSkipReport(logText: string): string | undefined {
   ].join("\n");
 }
 
-function runVitest(args: readonly string[]): number {
-  const vitest = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "test-related-"));
-  const log = join(dir, "sandbox-skips.txt");
+const PROCESS_POLL_MS = 25;
+
+function isProcessGroupAlive(pgid: number): boolean {
+  if (process.platform === "win32" || pgid <= 1) return false;
   try {
-    const run = spawnSync(process.execPath, [vitest, ...args], {
-      cwd: REPO_ROOT,
-      stdio: "inherit",
-      env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+function signalProcessGroup(pgid: number, signal: NodeJS.Signals): void {
+  if (pgid <= 1) return;
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    // Process group already exited.
+  }
+}
+
+async function waitForProcessGroupExit(pgid: number, graceMs: number, signal: NodeJS.Signals): Promise<void> {
+  if (process.platform === "win32" || pgid <= 1 || !isProcessGroupAlive(pgid)) return;
+  // Re-signal once in case a Vitest worker forked just before the CLI process exited.
+  signalProcessGroup(pgid, signal);
+  const deadline = performance.now() + graceMs;
+  while (isProcessGroupAlive(pgid)) {
+    if (performance.now() >= deadline) {
+      signalProcessGroup(pgid, "SIGKILL");
+      const killDeadline = performance.now() + graceMs;
+      while (isProcessGroupAlive(pgid) && performance.now() < killDeadline) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, PROCESS_POLL_MS));
+      }
+      return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, PROCESS_POLL_MS));
+  }
+}
+
+function killWindowsProcessTree(pid: number): Promise<void> {
+  if (pid <= 1) return Promise.resolve();
+  return new Promise((resolveKill) => {
+    const sysRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+    const taskkill = join(sysRoot, "System32", "taskkill.exe");
+    const killer = spawn(taskkill, ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    killer.once("error", () => {
+      try {
+        process.kill(pid);
+      } catch {
+        // Already exited.
+      }
+      resolveKill();
     });
-    if (run.error) throw run.error;
+    killer.once("close", () => resolveKill());
+  });
+}
+
+export async function runVitest(
+  args: readonly string[],
+  options?: { readonly scriptPath?: string; readonly cwd?: string; readonly tmpRoot?: string },
+): Promise<number> {
+  const vitest = options?.scriptPath ?? join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
+  const cwd = options?.cwd ?? REPO_ROOT;
+  const dir = mkdtempSync(join(options?.tmpRoot ?? tmpdir(), "test-related-"));
+  const log = join(dir, "sandbox-skips.txt");
+  const useProcessGroup = process.platform !== "win32";
+  const child = spawn(process.execPath, [vitest, ...args], {
+    cwd,
+    stdio: "inherit",
+    detached: useProcessGroup,
+    env: { ...process.env, [SANDBOX_SKIP_LOG_ENV]: log },
+  });
+  let receivedSignal: NodeJS.Signals | null = null;
+  let exitCode: number | null = null;
+  let exitSignal: NodeJS.Signals | null = null;
+  let escalateTimer: ReturnType<typeof setTimeout> | undefined;
+  let win32KillPromise: Promise<void> | undefined;
+  let childrenSettled = false;
+  const settleChildren = async (): Promise<void> => {
+    if (childrenSettled) return;
+    childrenSettled = true;
+    const pid = child.pid;
+    if (pid === undefined) return;
+    if (useProcessGroup) {
+      // Check the process group unconditionally so direct SIGTERM to Vitest ({ code: 143, signal: null }) still waits for forks workers before removing dir.
+      const stopSignal: NodeJS.Signals = receivedSignal ?? exitSignal ?? (exitCode === 130 ? "SIGINT" : "SIGTERM");
+      await waitForProcessGroupExit(pid, KILL_WAIT_MS, stopSignal);
+    } else if (receivedSignal !== null || exitSignal !== null || win32KillPromise !== undefined || exitCode === 130 || exitCode === 143) {
+      await (win32KillPromise ?? killWindowsProcessTree(pid));
+    }
+  };
+  const forwardSignal = (sig: NodeJS.Signals): void => {
+    receivedSignal = sig;
+    const pid = child.pid;
+    if (pid === undefined) return;
+    if (useProcessGroup) {
+      signalProcessGroup(pid, sig);
+      if (escalateTimer === undefined) {
+        escalateTimer = setTimeout(() => signalProcessGroup(pid, "SIGKILL"), KILL_WAIT_MS);
+        escalateTimer.unref();
+      }
+    } else {
+      win32KillPromise ??= killWindowsProcessTree(pid);
+    }
+  };
+  const onSigInt = (): void => forwardSignal("SIGINT");
+  const onSigTerm = (): void => forwardSignal("SIGTERM");
+  process.on("SIGINT", onSigInt);
+  process.on("SIGTERM", onSigTerm);
+  try {
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit, rejectExit) => {
+      child.once("error", rejectExit);
+      child.once("close", (code, signal) => resolveExit({ code, signal }));
+    });
+    exitCode = exit.code;
+    exitSignal = exit.signal;
+    if (escalateTimer !== undefined) {
+      clearTimeout(escalateTimer);
+      escalateTimer = undefined;
+    }
+    await settleChildren();
     const report = sandboxSkipReport(existsSync(log) ? readFileSync(log, "utf8") : "");
     if (report) console.log(report);
-    return run.status ?? 1;
+    if (receivedSignal === "SIGINT") return 130;
+    if (receivedSignal === "SIGTERM") return 143;
+    if (exit.code !== null) return exit.code;
+    if (exit.signal === "SIGINT") return 130;
+    if (exit.signal === "SIGTERM") return 143;
+    return 1;
   } finally {
+    if (escalateTimer !== undefined) clearTimeout(escalateTimer);
+    process.off("SIGINT", onSigInt);
+    process.off("SIGTERM", onSigTerm);
+    await settleChildren();
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function main(argv: string[]): number {
-  const { base, vitestArgs } = splitArgs(argv);
+async function main(argv: string[]): Promise<number> {
+  const { base, dryRun, explain, vitestArgs } = parseTestRelatedArgs(argv);
   let changed: string[];
   try {
     changed = listChangedFiles(REPO_ROOT, base);
@@ -163,12 +278,56 @@ function main(argv: string[]): number {
     console.log(`test:related: no changes since ${base}`);
     return 0;
   }
-  const sources = changed.some((file) => referenceNeedles(file).length > 0) ? readCodeSources(REPO_ROOT) : new Map<string, string>();
-  const { linked, targets } = selectRelatedTargets(changed, sources);
-  console.log(`test:related: ${changed.length} changed since ${base}, ${linked.length} linked by path, ${ALWAYS_RUN_TESTS.length} guards`);
-  return runVitest(["related", "--run", "--passWithNoTests", ...vitestArgs, ...targets]);
+
+  const projects = await loadVitestProjectSpecs(REPO_ROOT);
+  const sources = readCodeSources(REPO_ROOT);
+  const mergeBase = resolveMergeBase(REPO_ROOT, base);
+  const result = resolveAffectedTests({
+    repoRoot: REPO_ROOT,
+    baseRef: base,
+    changedFiles: changed,
+    projects,
+    alwaysRunTests: ALWAYS_RUN_TESTS,
+    sources,
+    readBaseFile: createBaseFileReader(REPO_ROOT, mergeBase),
+  });
+
+  const concurrency = resolveLocalConcurrency({
+    vitestArgs,
+    env: process.env,
+    cpuCount: availableParallelism(),
+    testFileCount: result.testFiles.length,
+    maxWorkersCap: TEST_RELATED_LOCAL_MAX_WORKERS,
+  });
+
+  const workerNote =
+    concurrency.maxWorkers !== undefined
+      ? `maxWorkers=${concurrency.maxWorkers} (${concurrency.source})`
+      : `workers=${concurrency.source}`;
+
+  if (result.fullSuite) {
+    console.log(
+      `test:related: ${changed.length} changed since ${base}, full suite (${result.fullSuiteReason}), ${result.testFiles.length}/${result.totalTestFiles} test files, ${workerNote}`,
+    );
+  } else {
+    console.log(
+      `test:related: ${changed.length} changed since ${base}, ${result.linkedByPath.length} linked by path, ${ALWAYS_RUN_TESTS.length} guards -> ${result.testFiles.length}/${result.totalTestFiles} test files, ${workerNote}`,
+    );
+  }
+
+  if (explain) {
+    for (const line of formatExplainLines(result)) console.log(line);
+  } else if (dryRun) {
+    for (const file of result.testFiles) console.log(`  ${file}`);
+  }
+
+  if (dryRun) return 0;
+  if (result.testFiles.length === 0) return 0;
+
+  const targetArgs = result.fullSuite ? [] : result.testFiles;
+  return await runVitest(["run", "--passWithNoTests", ...concurrency.extraArgs, ...vitestArgs, ...targetArgs]);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 }

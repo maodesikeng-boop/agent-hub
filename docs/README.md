@@ -69,6 +69,7 @@ User guides, active engineering standards, and architecture snapshots for Bellwo
 - [Product capability evaluation](product-eval-design.md): The unified three-tier product capability evaluation framework (`harness`, `replay`, and `canary`), five non-collapsed capability dimensions, loopback mock model server with prompt-cache prefix verification, multi-trial `pass@k` and `pass^k` gating, holdout anti-overfitting guards, and CI and release-gate integration.
 - [Real CLI with mock model test environment](real-cli-mock-model-design.md): Empirical 8-vendor endpoint audit, loopback multi-dialect mock LLM HTTP/SSE server, isolated temporary HOME provisioning, deterministic prompt-cache prefix stability assertions, normalized protocol snapshots, and cross-platform real-CLI CI strategy.
 - [Packaged Feishu quick start and commit-bound verification matrix](verification-matrix-and-quickstart-design.md): Audit of desktop installer Feishu onboarding paths, candidate comparison for bundled CLI versus in-app Feishu setup, commit-bound `8 vendors x 3 platforms` verification matrix schema, truthfulness validator, `test/tester/` run ingestion, and release integration.
+- [Eliminating `pnpm test:related` fan-out and local concurrency overload](test-related-fanout-design.md): Empirical fan-out profile of `pnpm test:related` across real PRs and shared hubs, symbol-aware static impact graph (`oxc-parser`), thin `setupFiles` boundaries, dynamic vendor-loader edges, and bounded local worker concurrency.
 
 ## Desktop and distribution
 
