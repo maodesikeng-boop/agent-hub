@@ -23,6 +23,7 @@ export { findReferencingFiles, referenceNeedles };
 export const ALWAYS_RUN_TESTS = [
   "scripts/ci-friction.test.ts",
   "scripts/ci-workflows.test.ts",
+  "scripts/verification-matrix.test.ts",
   "src/code-hygiene.test.ts",
   "src/daemon/platform/executable-write-guard.test.ts",
   "src/daemon/resources/registry.test.ts",

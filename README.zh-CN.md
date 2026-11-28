@@ -57,7 +57,7 @@ gh attestation verify Bellwood-windows-x64-setup.exe -R maodesikeng-boop/agent-h
 
 ### 2. 安装并登录至少一家 Agent CLI
 
-Bellwood 支持 **Claude Code** (`claude`)、**Antigravity** (`agy`)、**Codex** (`codex`)、**Pi** (`pi`)、**DeepSeek Harness** (`dsh`)、**Cursor** (`cursor-agent`)、**OpenCode** (`opencode`) 和 **Kimi Code** (`kimi`)。
+Bellwood 支持 **Claude Code** (`claude`)、**Antigravity** (`agy`)、**Codex** (`codex`)、**Pi** (`pi`)、**DeepSeek Harness** (`dsh`)、**Cursor** (`cursor-agent`)、**OpenCode** (`opencode`) 和 **Kimi Code** (`kimi`)。各厂商在三大平台的实测与覆盖边界（区分真实服务、真 CLI 模拟模型、离线测试与未验证缺口）见绑定提交号的[多端验收矩阵](docs/verification-matrix.md)。
 
 打开 **Bellwood** 并进入 **Settings → Providers**（首次启动如无可用 CLI 会自动打开）。点击对应厂商右侧的 **Install** 安装，再点击 **Sign in...** 完成登录（支持浏览器 OAuth、设备码、无头服务器粘贴回环回调地址或填写 API Key）。新建项目经理或使用总助 **Auto** 模式且未指定厂商时，Bellwood 会自动选择这台电脑上第一个可用的 CLI。
 
@@ -89,7 +89,18 @@ Bellwood 支持 **Claude Code** (`claude`)、**Antigravity** (`agy`)、**Codex**
 
 ### 4. 接入飞书、Linux 或其他电脑（可选）
 
-- **飞书机器人与项目群**：守护进程运行时执行 `node src/feishu/main.ts connect` 并用飞书扫码；执行 `node src/feishu/main.ts status` 查看绑定状态。
+- **飞书机器人与项目群**：飞书机器人配置目前通过内置命令行完成，暂未提供应用内配置页（可在 **Settings → Computers → Hub order** 查看当前承载机器人的已配对电脑）。保持桌面应用或守护进程运行，按安装方式执行对应命令并用飞书扫码（将 `connect` 换为 `status` 可查看绑定状态）：
+  - **macOS 安装包（`Bellwood.app`）**：
+    ```sh
+    /Applications/Bellwood.app/Contents/Resources/runtime/node/bin/node /Applications/Bellwood.app/Contents/Resources/runtime/daemon/src/feishu/main.ts connect
+    /Applications/Bellwood.app/Contents/Resources/runtime/node/bin/node /Applications/Bellwood.app/Contents/Resources/runtime/daemon/src/feishu/main.ts status
+    ```
+  - **Windows 安装包（`Bellwood-windows-x64-setup.exe`，PowerShell）**：
+    ```powershell
+    & "$env:LOCALAPPDATA\Bellwood\node\node.exe" "$env:LOCALAPPDATA\Bellwood\daemon\src\feishu\main.ts" connect
+    & "$env:LOCALAPPDATA\Bellwood\node\node.exe" "$env:LOCALAPPDATA\Bellwood\daemon\src\feishu\main.ts" status
+    ```
+  - **Linux 或源码目录**：在仓库根目录执行 `node src/feishu/main.ts connect` 扫码接入，或执行 `node src/feishu/main.ts status` 查看绑定状态。
 - **多台电脑组网**：内置官方公共盲中继与 GitHub Device Flow Client ID，无需额外配置。在每台电脑的 **Settings → Computers** 登录同一个 GitHub 账号，核对两端显示的六位数字码即可互信。自建中继时通过 `FUSA_RELAY_URL` 和 `FUSA_GITHUB_CLIENT_ID` 覆盖。
 - **Linux 常驻守护进程**：以 `systemd --user` 服务运行，并执行一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`。详见 [Linux 部署指南](docs/linux.md)。
 
@@ -243,7 +254,7 @@ hub persona edit --stdin                                   # 修改项目经理�
 
 <br>
 
-- **全账号共用一个机器人**：执行 `node src/feishu/main.ts connect` 扫码即可创建。同一账号下多台电脑按优先级共享该机器人，主力机离线时下一台在线设备自动接管，断网重连后自动补拉漏收消息。
+- **全账号共用一个机器人**：按[快速开始第 4 步](#4-接入飞书linux-或其他电脑可选)运行安装包内置飞书命令（Linux 或源码目录执行 `node src/feishu/main.ts connect`）扫码即可创建。同一账号下多台电脑按优先级共享该机器人，主力机离线时下一台在线设备自动接管，断网重连后自动补拉漏收消息。
 - **单聊找总助，项目建专属群**：与机器人单聊直达总助 Router；每个项目自动拥有带像素水果史莱姆头像的专属群，支持流式输出与**停止**按钮，截图、录屏和拍板卡与桌面端实时同步。
 - **团队群自动切换 `@机器人` 模式**：群里只有你一人时每条消息直达项目经理；拉入同事后自动切换为 `@机器人` 触发，平时讨论只在后台缓冲近期上下文，需要落实时 `@` 机器人即可带上下文开工并把结果发回群里。
 - **手机端切换模型与思考档位**：在单聊或项目群发送 `/settings`（或 `/设置`、`/群设置`、`/model`、`/policy`）即可打开交互设置卡，直接切换厂商、模型与思考档位。

@@ -368,6 +368,25 @@ describe(".github/workflows", () => {
     }
     expect(paths).toContain("CHANGELOG.md");
     expect(paths).toContain(".github/release-downloads.md");
+    for (const required of [
+      "scripts/verification-matrix-feishu.ts",
+      "scripts/verification-matrix-model.ts",
+      "scripts/verification-matrix-runs.ts",
+      "scripts/verification-matrix-runs.fixture.ts",
+      "scripts/build-mac-app.sh",
+      "scripts/stage-mac-runtime.ts",
+      "scripts/stage-win-runtime.ts",
+      "apps/windows/crates/fusa-desktop/tauri.conf.json",
+      "apps/windows/crates/fusa-desktop/tauri.bundle.conf.json",
+      "src/feishu/main.ts",
+      ".github/workflows/check.yml",
+      ".github/workflows/macos.yml",
+      ".github/workflows/mac-desktop.yml",
+      ".github/workflows/windows.yml",
+      ".github/workflows/nightly.yml",
+    ]) {
+      expect(paths, `release.yml pull_request.paths missing ${required}`).toContain(required);
+    }
   });
 
   it.each(["mac-desktop.yml", "windows-desktop.yml"])("%s rebuilds when the staged lockfile logic changes", (name) => {

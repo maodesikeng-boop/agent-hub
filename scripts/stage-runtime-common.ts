@@ -52,7 +52,22 @@ export type BundledNodeTarget = keyof typeof BUNDLED_NODE_ARCHIVES;
 /** 裁剪随包 node_modules 的目标：两个分发平台，或本机冒烟（不裁平台二进制）。 */
 export type StageTargetOs = "win32" | "darwin-arm64" | "host";
 
-const DAEMON_SOURCE_SUBDIRS = ["admin", "daemon", "shared", "vendors", "hub", "feishu", "mesh", "relay"] as const;
+export const STAGED_DAEMON_SRC_DIR = "src";
+export const FEISHU_SOURCE_SUBDIR = "feishu";
+export const FEISHU_CLI_ENTRY_FILE = "main.ts";
+export const SOURCE_FEISHU_ENTRY_RELATIVE_PATH = `src/${FEISHU_SOURCE_SUBDIR}/${FEISHU_CLI_ENTRY_FILE}`;
+export const STAGED_FEISHU_ENTRY_RELATIVE_PATH = `${STAGED_DAEMON_SRC_DIR}/${FEISHU_SOURCE_SUBDIR}/${FEISHU_CLI_ENTRY_FILE}`;
+
+export const DAEMON_SOURCE_SUBDIRS = [
+  "admin",
+  "daemon",
+  "shared",
+  "vendors",
+  "hub",
+  FEISHU_SOURCE_SUBDIR,
+  "mesh",
+  "relay",
+] as const;
 
 /** Repository paths whose contents end up in the staged desktop runtime; the desktop workflows must rebuild on main when any of them changes. */
 export const STAGED_RUNTIME_INPUTS: readonly string[] = [
@@ -391,7 +406,7 @@ export function stageDaemonTree(opts: StageDaemonTreeOptions): void {
   mkdirSync(daemonOutDir, { recursive: true });
 
   for (const sub of DAEMON_SOURCE_SUBDIRS) {
-    copyFilteredSourceTree(join(repoRoot, "src", sub), join(daemonOutDir, "src", sub));
+    copyFilteredSourceTree(join(repoRoot, "src", sub), join(daemonOutDir, STAGED_DAEMON_SRC_DIR, sub));
   }
   cpSync(join(repoRoot, "migrations"), join(daemonOutDir, "migrations"), { recursive: true });
   cpSync(distWebDir, join(daemonOutDir, "dist", "web"), { recursive: true });

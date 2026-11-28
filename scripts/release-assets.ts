@@ -16,6 +16,8 @@ import { RELEASE_INSTALLER_FILES } from "../src/shared/update.ts";
 import { publishRelease, readReleaseFacts, yankRelease, type ReleaseContext } from "./release-github.ts";
 import { planRelease, releaseNotesFor, type ReleasePlan } from "./release-plan.ts";
 import { REPO_ROOT, readDesktopAppVersion, sha256FileHex } from "./stage-runtime-common.ts";
+import { validateRepoVerificationMatrix } from "./verification-matrix.ts";
+import { isValidReleaseRefForVersion, validateRenderedReleaseMatrixLinks } from "./verification-matrix-model.ts";
 
 export interface ReleaseAssetSpec {
   platform: "windows" | "macos";
@@ -131,8 +133,29 @@ export function isTagPushOf(tag: string, env: NodeJS.ProcessEnv = process.env): 
   return env["GITHUB_EVENT_NAME"] === "push" && env["GITHUB_REF_TYPE"] === "tag" && env["GITHUB_REF_NAME"] === tag;
 }
 
-export function composeReleaseNotes(changelog: string, downloads: string, version: string): string {
-  return `${releaseNotesFor(changelog, version)}\n\n${downloads.trim()}\n`;
+export function composeReleaseNotes(
+  changelog: string,
+  downloads: string,
+  version: string,
+  opts?: { ref?: string; repo?: string },
+): string {
+  const ref = (opts?.ref ?? `v${version}`).trim();
+  const repo = (opts?.repo ?? UPDATE_RELEASE_REPO).trim();
+  if (!isValidReleaseRefForVersion(ref, version)) {
+    throw new Error(`Release notes ref must be a release tag or commit SHA for v${version}, got "${ref}"`);
+  }
+  const renderedDownloads = downloads
+    .replaceAll("{{RELEASE_REPO}}", repo)
+    .replaceAll("{{RELEASE_REF}}", ref)
+    .trim();
+  if (/\{\{RELEASE_(?:REPO|REF)\}\}/.test(renderedDownloads)) {
+    throw new Error("Release downloads template contains unresolved placeholders");
+  }
+  const linkProblems = validateRenderedReleaseMatrixLinks(renderedDownloads, { repo, ref });
+  if (linkProblems.length > 0) {
+    throw new Error(linkProblems[0]!);
+  }
+  return `${releaseNotesFor(changelog, version)}\n\n${renderedDownloads}\n`;
 }
 
 function readChangelog(): string {
@@ -149,9 +172,19 @@ function releaseContext(dryRun: boolean): ReleaseContext {
   };
 }
 
+function assertVerificationMatrixValid(repoRoot: string, appVersion: string): void {
+  const problems = validateRepoVerificationMatrix(repoRoot, appVersion);
+  if (problems.length > 0) {
+    throw new Error(
+      `Verification matrix check failed:\n${problems.map((p) => `- [${p.code}] ${p.path}: ${p.message}`).join("\n")}`,
+    );
+  }
+}
+
 function planTag(tag: string, ctx: ReleaseContext): ReleasePlan {
   const appVersion = readDesktopAppVersion();
   assertVersionSourcesMatch(REPO_ROOT, appVersion);
+  assertVerificationMatrixValid(REPO_ROOT, appVersion);
   const facts = readReleaseFacts(tag, appVersion, ctx);
   const plan = planRelease(facts, { dryRun: ctx.dryRun });
   if (!ctx.dryRun && facts.commit !== process.env["GITHUB_SHA"]) {
@@ -182,7 +215,7 @@ function runPublish(flags: Map<string, string>): void {
   try {
     const notesFile = join(notesDir, "notes.md");
     const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
-    writeFileSync(notesFile, composeReleaseNotes(readChangelog(), downloads, plan.version));
+    writeFileSync(notesFile, composeReleaseNotes(readChangelog(), downloads, plan.version, { ref: plan.tag, repo: ctx.repo }));
     publishRelease(plan, { assetsDir: resolve(requireFlag(flags, "assets-dir")), notesFile }, ctx);
   } finally {
     rmSync(notesDir, { recursive: true, force: true });
@@ -209,8 +242,11 @@ function main(): void {
   if (command === "check") {
     const appVersion = readDesktopAppVersion();
     assertVersionSourcesMatch(REPO_ROOT, appVersion);
-    releaseNotesFor(readChangelog(), appVersion);
-    console.log(`version=${appVersion}: version sources agree and CHANGELOG.md has a v${appVersion} section`);
+    const downloads = readFileSync(join(REPO_ROOT, ".github", "release-downloads.md"), "utf8");
+    composeReleaseNotes(readChangelog(), downloads, appVersion, { ref: `v${appVersion}` });
+    composeReleaseNotes(readChangelog(), downloads, appVersion, { ref: `v${appVersion}-rc.1` });
+    assertVerificationMatrixValid(REPO_ROOT, appVersion);
+    console.log(`version=${appVersion}: version sources, CHANGELOG.md, and verification matrix agree`);
     setGithubOutput("version", appVersion);
     return;
   }

@@ -19,6 +19,11 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/release.yml"
+      - ".github/workflows/check.yml"
+      - ".github/workflows/macos.yml"
+      - ".github/workflows/mac-desktop.yml"
+      - ".github/workflows/windows.yml"
+      - ".github/workflows/nightly.yml"
       - ".github/release-downloads.md"
       - "CHANGELOG.md"
       - "scripts/release-assets.ts"
@@ -27,12 +32,34 @@ on:
       - "scripts/release-github.test.ts"
       - "scripts/release-plan.ts"
       - "scripts/release-plan.test.ts"
+      - "scripts/verification-matrix.ts"
+      - "scripts/verification-matrix-feishu.ts"
+      - "scripts/verification-matrix-model.ts"
+      - "scripts/verification-matrix-runs.ts"
+      - "scripts/verification-matrix-runs.fixture.ts"
+      - "scripts/verification-matrix-runs.test.ts"
+      - "scripts/verification-matrix.test.ts"
       - "scripts/stage-runtime-common.ts"
+      - "scripts/stage-mac-runtime.ts"
+      - "scripts/stage-win-runtime.ts"
+      - "scripts/build-mac-app.sh"
+      - "scripts/test-related.ts"
+      - "src/feishu/main.ts"
+      - "src/shared/limits.ts"
       - "src/shared/update.ts"
+      - "src/shared/vendors.ts"
+      - "test/mock-llm/vendors.ts"
+      - "test/tester/vendors.ts"
       - "package.json"
       - "SECURITY.md"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "docs/README.md"
+      - "docs/verification-matrix.json"
+      - "docs/verification-matrix.md"
       - "apps/windows/Cargo.toml"
       - "apps/windows/crates/fusa-desktop/tauri.conf.json"
+      - "apps/windows/crates/fusa-desktop/tauri.bundle.conf.json"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -63,8 +90,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Release script unit tests
-        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts
-      - name: Version sources and CHANGELOG.md agree
+        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts scripts/release-plan.test.ts scripts/release-github.test.ts scripts/verification-matrix.test.ts scripts/verification-matrix-runs.test.ts
+      - name: Version sources, CHANGELOG.md, and verification matrix agree
         run: node scripts/release-assets.ts check
       - name: Plan the tag
         id: plan
