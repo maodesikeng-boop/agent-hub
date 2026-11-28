@@ -132,9 +132,11 @@ describe("user documentation review follow-up guards", () => {
       expect(agyLine, `${file} must set modelProvider to gemini`).toContain("gemini");
       expect(agyLine, `${file} must document systemd Environment= and EnvironmentFile=`).toContain("Environment=");
       expect(agyLine, `${file} must document systemd EnvironmentFile=`).toContain("EnvironmentFile=");
-      expect(agyLine, `${file} must explain GEMINI_API_KEY must enter the daemon environment`).toMatch(
-        /daemon|守护进程/,
-      );
+      const manualSetup = agyLine.split(/if configuring manually|手动配置/i)[1] ?? "";
+      const destination = file === "README.zh-CN.md"
+        ? /`GEMINI_API_KEY`[^，。（]*守护进程环境/
+        : /`GEMINI_API_KEY` (?:into|to) the Bellwood daemon/i;
+      expect(manualSetup, `${file} must direct the manual key to the daemon`).toMatch(destination);
       expect(agyLine, `${file} must warn against exporting GEMINI_API_KEY only after startup`).toMatch(
         /after (?:Bellwood|the service)|启动 Bellwood 后/i,
       );

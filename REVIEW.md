@@ -78,11 +78,11 @@ Seen in: `ab03a38d`/`af3b76c8`, `638516a7`
 
 ### Read-only Workers never reach a write-capable MCP tool
 
-Trigger: `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/_common/acp/**`, `src/shared/readonly-policy.ts`
+Trigger: `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/_common/acp/**`, `src/shared/readonly-policy.ts`, `src/vendors/*/acp-config.ts`
 
 Check: Every MCP tool call a read-only Worker makes either passes through `connectorToolAllowed` (directly or via the ACP permission gate) or cannot happen because the vendor never loads an MCP server. A vendor mode that auto-approves tools (Kimi `yolo`, an OpenCode allow-all agent) hides every MCP source it reads, including user, project, plugin, and overridden-home config, and its MCP OAuth tokens. Read-only rules also win over agent-level permissions in user or project config, and delegation to subagents is denied. A test or a real-CLI run shows a non-read-only MCP tool is not executed.
 
-Seen in: `bdb85632`, `c067de52`/`2a421897`, `717eeb06`
+Seen in: `bdb85632`, `c067de52`/`2a421897`, `717eeb06`, #501
 
 ### Async work stops touching the ledger after shutdown starts
 
@@ -94,11 +94,11 @@ Seen in: `c69b3b94`, `d23209c2`/`796273fe`, `e5b55fa6`, `2bdf6ff9`/`3ecff0d4`, `
 
 ### Restart recovery finishes what the last run left
 
-Trigger: `src/daemon/daemon.ts`, `src/daemon/ledger/ledger.ts`, `src/daemon/ledger/sessions.ts`, `src/daemon/ledger/turn-completions.ts`, `src/daemon/ledger/workers/**`, `src/daemon/ledger/schedules.ts`, `src/daemon/session-tmp.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/process-ledger.ts`
+Trigger: `src/daemon/daemon.ts`, `src/daemon/ledger/ledger.ts`, `src/daemon/ledger/sessions.ts`, `src/daemon/ledger/turn-completions.ts`, `src/daemon/ledger/workers/**`, `src/daemon/ledger/schedules.ts`, `src/daemon/session-tmp.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/process-ledger.ts`, `src/daemon/quota/**`, `src/daemon/store/session-store.ts`
 
-Check: Anything the next daemon run needs to finish or clean up this run's work (a pending receipt, a background wait, a process tag nonce, a temp-dir prefix) is persisted or derived from the data directory, never minted fresh on each start. Startup recovery settles every pending record, not one batch or page, before timers, schedules, or new sessions start. Recovery does not re-enqueue dependent work (such as `session.send`) while a prerequisite prep action (such as `worktree.create` or `worktree.sync`) is unfinished, and replaying a prep action after a mid-step crash is idempotent. A test restarts the daemon in the middle of the operation and shows the work completes or its leftovers are reaped.
+Check: Anything the next daemon run needs to finish or clean up this run's work (a pending receipt, a background wait, a process tag nonce, a temp-dir prefix) is persisted or derived from the data directory, never minted fresh on each start. Startup recovery settles every pending record, not one batch or page, before timers, schedules, or new sessions start. Recovery does not re-enqueue dependent work (such as `session.send`) while a prerequisite prep action (such as `worktree.create` or `worktree.sync`) is unfinished, and replaying a prep action after a mid-step crash is idempotent. A test restarts the daemon in the middle of the operation and shows the work completes or its leftovers are reaped. For partial quota updates, compare the active windows and their deadlines before and after reopening the same database.
 
-Seen in: `e9b9ec23`, `6883b2f4`, `12815bc8`, #491
+Seen in: `e9b9ec23`, `6883b2f4`, `12815bc8`, #491, #519
 
 ### Database transactions stay synchronous
 
@@ -118,11 +118,11 @@ Seen in: `43d70fad`, `18e2fa2b`/`7df95c32`, `8023745a`/`edcac7bb`, `50ac3399`
 
 ### Growing data has a cap in limits.ts
 
-Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/daemon/*checker*.ts`, `src/shared/snapshot.ts`, `src/shared/limits.ts`, `src/web/limits.ts`, `vitest.config.ts`, `vite.config.ts`
+Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/daemon/*checker*.ts`, `src/shared/snapshot.ts`, `src/shared/limits.ts`, `src/web/limits.ts`, `vitest.config.ts`, `vite.config.ts`, `test/mock-llm/server.ts`, `src/daemon/store/migrate.ts`, `src/daemon/store/maintenance.ts`
 
 Check: Queues, in-memory collections, API responses, and command output that grow over time have a cap from `src/shared/limits.ts`. Size the cap for one month of use (300 finished Workers, 30,000 messages, 50,000 step logs). Large responses use compression. An external HTTP body is read as a stream and cancelled once it passes its byte cap, since `Content-Length` can be missing. Keep backend and cross-layer caps in `src/shared/limits.ts`, put web-only UI constants in `src/web/limits.ts`, and never import `src/shared/limits.ts` from `vitest.config.ts` or `vite.config.ts`.
 
-Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`, `50b3d57a`
+Seen in: `2bdf6ff9`, `eb0386bd`, `4ba0f65d`, `50b3d57a`, #508, #523
 
 ### Front-end selectors return stable references
 
@@ -174,11 +174,11 @@ Seen in: `f294936b`/`a4d5ca8d`, `5a2a2f03`
 
 ### Child processes are tracked and gone before cleanup
 
-Trigger: `src/daemon/driver/**`, `src/daemon/handover/**`, `src/daemon/setup/**`, `src/daemon/provider-manager/**`, `src/vendors/_common/setup/**`, `src/daemon/process-ledger.ts`, `test/e2e/harness.ts`, `test/spawn-guard.ts`, `test/smoke/**`
+Trigger: `src/daemon/driver/**`, `src/daemon/handover/**`, `src/daemon/setup/**`, `src/daemon/provider-manager/**`, `src/vendors/_common/setup/**`, `src/daemon/process-ledger.ts`, `test/e2e/harness.ts`, `test/spawn-guard.ts`, `test/smoke/**`, `src/daemon/self-reload.ts`, `scripts/test-related.ts`
 
-Check: Each new child process the daemon starts goes through `trackChild`, so a crash leaves nothing behind after the next start. A `close()` that aborts child processes, such as version probes, waits for each one to emit `close` before it resolves. A test stops the daemon and waits for it and its children to exit before it deletes the temporary `AGENT_HUB_HOME`. Never use `rmSync` retries or `gh run rerun` to hide `ENOTEMPTY`.
+Check: Each new child process the daemon starts goes through `trackChild`, so a crash leaves nothing behind after the next start. A `close()` that aborts child processes, such as version probes, waits for each one to emit `close` before it resolves. A test stops the daemon and waits for it and its children to exit before it deletes the temporary `AGENT_HUB_HOME`. Never use `rmSync` retries or `gh run rerun` to hide `ENOTEMPTY`. Check cancellation and immediate retry with a child still running at the time of the cancellation.
 
-Seen in: `6af05c80`, `4b557b03`, `601cb7cb`
+Seen in: `6af05c80`, `4b557b03`, `601cb7cb`, #509, #517
 
 ### Tests wait for events, not for time
 
@@ -206,11 +206,11 @@ Seen in: `01ec18ad`, `9c3254de`
 
 ### Detached child processes and temp dirs stay inside the session boundary
 
-Trigger: `src/daemon/launch.ts`, `src/daemon/handlers.ts`, `src/daemon/setup/**`, `src/daemon/driver/**`, `src/daemon/git/branches.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/session-tmp.ts`, `src/daemon/watches/**`, `src/daemon/worktree-cleanup.ts`, `src/daemon/resources/**`, `scripts/**`
+Trigger: `src/daemon/launch.ts`, `src/daemon/handlers.ts`, `src/daemon/setup/**`, `src/daemon/driver/**`, `src/daemon/git/branches.ts`, `src/daemon/platform/process-tag.ts`, `src/daemon/session-tmp.ts`, `src/daemon/watches/**`, `src/daemon/worktree-cleanup.ts`, `src/daemon/resources/**`, `scripts/**`, `src/daemon/git/relay-carry.ts`
 
 Check: Every Worker and setup subprocess inherits `ENV_SESSION_OWNER_TAG` (constructed through `src/daemon/platform/process-tag.ts`, guarded by `src/daemon/resources/registry.test.ts`, so `sessionProcesses.listEnded` recognizes active processes) and a private `SessionTmpStore` directory (owned by a kill-on-close Job Object on Windows) so detached grandchildren and nested test daemons are reaped on session exit. The identity that finds leftovers (tag nonce, temp-dir prefix) survives a daemon restart and differs per data directory. Nothing deletes by a bare name prefix in a shared location such as `/tmp`, and nothing is mounted over `/tmp`. Automatic reaping stops only processes inside the session's own folders; anything else waits for the user. A failed scan or ledger read never counts as empty or "gone", so it never prunes a Keep decision or aborts live work. A delete re-checks the exact object it verified (branch commit, file age). Automatic merge detection for branch or worktree cleanup stays fail-closed (never treating an empty net diff, a reverted integration ref, or a custom `.gitattributes` merge driver as proof a branch merged) and avoids executing repo-configured merge drivers. Cleanup failures or held dirty worktrees surface to the user instead of logging repeated silent skips.
 
-Seen in: `600067d6`, `60e0ab75`, `ac55c10f`, `ba599181`/`ea9ff72f`, `ba599181`/`12815bc8`, `e3da4c13`, #497
+Seen in: `600067d6`, `60e0ab75`, `ac55c10f`, `ba599181`/`ea9ff72f`, `ba599181`/`12815bc8`, `e3da4c13`, #497, #523
 
 ### Text shipped to agents holds in any project
 
@@ -226,7 +226,7 @@ Trigger: `**`
 
 Check: This rule applies only to a PR that adds, updates, or implements a design plan in `docs/*-design.md`, whether the plan is in this PR or already on `main`. Skip this rule when the PR has no design plan. When it applies, check every acceptance scenario in the plan's verification plan one by one. Confirm that every quoted user sentence and every settled rule in the plan maps to at least one scenario. Confirm that each of the nine categories in `docs/plan-standard.md` has at least one scenario or a one-sentence explanation of why it cannot apply: two consecutive turns in one conversation, a restart mid-operation, a state or configuration change while queued, existing rules the change touches (including every matching rule from `REVIEW.md` on `main`, addressed item by item in the design document), large data volume (one-month sizing: 300 finished Workers, 30,000 messages, 50,000 step logs), malformed or dirty data (corrupt formats, half-written records, older-version data, abnormal vendor CLI events), cross-vendor coverage across all registered vendors (including prompt-cache impact: never alter the system prompt, tool or MCP list, or previously sent messages mid-session, and append only rather than prepending), cross-platform coverage (macOS, Windows, Linux), and cross-entry-point and layout coverage (wide and narrow web screens, Feishu, `hub` CLI, multiple computers). Every acceptance scenario must have a runnable test with real assertions, not an `it.todo` placeholder. Confirm from the pre-implementation baseline recorded before the first implementation commit (in the planning step or first implementation step's report or PR body) that every test for new or changed behavior failed before implementation began, and that every regression test confirming an unchanged existing rule ran and passed. When a plan is split across multiple implementation steps on the same branch, do not fail a later step because tests satisfied by an earlier implementation step already pass when that later step starts. Confirm instead that the initial pre-implementation baseline before the first implementation commit covers all new or changed behavior tests and unchanged-rule regression tests, and that before each later step edited production code, the tests for that step's unimplemented behavior still failed while earlier steps' completed tests and unchanged-rule regression tests passed. Once implementation finishes, confirm that every scenario test passes on the commit under review and that no implementation commit deleted, skipped, or weakened any planning test without an approved plan revision. During real-environment review (required on every PR except docs-only and rules-only PRs), evaluate every acceptance scenario under one evidence rule. Each scenario that ran in a real environment must have a screen recording (video) or a complete start-to-finish sequence of screenshots (never a single static screenshot). Only the listed unavailable cases below may instead record the scenario, the reason, and `not verified`, and `not verified` never counts as verified or passing. Web-only flows that do not depend on a missing real dependency run locally against an isolated temporary Bellwood instance and Playwright, so they cannot claim `not verified`. When a web scenario also depends on a missing real dependency (such as a real vendor CLI that cannot run safely isolated locally and cannot run on a testbed), the exception applies only to that missing dependency. Confirm the web portion that can execute in the isolated local instance still ran with a Playwright recording or a start-to-finish screenshot sequence, and confirm only the missing real-dependency portion records the scenario, the reason, and `not verified`. Vendor CLI behavior must be proved by the real-environment review track running against the real vendor CLI (locally or on a testbed). Hand-written fake events and fake CLIs serve only as automated regression tests and cannot prove vendor CLI behavior on their own, so a run passing only against fake events or a fake CLI counts as `not verified` against the real CLI. For a general real-CLI scenario, if safe config isolation is not verified or the vendor CLI is not installed or logged in locally, run it on a dedicated testbed when available. Confirm the PR has real-CLI evidence from a local run (with safe config isolation verified) or a testbed run, or, only when the real CLI cannot run safely isolated locally and cannot run on a testbed either, records the missing real-CLI portion with the scenario, the reason, and `not verified`. If the real CLI disagreed with a fake CLI, confirm the same PR updated the fake CLI and added a test. For Feishu, multi-computer mesh, or desktop app scenarios that require a testbed or Computer Use unavailable locally, confirm the PR records the scenario, the reason, and `not verified`. Prompt-cache preservation is a hard gate separate from the general real-CLI `not verified` exception and cannot be waived with a local-unavailability note. Whenever a change touches session prompts, messages, tools, or MCP definitions, confirm that every affected vendor has a comparable before and after `TokenUsage.cacheRead` comparison from real sessions (same vendor, same model, and comparable session and warm-up, parsed by `src/daemon/driver/protocol.ts`, `src/vendors/_common/acp/protocol.ts`, and vendor `src/vendors/*/protocol.ts` modules) proving prompt caching stays intact. If an affected vendor cannot run locally, run the comparison on the testbed. Only when an affected vendor cannot run either locally or on a testbed, confirm it is marked `not verified` and have the Project Manager escalate to the user with a decision card for that vendor. Without explicit user approval for that vendor, judge `FAIL` and do not approve merge. If the user approves proceeding without that vendor's comparison, confirm the PR body records the decision card ID and the user's exact quote alongside the `not verified` record. Once you verify that recorded per-vendor approval in the PR body, do not judge `FAIL` for that unavailable vendor's missing comparison. If a measured real-session comparison shows `TokenUsage.cacheRead` regressed, always judge `FAIL` regardless of any approval. Report an `[Important]` finding and judge `FAIL` if a quoted user sentence, a settled rule, a matching `REVIEW.md` rule from `main`, or an applicable category lacks coverage (or a one-sentence non-applicability explanation), or if any scenario lacks a runnable test. For pre-implementation evidence, judge `FAIL` if the baseline before the first implementation commit lacks a failure record for any test of new or changed behavior or a passing record for any unchanged-rule regression test, if a test for new or changed behavior passed before any implementation commit landed, or if a later step in a multi-step plan saw its own unimplemented-behavior test already passing or an earlier completed or regression test failing before editing production code. After implementation, judge `FAIL` if any scenario test fails on the commit under review, if an implementation commit deleted, skipped, or weakened a planning test without an approved plan revision, if on a non-docs and non-rules PR any acceptance scenario has neither complete real-environment evidence (a video or start-to-finish screenshot sequence) nor a valid `not verified` record (scenario, reason, and `not verified` status) for a listed unavailable case, if a web-only flow claims `not verified` or a web scenario with a missing real dependency omits local Playwright evidence for its runnable web portion, or if a fake CLI was left inconsistent with the real CLI. For prompt-cache preservation, always judge `FAIL` if a measured real-session comparison shows `TokenUsage.cacheRead` regressed (regardless of any approval), if an affected vendor that can run locally or on a testbed lacks comparable before and after real-session `TokenUsage.cacheRead` evidence, or if an affected vendor that cannot run either locally or on a testbed is `not verified` without recorded per-vendor user approval (decision card ID and the user's exact quote) in the PR body.
 
-Seen in: #441, #443
+Seen in: #441, #443, #494, #504, #505, #506, #514, #517, #519, #520, #522
 
 ### A result is matched to its request by an id both carry
 
@@ -234,7 +234,7 @@ Trigger: `src/web/**`, `src/daemon/**`
 
 Check: Code that decides whether a request, retry, or round has finished, or which request or round an event, row, or snapshot belongs to, matches an id that the request carries and every result echoes: the HTTP reply, change events, and snapshots. It never infers the answer from timestamps such as `updatedAt`, from change `seq`, from versions or counters the page assigns itself, or from whether the reply or the event arrived first. A request the user can repeat carries a client-generated id that the daemon accepts once and rejects on repeat. Tests cover the result arriving before the HTTP reply, after it, and through a resync that returns unchanged data. Ordering guards on cache writes follow "Stale in-flight queries never overwrite fresh mutations" instead.
 
-Seen in: #449, #453
+Seen in: #449, #453, #514
 
 ### PM-owned queues and background jobs handle archive, unarchive, and owner teardown
 
@@ -246,8 +246,32 @@ Seen in: `59358e6e`, #497
 
 ### Ledger state invariants hold across every transition and reader path
 
-Trigger: `src/daemon/ledger/**`, `src/shared/pm-agenda.ts`
+Trigger: `src/daemon/ledger/**`, `src/shared/pm-agenda.ts`, `src/daemon/first-run-pm.ts`, `src/daemon/agent-api/server.ts`
 
 Check: When a PR adds or tightens a ledger state rule (such as slot admission, `notStarted` message queueing, or watch suppression), list every sibling transition and reader path over that state and verify none bypasses it. Prefer one shared helper, predicate, or SQLite trigger over duplicating the condition across callers (such as auto-dispatch vs resume, sandbox approval, decision, or `worker send`; `onWorktreeCreated` vs `worktreeSyncedIn`; or `pmAgendaOf` SQL ordering vs `agendaLinesOf` and `isPmAgendaItemOpen`).
 
-Seen in: `59358e6e`, #491, #497
+Seen in: `59358e6e`, #491, #497, #494, #502, #509
+
+### A guard detects changes to the behavior it protects
+
+Trigger: `**/*.test.ts`, `**/*.test.tsx`, `scripts/**`
+
+Check: When a PR changes a guard, verify a negative control in a fixture or a temporary copy of the guarded input. For example, remove the actual copy step from a packaging script or remove the index from the actual query. A matching comment, a second copy of the query, or a keyword elsewhere in the document must not make the guard pass. For checks over a growing release or evidence history, also try appending a valid record.
+
+Seen in: #400, #486, #500, #515, #517, #521, #522
+
+### A passing verification result identifies the check that ran
+
+Trigger: `scripts/verification-matrix*.ts`, `test/eval/**`, `test/blind-walkthrough/**`, `test/mock-llm/**`, `.github/workflows/**`
+
+Check: When a PR changes how verification results are scored or published, trace a passing result back to the completed scenario or job step on the claimed platform and commit. Exercise a missing or skipped check with the surrounding job still green. When a gate publishes a verdict or returns an exit status, verify that the missing evidence reaches that final output.
+
+Seen in: #504, #506, #508, #521
+
+### Instance settings reach the process that uses them
+
+Trigger: `docs/linux.md`, `README*.md`, `test/blind-walkthrough/**`
+
+Check: When an instruction changes how an instance receives its settings, follow the documented command or harness launcher through the service manager or desktop launcher to the process that reads the setting. For multi-instance instructions, run the example against a second instance and verify which data directory and vendor configuration the receiving process uses.
+
+Seen in: #504, #515
