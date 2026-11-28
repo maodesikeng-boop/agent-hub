@@ -38,13 +38,12 @@ import { listenOnRunSocket } from "../run-socket.ts";
 import { unlessAborted } from "../sent-files.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
-import type { QuotaResponse, SelfReloadStatus } from "../../shared/api.ts";
+import type { SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
-import { HUB_MODELS_QUOTA_WAIT_MS, HUB_MODELS_REFRESH_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
-import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
-import type { ProviderQuota } from "../quota/provider-quota.ts";
+import { HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
+import { prepareModelQuotas, type AgentApiQuotaOptions } from "./model-quotas.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -72,7 +71,7 @@ export interface AgentApiOptions {
   findTranscript?: (ref: TranscriptRef) => string | null;
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  quota?: { observed: ObservedQuotaStore; get(): Promise<QuotaResponse>; getSnapshot?: ProviderQuota["getSnapshot"]; now?: () => number };
+  quota?: AgentApiQuotaOptions;
   sandboxGuard?: RouterSandboxGuard;
   onRouterDispatch?: (
     sessionId: SessionId,
@@ -556,51 +555,6 @@ async function prepareWorkerStart(
   return context;
 }
 
-async function modelQuotas(quota: AgentApiOptions["quota"], vendor: AgentVendor | undefined, refresh: boolean, signal: AbortSignal) {
-  if (quota === undefined) return undefined;
-  const timeoutMs = refresh ? HUB_MODELS_REFRESH_QUOTA_WAIT_MS : HUB_MODELS_QUOTA_WAIT_MS;
-  const vendors = vendor === undefined ? AGENT_VENDORS : [vendor];
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    let fetched: QuotaResponse | null = null;
-    let probedAt: Partial<Record<AgentVendor, number>> = {};
-    if (quota.getSnapshot) {
-      const snap = await unlessAborted(
-        quota.getSnapshot({
-          ...(vendor ? { vendor } : {}),
-          ...(refresh ? { refresh: true } : {}),
-          timeoutMs,
-        }).catch(() => null),
-        signal,
-        () => null,
-      );
-      if (snap !== null) {
-        fetched = snap.response;
-        probedAt = snap.probedAt;
-      }
-    } else {
-      fetched = await unlessAborted(Promise.race([
-        quota.get().catch(() => null),
-        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
-      ]), signal, () => null);
-    }
-    const at = (quota.now ?? Date.now)();
-    if (fetched !== null) {
-      for (const v of vendors) {
-        const startedAt = probedAt[v];
-        if (startedAt !== undefined) quota.observed.reconcileFetched(v, fetched, startedAt, at);
-      }
-    }
-    const observed = quota.observed.snapshot(at);
-    return Object.fromEntries(vendors.flatMap((v) => {
-      const entry = mergeVendorQuota(v, observed[v] ?? null, fetched, at, probedAt[v]);
-      return entry === undefined ? [] : [[v, entry]];
-    }));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function createPreparation(opts: AgentApiOptions) {
   const { ledger } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
@@ -629,7 +583,7 @@ function createPreparation(opts: AgentApiOptions) {
       const refresh = body.refresh === true;
       const [modelCatalogs, vendorQuotas] = await Promise.all([
         opts.models?.list({ refresh, ...(vendor ? { vendor } : {}) }),
-        modelQuotas(opts.quota, vendor, refresh, signal),
+        prepareModelQuotas(opts.quota, vendor, refresh, signal),
       ]);
       return { modelCatalogs, vendorQuotas };
     }
