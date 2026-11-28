@@ -34,9 +34,7 @@ import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
 import { HUB_COMMAND } from "./names.ts";
 import type { LedgerErrorCode } from "./ledger.ts";
 
-// Agent shells reject commands containing env vars, so hub reads the token itself.
-export const ENV_HUB_TOKEN = "HUB_TOKEN";
-export const ENV_HUB_SOCK = "HUB_SOCK";
+export { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "./hub-env.ts";
 
 // Windows PowerShell 5.1 pipes text to native programs as ASCII unless $OutputEncoding says otherwise, so CJK arrives as "?".
 export const POWERSHELL_UTF8_PIPE = "$OutputEncoding = [Text.UTF8Encoding]::new($false)";
