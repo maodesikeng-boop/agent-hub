@@ -3,9 +3,9 @@ import {
   COMMANDS_FRESH_MS,
   COMMANDS_RETRY_MS,
   isInternalSkillCommand,
-  KILL_WAIT_MS,
   MAX_COMMAND_CACHE_ENTRIES,
   MAX_CONCURRENT_COMMAND_QUERIES,
+  PROBE_SHUTDOWN_DRAIN_MS,
   type AgentVendor, type ComposerCommand,
   type SessionId,
 } from "../shared/index.ts";
@@ -153,7 +153,7 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
       await Promise.race([
         Promise.allSettled([...inflight]),
         new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, KILL_WAIT_MS);
+          timer = setTimeout(resolve, PROBE_SHUTDOWN_DRAIN_MS);
           timer.unref();
         }),
       ]);

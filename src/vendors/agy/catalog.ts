@@ -1,7 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   ALL_EFFORTS,
-  KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
@@ -19,12 +18,11 @@ import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
   STDERR_TAIL_CHARS,
   defaultAvailabilityOfError,
-  killThenSettle,
   nonEmptyString,
   parseJsonOutput,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { closeAndWaitChild, killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
@@ -128,21 +126,18 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
     const finish = (error: Error | null, result?: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
-        killThenSettle(child, () => reject(error));
+        void killChildAndWait(child).finally(() => reject(error));
         return;
       }
-      if (!exited()) {
-        killTimer = setTimeout(() => void forceKill(child), KILL_WAIT_MS);
-        killTimer.unref();
-        child.once("exit", () => clearTimeout(killTimer));
+      if (child.exitCode === null && child.signalCode === null) {
+        void closeAndWaitChild(child, { signal }).finally(() => resolve(result));
+        return;
       }
       resolve(result);
     };

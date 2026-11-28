@@ -1,6 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
-  KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
@@ -15,11 +14,10 @@ import {
 } from "../../shared/index.ts";
 import {
   STDERR_TAIL_CHARS,
-  killThenSettle,
   nonEmptyString,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { closeAndWaitChild, killChildAndWait, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
@@ -288,8 +286,6 @@ function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: st
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
 
     const finish = (error: Error | null) => {
       if (settled) return;
@@ -297,13 +293,12 @@ function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: st
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
-        killThenSettle(child, () => reject(error));
+        void killChildAndWait(child).finally(() => reject(error));
         return;
       }
-      if (!exited()) {
-        killTimer = setTimeout(() => void forceKill(child), KILL_WAIT_MS);
-        killTimer.unref();
-        child.once("exit", () => clearTimeout(killTimer));
+      if (child.exitCode === null && child.signalCode === null) {
+        void closeAndWaitChild(child, { signal }).finally(() => resolve({ stdout }));
+        return;
       }
       resolve({ stdout });
     };
