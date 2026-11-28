@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AGENT_VENDORS } from "../../shared/index.ts";
+import { AGENT_VENDORS, MAX_VENDOR_SYNC_CONFIG_BYTES } from "../../shared/index.ts";
 import { AGY_SIGNED_OUT_STDOUT } from "../driver/test-helpers.ts";
 import { codexAuthFileAvailability } from "../../vendors/codex/catalog.ts";
 import { VENDOR_CATALOG_PROBES } from "./index.ts";
@@ -69,6 +69,14 @@ describe("各家怎么从名单那次查询里看登录状态", () => {
         }
         writeFileSync(join(dir, "config.toml"), "cli_auth_credentials_store='keyring'\n");
         expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused")).toBe("unknown");
+        for (const content of [
+          '"cli_auth_credentials_store" = "keyring"\n',
+          "'cli_auth_credentials_store' = 'auto'\n",
+          'note = """\n[not-a-section]\n"""\ncli_auth_credentials_store = """keyring"""\n',
+        ]) {
+          writeFileSync(join(dir, "config.toml"), content);
+          expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused"), content).toBe("unknown");
+        }
       });
     });
 
@@ -85,6 +93,19 @@ describe("各家怎么从名单那次查询里看登录状态", () => {
           writeFileSync(join(dir, "config.toml"), content);
           expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused"), content).toBe("signed_out");
         }
+      });
+    });
+
+    it("auth.json 不在、config.toml 超限或 TOML 解析失败无法确认时，保守返回 unknown", () => {
+      withHome((dir) => {
+        writeFileSync(join(dir, "config.toml"), `# ${"a".repeat(MAX_VENDOR_SYNC_CONFIG_BYTES)}\ncli_auth_credentials_store = "keyring"\n`);
+        expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused")).toBe("unknown");
+
+        writeFileSync(join(dir, "config.toml"), 'cli_auth_credentials_store = ["unterminated\n');
+        expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused")).toBe("unknown");
+
+        writeFileSync(join(dir, "config.toml"), "");
+        expect(codexAuthFileAvailability({ CODEX_HOME: dir }, "/unused")).toBe("signed_out");
       });
     });
   });

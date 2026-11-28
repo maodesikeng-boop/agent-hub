@@ -19,6 +19,7 @@ import {
   PROJECT_STATUSES,
   SYSTEM_EVENTS,
   SYSTEM_MESSAGE_PREFIX,
+  clearRateLimitRejection,
   hubPath,
   isQuotaExhausted,
   normalizeName,
@@ -312,6 +313,23 @@ describe("M2：额度", () => {
     expect(isQuotaExhausted(info("rejected"))).toBe(true);
     expect(isQuotaExhausted(null)).toBe(false);
     expect(isQuotaExhausted(undefined)).toBe(false);
+  });
+
+  it("clearRateLimitRejection handles legacy null or non-object windows without throwing", () => {
+    expect(clearRateLimitRejection({ status: "rejected", resetsAt: 123, windows: null as never })).toBeNull();
+    expect(clearRateLimitRejection({ status: "rejected", resetsAt: 123, windows: undefined as never })).toBeNull();
+    expect(clearRateLimitRejection({ status: "rejected", resetsAt: 123, windows: [] as never })).toBeNull();
+    expect(
+      clearRateLimitRejection({
+        status: "rejected",
+        resetsAt: 123,
+        windows: { five_hour: { utilization: 1, resetsAt: 123, status: "rejected" } },
+      }),
+    ).toEqual({
+      status: "allowed",
+      resetsAt: 123,
+      windows: { five_hour: { utilization: 1, resetsAt: 123, status: "allowed" } },
+    });
   });
 });
 
