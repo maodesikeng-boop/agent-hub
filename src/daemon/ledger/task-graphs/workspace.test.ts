@@ -2,9 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { TaskNodeKey } from "../../../shared/domain.ts";
+import type { TaskNodeKey, WorkerId } from "../../../shared/domain.ts";
 import { migrate, type Db } from "../../store/index.ts";
 import { openTestDb } from "../../store/test-helpers.ts";
+import { createResolveFolder } from "../files.ts";
+import { createLedger } from "../index.ts";
 import { assertReviewStepsHaveTarget } from "./spec.ts";
 import type { TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 import {
@@ -423,31 +425,7 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
   });
 
   it("S9: handles one-month volume (300 Workers, 30,000 messages, 50,000 step logs) and a 15-round consecutive review diamond without exponential blowup", () => {
-    db.exec("BEGIN");
-    for (let i = 1; i <= 300; i++) {
-      seedWorker(db, {
-        id: i,
-        branch: i === 1 ? "hub/1-impl" : `hub/${i}-old`,
-        worktreePath: i === 1 ? makeDir("wt-scale") : join(tmpRoot, `gone-${i}`),
-        baseCommit: "11111111",
-        status: "ended",
-      });
-    }
-    db.exec(`
-      WITH RECURSIVE cnt(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM cnt WHERE x < 30000)
-      INSERT INTO messages (conversation_id, sender, kind, text, status, dedupe_key, created_at, updated_at)
-      SELECT 1001, 'agent', 'text', 'm', 'delivered', 'scale-msg:' || x, 1000, 1000 FROM cnt;
-    `);
-    db.run(
-      "INSERT INTO agent_sessions (id, conversation_id, role, worker_id, generation, vendor, vendor_session_id, cwd, add_dirs, status, created_at, updated_at) VALUES (1, 1001, 'worker', 1, 1, 'claude', 'w-1', '/tmp', '[]', 'ended', 1000, 1000)",
-    );
-    db.exec(`
-      WITH RECURSIVE cnt(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM cnt WHERE x < 50000)
-      INSERT INTO session_steps (session_id, kind, at, summary)
-      SELECT 1, 'tool', 1000, 's' FROM cnt;
-    `);
-    db.exec("COMMIT");
-
+    const wtScale = makeDir("wt-scale");
     const steps: SpecStep[] = [{ key: "s0", status: "done", workerIds: [1], artifactJson: JSON.stringify({ commit: "0000aaaa" }) }];
     let prev: TaskNodeKey = "s0";
     for (let r = 1; r <= 15; r++) {
@@ -462,11 +440,137 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
       prev = next;
     }
     steps.push({ key: "finalFix", status: "pending", deps: [prev] });
-    const maps = makeStepMaps(steps);
+
+    db.exec("BEGIN");
+    for (let i = 1; i <= 300; i++) {
+      seedWorker(db, {
+        id: i,
+        branch: i === 1 ? "hub/1-impl" : `hub/${i}-old`,
+        worktreePath: i === 1 ? wtScale : join(tmpRoot, `gone-${i}`),
+        baseCommit: "11111111",
+        status: "ended",
+      });
+    }
+    db.exec(`
+      WITH RECURSIVE cnt(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM cnt WHERE x < 30000)
+      INSERT INTO messages (conversation_id, sender, kind, text, status, dedupe_key, created_at, updated_at)
+      SELECT 1001, 'agent', 'text', 'm', 'replied', 'scale-msg:' || x, 1000, 1000 FROM cnt;
+    `);
+    db.run(
+      "INSERT INTO agent_sessions (id, conversation_id, role, worker_id, generation, vendor, vendor_session_id, cwd, add_dirs, status, created_at, updated_at) VALUES (1, 1001, 'worker', 1, 1, 'claude', 'w-1', '/tmp', '[]', 'ended', 1000, 1000)",
+    );
+    db.exec(`
+      WITH RECURSIVE cnt(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM cnt WHERE x < 50000)
+      INSERT INTO session_steps (session_id, kind, at, summary)
+      SELECT 1, 'tool', 1000, 's' FROM cnt;
+    `);
+    db.run(
+      "INSERT INTO task_graphs (id, project_id, pm_id, conversation_id, title, goal, status, created_at, updated_at) VALUES (1, 1, 1, 1, 'Scale', 'Scale', 'active', 1000, 1000)",
+    );
+    steps.forEach((s, i) => {
+      db.run(
+        `INSERT INTO task_graph_steps (
+           id, graph_id, node_key, title, brief, review, skipped, base, status, sort_order,
+           worker_ids_json, artifact_json, created_at, updated_at
+         ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1000, 1000)`,
+        i + 1,
+        s.key,
+        s.key,
+        `brief ${s.key}`,
+        s.review ? 1 : 0,
+        s.skipped ? 1 : 0,
+        s.base ?? null,
+        s.status ?? "pending",
+        i,
+        JSON.stringify(s.workerIds ?? []),
+        s.artifactJson ?? null,
+      );
+    });
+    for (const s of steps) {
+      for (const dep of s.deps ?? []) {
+        db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (1, ?, ?)", dep, s.key);
+      }
+    }
+    db.exec("COMMIT");
+
+    const countLookups = <K, V>(source: ReadonlyMap<K, V>) => {
+      let reads = 0;
+      const map = new Proxy(source, {
+        get(target, prop) {
+          if (prop === "get") {
+            return (key: K) => {
+              reads++;
+              return target.get(key);
+            };
+          }
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      return {
+        map,
+        take: () => {
+          const n = reads;
+          reads = 0;
+          return n;
+        },
+      };
+    };
+
+    const rawMaps = makeStepMaps(steps);
+    const incomingCounter = countLookups(rawMaps.incoming);
+    const outgoingCounter = countLookups(rawMaps.outgoing);
+    const maps: StepMaps = { byKey: rawMaps.byKey, incoming: incomingCounter.map, outgoing: outgoingCounter.map };
+
     expect(resolveStepLineage("finalFix", maps)).toEqual<StepUpstreamLineage>({ kind: "step", stepKey: "s0" });
+    expect(incomingCounter.take()).toBeLessThanOrEqual(steps.length);
+    expect(outgoingCounter.take()).toBe(0);
+
+    expect(resolveWorkspacePlan(db, planFor(maps, "finalFix"))).toEqual({
+      kind: "inherit",
+      fromWorkerId: 1,
+      worktreePath: wtScale,
+      branch: "hub/1-impl",
+      baseCommit: "11111111",
+    });
+    expect(incomingCounter.take()).toBeLessThanOrEqual(steps.length * 2);
+    expect(outgoingCounter.take()).toBeLessThanOrEqual(steps.length);
+
     expect(upstreamDeliveredCommit(planFor(maps, "finalFix"))).toBe("0000aaaa");
-    expect(graphStillUsesStepWorktree(db, 1, maps, "s0")).toBe(true);
+    expect(incomingCounter.take()).toBeLessThanOrEqual(steps.length);
+    expect(outgoingCounter.take()).toBe(0);
+
     expect(collectAncestorWorkerIds("finalFix", maps)).toEqual(new Set([1]));
+    expect(incomingCounter.take()).toBeLessThanOrEqual(steps.length);
+    expect(outgoingCounter.take()).toBe(0);
+
+    expect(graphStillUsesStepWorktree(db, 1, maps, "s0")).toBe(true);
+    expect(incomingCounter.take()).toBeLessThanOrEqual(steps.length);
+    expect(outgoingCounter.take()).toBeLessThanOrEqual(steps.length);
+
+    const dataHome = join(tmpRoot, "scale-data");
+    for (const d of ["pm-home", "worktrees", "state/launch", "state/logs/setup"]) {
+      mkdirSync(join(dataHome, d), { recursive: true });
+    }
+    const ledger = createLedger(db, {
+      now: () => 2000,
+      pmHomeRoot: join(dataHome, "pm-home"),
+      dataHome,
+      worktreesDir: join(dataHome, "worktrees"),
+      launchDir: join(dataHome, "state", "launch"),
+      setupLogsDir: join(dataHome, "state", "logs", "setup"),
+      userHome: tmpRoot,
+      osSandboxed: () => true,
+      models: { current: () => null, availability: () => "available" },
+      resolveFolder: createResolveFolder({ dataHome, userHome: tmpRoot }),
+    });
+    try {
+      expect(ledger.isWorkerCleanable(1 as WorkerId)).toBe(false);
+      db.run("UPDATE task_graph_steps SET status = 'done' WHERE graph_id = 1 AND node_key = 'finalFix'");
+      expect(ledger.isWorkerCleanable(1 as WorkerId)).toBe(true);
+    } finally {
+      ledger.close();
+    }
   });
 
   it("S10: tolerates malformed artifact_json, dangling edges, synthetic cycles, missing base_commit, and unrelated worktree users", () => {
@@ -491,6 +595,176 @@ describe("DAG workspace lineage contract (new behavior, fails before implementat
       { key: "fix", deps: ["r1"] },
     ]);
     expect(resolveStepLineage("fix", cyclic)).toEqual<StepUpstreamLineage>({ kind: "empty" });
+  });
+
+  it("serial explicit review followed by implicit review does not leak explicit base into review2, fix, or cleanup hold", () => {
+    const wt = makeDir("wt-serial-base");
+    seedWorker(db, { id: 1, branch: "feature/a", worktreePath: wt, baseCommit: "11111111" });
+
+    const serial = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1], artifactJson: JSON.stringify({ commit: "abcdef1234" }) },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, status: "done", deps: ["rev1"] },
+      { key: "fix", status: "pending", deps: ["rev2"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(serial, "rev2"))).toEqual({
+      kind: "review",
+      branch: "feature/a",
+      implWorktreePath: wt,
+    });
+    expect(resolveStepLineage("fix", serial)).toEqual<StepUpstreamLineage>({ kind: "step", stepKey: "impl" });
+    expect(resolveWorkspacePlan(db, planFor(serial, "fix"))).toEqual({
+      kind: "inherit",
+      fromWorkerId: 1,
+      worktreePath: wt,
+      branch: "feature/a",
+      baseCommit: "11111111",
+    });
+    expect(graphStillUsesStepWorktree(db, 1, serial, "impl")).toBe(true);
+    expect(upstreamDeliveredCommit(planFor(serial, "fix"))).toBe("abcdef1234");
+
+    const holdingDuringReview2 = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, status: "running", deps: ["rev1"] },
+    ]);
+    expect(graphStillUsesStepWorktree(db, 1, holdingDuringReview2, "impl")).toBe(true);
+  });
+
+  it("handles all serial and parallel explicit/implicit review base combinations consistently", () => {
+    const wtA = makeDir("wt-comb-a");
+    const wtB = makeDir("wt-comb-b");
+    seedWorker(db, { id: 1, branch: "feature/a", worktreePath: wtA, baseCommit: "11111111" });
+    seedWorker(db, { id: 2, branch: "feature/b", worktreePath: wtB, baseCommit: "22222222" });
+
+    // Skipped step after explicit review keeps explicit base; skipped explicit review does not.
+    const explicitThenSkipped = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1], artifactJson: JSON.stringify({ commit: "abcdef1234" }) },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "skip", skipped: true, status: "done", deps: ["rev1"] },
+      { key: "fix", status: "pending", deps: ["skip"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(explicitThenSkipped, "fix"))).toEqual({ kind: "fork", baseBranch: "feature/b" });
+    expect(graphStillUsesStepWorktree(db, 1, explicitThenSkipped, "impl")).toBe(false);
+    expect(upstreamDeliveredCommit(planFor(explicitThenSkipped, "fix"))).toBe("abcdef1234");
+
+    const skippedExplicit = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, skipped: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "fix", status: "pending", deps: ["rev1"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(skippedExplicit, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/a", worktreePath: wtA });
+    expect(graphStillUsesStepWorktree(db, 1, skippedExplicit, "impl")).toBe(true);
+
+    // Explicit -> implicit -> skipped -> fix still inherits impl.
+    const explicitImplicitSkipped = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, status: "done", deps: ["rev1"] },
+      { key: "skip", skipped: true, status: "done", deps: ["rev2"] },
+      { key: "fix", status: "pending", deps: ["skip"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(explicitImplicitSkipped, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/a", worktreePath: wtA });
+    expect(graphStillUsesStepWorktree(db, 1, explicitImplicitSkipped, "impl")).toBe(true);
+
+    // Explicit -> later explicit overrides base (different branch forks and releases; matching branch inherits and holds).
+    const explicitOverrideFork = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, base: "feature/c", status: "done", deps: ["rev1"] },
+      { key: "fix", status: "pending", deps: ["rev2"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(explicitOverrideFork, "rev2"))).toEqual({ kind: "review", branch: "feature/c", implWorktreePath: null });
+    expect(resolveWorkspacePlan(db, planFor(explicitOverrideFork, "fix"))).toEqual({ kind: "fork", baseBranch: "feature/c" });
+    expect(graphStillUsesStepWorktree(db, 1, explicitOverrideFork, "impl")).toBe(false);
+
+    const explicitOverrideMatch = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, base: "feature/a", status: "done", deps: ["rev1"] },
+      { key: "fix", status: "pending", deps: ["rev2"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(explicitOverrideMatch, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/a", worktreePath: wtA });
+    expect(graphStillUsesStepWorktree(db, 1, explicitOverrideMatch, "impl")).toBe(true);
+
+    // Parallel explicit reviews converging into an implicit review still target the single upstream code step.
+    const parallelExplicitToImplicit = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, base: "feature/c", status: "done", deps: ["impl"] },
+      { key: "rev3", review: true, status: "done", deps: ["rev1", "rev2"] },
+      { key: "fix", status: "pending", deps: ["rev3"] },
+    ]);
+    expect(() =>
+      assertReviewStepsHaveTarget(
+        [
+          { key: "impl", review: 0, base: null, status: "done", skipped: 0 },
+          { key: "rev1", review: 1, base: "feature/b", status: "done", skipped: 0 },
+          { key: "rev2", review: 1, base: "feature/c", status: "done", skipped: 0 },
+          { key: "rev3", review: 1, base: null, status: "pending", skipped: 0 },
+        ],
+        [
+          { fromKey: "impl", toKey: "rev1" },
+          { fromKey: "impl", toKey: "rev2" },
+          { fromKey: "rev1", toKey: "rev3" },
+          { fromKey: "rev2", toKey: "rev3" },
+        ],
+      ),
+    ).not.toThrow();
+    expect(resolveWorkspacePlan(db, planFor(parallelExplicitToImplicit, "rev3"))).toEqual({
+      kind: "review",
+      branch: "feature/a",
+      implWorktreePath: wtA,
+    });
+    expect(resolveWorkspacePlan(db, planFor(parallelExplicitToImplicit, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/a", worktreePath: wtA });
+    expect(graphStillUsesStepWorktree(db, 1, parallelExplicitToImplicit, "impl")).toBe(true);
+
+    // Parallel mixed explicit + implicit directly feeding fix: branch mismatch -> fresh & release; branch match -> inherit & hold.
+    const mixedMismatch = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, status: "done", deps: ["impl"] },
+      { key: "fix", status: "pending", deps: ["rev1", "rev2"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(mixedMismatch, "fix"))).toEqual({ kind: "fresh" });
+    expect(graphStillUsesStepWorktree(db, 1, mixedMismatch, "impl")).toBe(false);
+
+    const mixedMatch = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [2] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev2", review: true, status: "done", deps: ["impl"] },
+      { key: "fix", status: "pending", deps: ["rev1", "rev2"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(mixedMatch, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/b", worktreePath: wtB });
+    expect(graphStillUsesStepWorktree(db, 1, mixedMatch, "impl")).toBe(true);
+
+    // Asymmetric parallel chain: [rev1(base: b) -> rev1b(implicit), rev2(implicit)] -> fix inherits impl.
+    const asymmetricReset = makeStepMaps([
+      { key: "impl", status: "done", workerIds: [1] },
+      { key: "rev1", review: true, base: "feature/b", status: "done", deps: ["impl"] },
+      { key: "rev1b", review: true, status: "done", deps: ["rev1"] },
+      { key: "rev2", review: true, status: "done", deps: ["impl"] },
+      { key: "fix", status: "pending", deps: ["rev1b", "rev2"] },
+    ]);
+    expect(resolveWorkspacePlan(db, planFor(asymmetricReset, "rev1b"))).toEqual({ kind: "review", branch: "feature/a", implWorktreePath: wtA });
+    expect(resolveWorkspacePlan(db, planFor(asymmetricReset, "fix"))).toMatchObject({ kind: "inherit", branch: "feature/a", worktreePath: wtA });
+    expect(graphStillUsesStepWorktree(db, 1, asymmetricReset, "impl")).toBe(true);
+
+    // Standalone explicit review without upstream code step cannot satisfy a follow-up implicit review.
+    expect(() =>
+      assertReviewStepsHaveTarget(
+        [
+          { key: "rev1", review: 1, base: "feature/b", status: "done", skipped: 0 },
+          { key: "rev2", review: 1, base: null, status: "pending", skipped: 0 },
+        ],
+        [{ fromKey: "rev1", toKey: "rev2" }],
+      ),
+    ).toThrow(/被审分支/);
+    const standaloneToImplicit = makeStepMaps([
+      { key: "rev1", review: true, base: "feature/b", status: "done" },
+      { key: "rev2", review: true, status: "pending", deps: ["rev1"] },
+    ]);
+    expect(() => resolveWorkspacePlan(db, planFor(standaloneToImplicit, "rev2"))).toThrow(/找不到被审分支/);
   });
 });
 

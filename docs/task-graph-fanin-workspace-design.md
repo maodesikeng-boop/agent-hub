@@ -111,7 +111,7 @@ Define `StepUpstreamLineage` over a step's incoming edges as a 5-state commutati
 
 - `empty` (identity): no incoming edge reaches a code step or a non-skipped review with an explicit `base`.
 - `step(stepKey)`: every non-empty incoming path reaches the same single non-review, non-skipped code step `stepKey`, with no explicit review `base`.
-- `reviewed_base(branch, sourceStep)`: every non-empty incoming path passes through a non-skipped review step naming the same explicit `branch`; `sourceStep` is `{ kind: "none" }`, `{ kind: "one", stepKey }`, or `{ kind: "many" }` depending on the upstream code steps behind those reviews.
+- `reviewed_base(branch, sourceStep)`: every non-empty incoming frontier path passes through a nearest non-skipped review step naming the same explicit `branch` (passing through skipped steps, never through an intervening non-skipped implicit review); `sourceStep` is `{ kind: "none" }`, `{ kind: "one", stepKey }`, or `{ kind: "many" }` depending on the upstream code steps behind those reviews.
 - `step_and_base(stepKey, branch)`: some incoming paths reach `stepKey` implicitly while others pass through reviews naming explicit `branch` with compatible source (`none` or `one(stepKey)`). At runtime, this resolves to `stepKey` when `worker(stepKey).branch === branch`, and degrades to `conflict` when `worker(stepKey).branch !== branch`.
 - `conflict` (absorbing): incoming paths reach two or more distinct code steps or two or more distinct explicit review branches.
 
@@ -123,7 +123,7 @@ Using `resolveStepLineage`:
 4. **Delivered commit (`upstreamDeliveredCommit`)**: extracts the reported commit SHA from the unique upstream code step when lineage is `step(u)`, `reviewed_base(_, one(u))`, or `step_and_base(u, _)`; returns `null` for `empty`, `conflict`, or `reviewed_base(_, none | many)`.
 5. **Ancestor worker ownership (`collectAncestorWorkerIds`)**: collects `workerIdsOf` across `step` and all DAG ancestors reachable via `incoming` (cycle-safe BFS/DFS), so round-2+ fix steps recognize round-1 workers on the same `worktree_path`.
 6. **Cleanup protection (`graphStillUsesStepWorktree`)**: returns `true` for `stepKey` when `stepKey` is unfinished, or any unfinished downstream code step resolves `continuedUpstreamWorktree` to `stepKey`, or any unfinished downstream review step resolves its reviewed worktree target to `stepKey` (for example, `impl -> [rev1, rev2]` before the PM patches in `fix1`, while still releasing `fix1` when a downstream review explicitly sets `base` to a different branch).
-7. **Review target resolution and validation (`resolveReviewPlan`, `assertReviewStepsHaveTarget`)**: uses `resolveStepLineage` so `impl -> [rev1, rev2] -> rev3` and `[rev1(base: B), rev2(base: B)] -> rev3` resolve cleanly, while solo reviews (`empty`) and multi-implementation fan-ins (`conflict`) continue to fail validation with a clear error naming the reviewed branch.
+7. **Review target resolution and validation (`resolveReviewPlan`, `assertReviewStepsHaveTarget`)**: uses `resolveUpstreamCodeStep` so an implicit review (`base: null`) always targets the unique upstream code step's worktree branch (including `impl -> [rev1, rev2] -> rev3` and `impl -> rev1(base: B) -> rev2(base: null)`) and never inherits an earlier review's explicit `base`, while solo reviews (`none`), standalone explicit-review chains without an upstream code step (`none`), and multi-implementation fan-ins (`many`) fail validation with a clear error naming the reviewed branch.
 
 ### Design red flags screen
 

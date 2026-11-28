@@ -35,6 +35,20 @@ export type StepUpstreamLineage =
   | { kind: "step_and_base"; stepKey: TaskNodeKey; branch: string }
   | { kind: "conflict" };
 
+type ReviewedBaseRef =
+  | { kind: "none" }
+  | { kind: "implicit" }
+  | { kind: "explicit"; branch: string }
+  | { kind: "mixed"; branch: string }
+  | { kind: "conflict" };
+
+interface InternalLineage {
+  readonly codeStep: CodeStepRef;
+  readonly reviewedBase: ReviewedBaseRef;
+}
+
+const EMPTY_INTERNAL: InternalLineage = { codeStep: { kind: "none" }, reviewedBase: { kind: "none" } };
+
 const isTransparentStep = (node: LineageNode): boolean => node.skipped === 1 || node.review === 1;
 
 function meetCodeStepRef(a: CodeStepRef, b: CodeStepRef): CodeStepRef {
@@ -44,83 +58,74 @@ function meetCodeStepRef(a: CodeStepRef, b: CodeStepRef): CodeStepRef {
   return { kind: "many" };
 }
 
-function codeStepRefOf(lineage: StepUpstreamLineage): CodeStepRef {
-  if (lineage.kind === "empty") return { kind: "none" };
-  if (lineage.kind === "step" || lineage.kind === "step_and_base") return { kind: "one", stepKey: lineage.stepKey };
-  if (lineage.kind === "reviewed_base") return lineage.sourceStep;
-  return { kind: "many" };
+function meetReviewedBase(a: ReviewedBaseRef, b: ReviewedBaseRef): ReviewedBaseRef {
+  if (a.kind === "none") return b;
+  if (b.kind === "none") return a;
+  if (a.kind === "conflict" || b.kind === "conflict") return { kind: "conflict" };
+  if (a.kind === "implicit") {
+    return b.kind === "implicit" ? a : { kind: "mixed", branch: b.branch };
+  }
+  if (b.kind === "implicit") return { kind: "mixed", branch: a.branch };
+  if (a.branch !== b.branch) return { kind: "conflict" };
+  return a.kind === "mixed" || b.kind === "mixed" ? { kind: "mixed", branch: a.branch } : a;
 }
 
-function meetStepWithReviewedBase(
-  stepKey: TaskNodeKey,
-  branch: string,
-  sourceStep: CodeStepRef,
-): StepUpstreamLineage {
-  if (sourceStep.kind === "none" || (sourceStep.kind === "one" && sourceStep.stepKey === stepKey)) {
-    return { kind: "step_and_base", stepKey, branch };
+function toStepUpstreamLineage(internal: InternalLineage): StepUpstreamLineage {
+  const { codeStep, reviewedBase } = internal;
+  if (reviewedBase.kind === "conflict") return { kind: "conflict" };
+  if (reviewedBase.kind === "explicit") {
+    return { kind: "reviewed_base", branch: reviewedBase.branch, sourceStep: codeStep };
   }
+  if (reviewedBase.kind === "mixed") {
+    return codeStep.kind === "one"
+      ? { kind: "step_and_base", stepKey: codeStep.stepKey, branch: reviewedBase.branch }
+      : { kind: "conflict" };
+  }
+  if (codeStep.kind === "none") return { kind: "empty" };
+  if (codeStep.kind === "one") return { kind: "step", stepKey: codeStep.stepKey };
   return { kind: "conflict" };
 }
 
-function meetLineage(a: StepUpstreamLineage, b: StepUpstreamLineage): StepUpstreamLineage {
-  if (a.kind === "empty") return b;
-  if (b.kind === "empty") return a;
-  if (a.kind === "conflict" || b.kind === "conflict") return { kind: "conflict" };
-
-  if (a.kind === "step") {
-    if (b.kind === "step") return a.stepKey === b.stepKey ? a : { kind: "conflict" };
-    if (b.kind === "reviewed_base") return meetStepWithReviewedBase(a.stepKey, b.branch, b.sourceStep);
-    return a.stepKey === b.stepKey ? b : { kind: "conflict" };
-  }
-
-  if (a.kind === "reviewed_base") {
-    if (b.kind === "step") return meetStepWithReviewedBase(b.stepKey, a.branch, a.sourceStep);
-    if (b.kind === "reviewed_base") {
-      if (a.branch !== b.branch) return { kind: "conflict" };
-      return { kind: "reviewed_base", branch: a.branch, sourceStep: meetCodeStepRef(a.sourceStep, b.sourceStep) };
-    }
-    if (a.branch !== b.branch) return { kind: "conflict" };
-    return meetStepWithReviewedBase(b.stepKey, b.branch, a.sourceStep);
-  }
-
-  if (b.kind === "step") return a.stepKey === b.stepKey ? a : { kind: "conflict" };
-  if (b.kind === "reviewed_base") {
-    if (a.branch !== b.branch) return { kind: "conflict" };
-    return meetStepWithReviewedBase(a.stepKey, a.branch, b.sourceStep);
-  }
-  return a.stepKey === b.stepKey && a.branch === b.branch ? a : { kind: "conflict" };
-}
-
-function resolveStepLineageMemo(
+// Keep upstream code step and immediate explicit review base orthogonal so an implicit review never inherits an earlier review's explicit base.
+function resolveInternalMemo(
   stepKey: TaskNodeKey,
   maps: LineageMaps,
-  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+  memo: Map<TaskNodeKey, InternalLineage>,
   visiting = new Set<TaskNodeKey>(),
-): StepUpstreamLineage {
+): InternalLineage {
   const cached = memo.get(stepKey);
   if (cached !== undefined) return cached;
-  if (visiting.has(stepKey)) return { kind: "empty" };
+  if (visiting.has(stepKey)) return EMPTY_INTERNAL;
   visiting.add(stepKey);
-  let acc: StepUpstreamLineage = { kind: "empty" };
+  let acc: InternalLineage = EMPTY_INTERNAL;
   for (const depKey of maps.incoming.get(stepKey) ?? []) {
-    if (acc.kind === "conflict") break;
+    if (acc.codeStep.kind === "many" && acc.reviewedBase.kind === "conflict") break;
     const dep = maps.byKey.get(depKey);
     if (dep === undefined) continue;
-    let edgeLineage: StepUpstreamLineage;
-    if (!isTransparentStep(dep)) {
-      edgeLineage = { kind: "step", stepKey: dep.node_key };
+    let edge: InternalLineage;
+    if (dep.skipped === 1) {
+      edge = resolveInternalMemo(dep.node_key, maps, memo, visiting);
+    } else if (dep.review === 0) {
+      edge = { codeStep: { kind: "one", stepKey: dep.node_key }, reviewedBase: { kind: "implicit" } };
     } else {
-      const up = resolveStepLineageMemo(dep.node_key, maps, memo, visiting);
-      edgeLineage =
-        dep.skipped === 0 && dep.base !== null
-          ? { kind: "reviewed_base", branch: dep.base, sourceStep: codeStepRefOf(up) }
-          : up;
+      const up = resolveInternalMemo(dep.node_key, maps, memo, visiting);
+      edge =
+        dep.base !== null
+          ? { codeStep: up.codeStep, reviewedBase: { kind: "explicit", branch: dep.base } }
+          : { codeStep: up.codeStep, reviewedBase: up.codeStep.kind === "none" ? { kind: "none" } : { kind: "implicit" } };
     }
-    acc = meetLineage(acc, edgeLineage);
+    acc = {
+      codeStep: meetCodeStepRef(acc.codeStep, edge.codeStep),
+      reviewedBase: meetReviewedBase(acc.reviewedBase, edge.reviewedBase),
+    };
   }
   visiting.delete(stepKey);
   memo.set(stepKey, acc);
   return acc;
+}
+
+export function resolveUpstreamCodeStep(stepKey: TaskNodeKey, maps: LineageMaps): CodeStepRef {
+  return resolveInternalMemo(stepKey, maps, new Map()).codeStep;
 }
 
 /**
@@ -129,7 +134,7 @@ function resolveStepLineageMemo(
  * passing through review and skipped steps and merging incoming paths as a commutative, associative meet-semilattice.
  */
 export function resolveStepLineage(stepKey: TaskNodeKey, maps: LineageMaps): StepUpstreamLineage {
-  return resolveStepLineageMemo(stepKey, maps, new Map());
+  return toStepUpstreamLineage(resolveInternalMemo(stepKey, maps, new Map()));
 }
 
 /**
@@ -164,7 +169,7 @@ function isStepWorktreeContestedMemo(
   projectId: number,
   stepKey: TaskNodeKey,
   maps: StepMaps,
-  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+  memo: Map<TaskNodeKey, InternalLineage>,
 ): boolean {
   const queue = [...(maps.outgoing.get(stepKey) ?? [])];
   const visited = new Set<TaskNodeKey>([stepKey]);
@@ -229,13 +234,19 @@ function latestWorktreeWorker(db: Db, projectId: number, step: TaskNodeDbRow): U
 const REPORTED_COMMIT = /\b[0-9a-f]{7,40}\b/i;
 
 export function upstreamDeliveredCommit(input: PlanInput): string | null {
-  const lineage = resolveStepLineage(input.step.node_key, input);
-  const stepKey =
-    lineage.kind === "step" || lineage.kind === "step_and_base"
-      ? lineage.stepKey
-      : lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one"
-        ? lineage.sourceStep.stepKey
-        : null;
+  const internal = resolveInternalMemo(input.step.node_key, input, new Map());
+  let stepKey: TaskNodeKey | null = null;
+  if (input.step.review === 1) {
+    stepKey = internal.codeStep.kind === "one" ? internal.codeStep.stepKey : null;
+  } else {
+    const lineage = toStepUpstreamLineage(internal);
+    stepKey =
+      lineage.kind === "step" || lineage.kind === "step_and_base"
+        ? lineage.stepKey
+        : lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one"
+          ? lineage.sourceStep.stepKey
+          : null;
+  }
   if (stepKey === null) return null;
   const u = input.byKey.get(stepKey);
   if (u === undefined) return null;
@@ -248,10 +259,10 @@ function continuedWorktreeTarget(
   projectId: number,
   step: TaskNodeDbRow,
   maps: StepMaps,
-  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+  memo: Map<TaskNodeKey, InternalLineage>,
 ): { step: TaskNodeDbRow; worker: UpstreamWorker } | null {
   if (step.review === 1 || step.skipped === 1 || step.base === "main") return null;
-  const lineage = resolveStepLineageMemo(step.node_key, maps, memo);
+  const lineage = toStepUpstreamLineage(resolveInternalMemo(step.node_key, maps, memo));
   let stepKey: TaskNodeKey | null = null;
   let requiredBranch: string | null = null;
   if (lineage.kind === "step") {
@@ -272,49 +283,20 @@ function continuedWorktreeTarget(
   return { step: upStep, worker };
 }
 
-function resolveReviewedTarget(
-  db: Db,
-  projectId: number,
-  lineage: StepUpstreamLineage,
-  maps: StepMaps,
-): { branch: string; implWorktreePath: string | null; stepKey: TaskNodeKey | null } | null {
-  if (lineage.kind === "step") {
-    const upStep = maps.byKey.get(lineage.stepKey);
-    const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
-    return worker === null ? null : { branch: worker.branch, implWorktreePath: worker.worktree_path, stepKey: upStep!.node_key };
-  }
-  if (lineage.kind === "reviewed_base") {
-    if (lineage.sourceStep.kind === "one") {
-      const upStep = maps.byKey.get(lineage.sourceStep.stepKey);
-      const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
-      if (worker !== null && worker.branch === lineage.branch) {
-        return { branch: lineage.branch, implWorktreePath: worker.worktree_path, stepKey: upStep!.node_key };
-      }
-    }
-    return { branch: lineage.branch, implWorktreePath: null, stepKey: null };
-  }
-  if (lineage.kind === "step_and_base") {
-    const upStep = maps.byKey.get(lineage.stepKey);
-    const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
-    if (worker === null || worker.branch !== lineage.branch) return null;
-    return { branch: lineage.branch, implWorktreePath: worker.worktree_path, stepKey: upStep!.node_key };
-  }
-  return null;
-}
-
 function reviewedWorktreeStepKey(
   db: Db,
   projectId: number,
   reviewStep: TaskNodeDbRow,
   maps: StepMaps,
-  memo: Map<TaskNodeKey, StepUpstreamLineage>,
+  memo: Map<TaskNodeKey, InternalLineage>,
 ): TaskNodeKey | null {
-  const lineage = resolveStepLineageMemo(reviewStep.node_key, maps, memo);
-  const effectiveLineage: StepUpstreamLineage =
-    reviewStep.base === null
-      ? lineage
-      : { kind: "reviewed_base", branch: reviewStep.base, sourceStep: codeStepRefOf(lineage) };
-  return resolveReviewedTarget(db, projectId, effectiveLineage, maps)?.stepKey ?? null;
+  const codeStep = resolveInternalMemo(reviewStep.node_key, maps, memo).codeStep;
+  if (codeStep.kind !== "one") return null;
+  const upStep = maps.byKey.get(codeStep.stepKey);
+  const worker = upStep === undefined ? null : latestWorktreeWorker(db, projectId, upStep);
+  if (worker === null) return null;
+  if (reviewStep.base !== null && worker.branch !== reviewStep.base) return null;
+  return upStep!.node_key;
 }
 
 const isStepFinished = (step: TaskNodeDbRow): boolean => step.status === "done" || step.status === "cancelled";
@@ -323,7 +305,7 @@ export function graphStillUsesStepWorktree(db: Db, projectId: number, maps: Step
   const step = maps.byKey.get(stepKey);
   if (step === undefined) return false;
   if (!isStepFinished(step)) return true;
-  const memo = new Map<TaskNodeKey, StepUpstreamLineage>();
+  const memo = new Map<TaskNodeKey, InternalLineage>();
   const queue = [...(maps.outgoing.get(stepKey) ?? [])];
   const visited = new Set<TaskNodeKey>([stepKey]);
   let head = 0;
@@ -350,22 +332,24 @@ export function graphStillUsesStepWorktree(db: Db, projectId: number, maps: Step
 function resolveReviewPlan(db: Db, input: PlanInput): Extract<StepWorkspacePlan, { kind: "review" }> {
   const { graphRow, step } = input;
   if (step.base !== null) return { kind: "review", branch: step.base, implWorktreePath: null };
-  const resolved = resolveReviewedTarget(db, graphRow.project_id, resolveStepLineage(step.node_key, input), input);
-  if (resolved === null) {
+  const codeStep = resolveInternalMemo(step.node_key, input, new Map()).codeStep;
+  const upStep = codeStep.kind === "one" ? input.byKey.get(codeStep.stepKey) : undefined;
+  const worker = upStep === undefined ? null : latestWorktreeWorker(db, graphRow.project_id, upStep);
+  if (worker === null) {
     throw fail(
       "invalid",
       `审查步骤「${step.node_key}」找不到被审分支：上一步没有在 worktree 分支上干活的 Worker（比如在主文件夹里干的）。用 ${HUB_COMMAND} graph patch 给它写 "base": "<被审分支>"`,
     );
   }
-  return { kind: "review", branch: resolved.branch, implWorktreePath: resolved.implWorktreePath };
+  return { kind: "review", branch: worker.branch, implWorktreePath: worker.worktree_path };
 }
 
 export function resolveWorkspacePlan(db: Db, input: PlanInput): StepWorkspacePlan {
   const { graphRow, step } = input;
   if (step.review === 1) return resolveReviewPlan(db, input);
   if (step.base === "main") return { kind: "fresh" };
-  const memo = new Map<TaskNodeKey, StepUpstreamLineage>();
-  const lineage = resolveStepLineageMemo(step.node_key, input, memo);
+  const memo = new Map<TaskNodeKey, InternalLineage>();
+  const lineage = toStepUpstreamLineage(resolveInternalMemo(step.node_key, input, memo));
   const continued = continuedWorktreeTarget(db, graphRow.project_id, step, input, memo);
   if (continued === null) {
     return lineage.kind === "reviewed_base" ? { kind: "fork", baseBranch: lineage.branch } : { kind: "fresh" };

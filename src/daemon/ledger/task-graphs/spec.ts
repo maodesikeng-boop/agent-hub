@@ -19,7 +19,7 @@ import { STEP_SLOT_NAME_MAX_CHARS } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { assertHubLimit, fail } from "../context.ts";
 import { formatGraphSpecIssues, type GraphSpecKind } from "./spec-errors.ts";
-import { resolveStepLineage, type LineageMaps, type LineageNode } from "./workspace.ts";
+import { resolveUpstreamCodeStep, type LineageMaps, type LineageNode } from "./workspace.ts";
 
 const NODE_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const SLOT_NAME_RE = /^[a-z0-9-]+$/;
@@ -92,7 +92,7 @@ export function validateStepSlot(raw: string | null | undefined, key: TaskNodeKe
 /**
  * Precondition: nodes contains every step in the graph and edges contains all directed dependencies.
  * Postcondition: throws an invalid error naming the reviewed branch when any pending or waiting review step
- * without an explicit base cannot resolve a unique upstream code step or unanimous reviewed base.
+ * without an explicit base cannot resolve a unique upstream code step.
  */
 export function assertReviewStepsHaveTarget(
   nodes: Iterable<{ key: TaskNodeKey; review: number; base: string | null; status: string; skipped?: number }>,
@@ -114,11 +114,11 @@ export function assertReviewStepsHaveTarget(
   const maps: LineageMaps = { byKey, incoming, outgoing };
   for (const n of nodeList) {
     if (n.review !== 1 || n.base !== null || n.skipped === 1 || (n.status !== "pending" && n.status !== "waiting")) continue;
-    const lineage = resolveStepLineage(n.key, maps);
-    if (lineage.kind === "empty" || lineage.kind === "conflict") {
+    const source = resolveUpstreamCodeStep(n.key, maps);
+    if (source.kind !== "one") {
       throw fail(
         "invalid",
-        `审查步骤「${n.key}」${lineage.kind === "empty" ? "没有可审的上游步骤" : "有多个上游分支"}，定不下被审分支：给它写 "base": "<被审分支>"`,
+        `审查步骤「${n.key}」${source.kind === "none" ? "没有可审的上游步骤" : "有多个上游分支"}，定不下被审分支：给它写 "base": "<被审分支>"`,
       );
     }
   }

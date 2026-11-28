@@ -503,6 +503,132 @@ describe("Task Graph multi-review fan-in workspace inheritance (end-to-end)", ()
       await prepareWorkspace(wFix1);
       expect(git(workerRow(wFix1).worktree_path, "rev-parse", "HEAD")).toBe(sha);
     });
+
+    it("serial explicit review -> implicit review -> fix keeps review2 on impl branch, inherits impl worktree, and preserves cleanup hold", async () => {
+      const prHead = seedPrBranch();
+      const graph = createGraph([
+        { key: "impl", title: "Impl", brief: "Implement change", deps: [] },
+        { key: "rev1", title: "Review PR branch", brief: "Review explicit base", review: true, base: PR_BRANCH, deps: ["impl"] },
+        { key: "rev2", title: "Review impl branch", brief: "Review implicit upstream", review: true, deps: ["rev1"] },
+        { key: "fix", title: "Fix", brief: "Fix on impl", deps: ["rev2"] },
+      ]);
+      const wImpl = graph.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl);
+      const impl = workerRow(wImpl);
+      writeFileSync(join(impl.worktree_path, "a.ts"), "export const a = 88;\n");
+      git(impl.worktree_path, "commit", "-am", "impl commit");
+      git(impl.worktree_path, "push", "--quiet", "origin", impl.branch!);
+      const implSha = git(impl.worktree_path, "rev-parse", "HEAD");
+      await reportTurn(wImpl, report({ summary: "impl done", commit: implSha }));
+
+      // Active rev2 + fix still need impl's worktree even while rev1 reviews PR_BRANCH.
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(false);
+
+      const wRev1 = graphNow(graph.id).nodes.find((n) => n.key === "rev1")!.activeWorkerId!;
+      await prepareWorkspace(wRev1);
+      expect(parseReviewTarget(workerRow(wRev1).review_json)?.branch).toBe(PR_BRANCH);
+      expect(git(workerRow(wRev1).worktree_path, "rev-parse", "HEAD")).toBe(prHead);
+      await reportTurn(wRev1, report({ summary: "ok", verdict: "PASS", sha: prHead }));
+      await runVerifyFor(wRev1);
+
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(false);
+      const wRev2 = graphNow(graph.id).nodes.find((n) => n.key === "rev2")!.activeWorkerId!;
+      await prepareWorkspace(wRev2);
+      expect(parseReviewTarget(workerRow(wRev2).review_json)?.branch).toBe(impl.branch);
+      expect(git(workerRow(wRev2).worktree_path, "rev-parse", "HEAD")).toBe(implSha);
+      await reportTurn(wRev2, report({ status: "有问题", summary: "fix impl", verdict: "FAIL", sha: implSha }));
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wRev2 });
+      enqueued.length = 0;
+      ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "rev2" });
+
+      const wFix = graphNow(graph.id).nodes.find((n) => n.key === "fix")!.activeWorkerId!;
+      const fix = workerRow(wFix);
+      expect(fix.worktree_path).toBe(impl.worktree_path);
+      expect(fix.branch).toBe(impl.branch);
+      expect(enqueued.some((a) => a.type === "worktree.sync" && a.params.workerId === wFix)).toBe(true);
+      expect(enqueued.some((a) => a.type === "worktree.create" && a.params.workerId === wFix)).toBe(false);
+      expect(ledger.getWorktreeSyncTask(wFix)).toMatchObject({ kind: "sync", branch: impl.branch, expected: implSha });
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(false);
+
+      await prepareWorkspace(wFix);
+      await reportTurn(wFix, report({ summary: "fixed", commit: implSha }));
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(true);
+    });
+
+    it("S7: patching a waiting fan-in fix1 to base=main immediately releases impl cleanup hold and dispatches a fresh worktree off main", async () => {
+      const mainSha = git(repoDir, "rev-parse", "main");
+      const graph = createGraph([
+        { key: "impl", title: "Impl", brief: "Implement change", deps: [] },
+        { key: "rev1", title: "R1", brief: "R1", review: true, deps: ["impl"] },
+        { key: "rev2", title: "R2", brief: "R2", review: true, deps: ["impl"] },
+        { key: "fix1", title: "Fix 1", deps: ["rev1", "rev2"] },
+      ]);
+      const wImpl = graph.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl);
+      const impl = workerRow(wImpl);
+      writeFileSync(join(impl.worktree_path, "a.ts"), "export const a = 91;\n");
+      git(impl.worktree_path, "commit", "-am", "impl commit");
+      git(impl.worktree_path, "push", "--quiet", "origin", impl.branch!);
+      const implSha = git(impl.worktree_path, "rev-parse", "HEAD");
+      await reportTurn(wImpl, report({ summary: "done", commit: implSha }));
+
+      for (const k of ["rev1", "rev2"] as const) {
+        const w = graphNow(graph.id).nodes.find((n) => n.key === k)!.activeWorkerId!;
+        await prepareWorkspace(w);
+        await reportTurn(w, report({ summary: "ok", verdict: "PASS", sha: implSha }));
+        await runVerifyFor(w);
+      }
+
+      // Both reviews are done and fix1 is waiting:pm without base=main, so impl stays protected solely because of fix1.
+      expect(stateOf(graphNow(graph.id).nodes.find((n) => n.key === "fix1")!)).toBe("waiting:pm");
+      const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: () => {}, now: () => now });
+      now += WORKTREE_RETENTION_MS + 60_000;
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(false);
+      await expect(cleanup.discardWorktree(wImpl)).rejects.toThrow(/not eligible/);
+
+      // Patching fix1 to base: "main" while it waits immediately releases impl's cleanup hold before fix1 starts.
+      ledger.hubCall(lin.sessionId, "graph.patch", {
+        graphId: graph.id,
+        specJson: JSON.stringify({ updateSteps: [{ key: "fix1", base: "main" }] }),
+      });
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(true);
+
+      // Dispatching fix1 via graph.patch brief creates a fresh worktree off main rather than inheriting impl.
+      enqueued.length = 0;
+      ledger.hubCall(lin.sessionId, "graph.patch", {
+        graphId: graph.id,
+        specJson: JSON.stringify({ updateSteps: [{ key: "fix1", brief: "Start fresh off main" }] }),
+      });
+      const wFix1 = graphNow(graph.id).nodes.find((n) => n.key === "fix1")!.activeWorkerId!;
+      expect(enqueued.some((a) => a.type === "worktree.create" && a.params.workerId === wFix1)).toBe(true);
+      expect(enqueued.some((a) => a.type === "worktree.sync" && a.params.workerId === wFix1)).toBe(false);
+      await prepareWorkspace(wFix1);
+      const fix1 = workerRow(wFix1);
+      expect(fix1.worktree_path).not.toBe(impl.worktree_path);
+      expect(fix1.branch).not.toBe(impl.branch);
+      expect(git(fix1.worktree_path, "rev-parse", "HEAD")).toBe(mainSha);
+      expect(git(fix1.worktree_path, "rev-parse", "HEAD")).not.toBe(implSha);
+      expect(ledger.isWorkerCleanable(wImpl)).toBe(true);
+      ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id });
+
+      // Cancelling an active parallel-review graph also immediately releases impl's cleanup hold.
+      const cancelGraph = createGraph([
+        { key: "impl", title: "Impl", brief: "Implement", deps: [] },
+        { key: "rev1", title: "R1", brief: "R1", review: true, deps: ["impl"] },
+        { key: "rev2", title: "R2", brief: "R2", review: true, deps: ["impl"] },
+        { key: "fix1", title: "Fix 1", brief: "Fix 1", deps: ["rev1", "rev2"] },
+      ]);
+      const wImpl2 = cancelGraph.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl2);
+      const impl2 = workerRow(wImpl2);
+      writeFileSync(join(impl2.worktree_path, "a.ts"), "export const a = 92;\n");
+      git(impl2.worktree_path, "commit", "-am", "impl 2");
+      git(impl2.worktree_path, "push", "--quiet", "origin", impl2.branch!);
+      await reportTurn(wImpl2, report({ summary: "done", commit: git(impl2.worktree_path, "rev-parse", "HEAD") }));
+      expect(ledger.isWorkerCleanable(wImpl2)).toBe(false);
+      ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: cancelGraph.id });
+      expect(ledger.isWorkerCleanable(wImpl2)).toBe(true);
+    });
   });
 
   describe("unchanged boundaries (regression baseline, passes before and after implementation)", () => {
