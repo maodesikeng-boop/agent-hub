@@ -2,23 +2,32 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { fileURLToPath } from "node:url";
-import { chromium, type Page } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { readLedgerFile } from "../src/daemon/process-ledger.ts";
 import { API_PATHS, DEFAULT_AGENT_VENDOR, ENV_HOME, ENV_PORT, ENV_SESSION_OWNER_TAG, VENDOR_LIST, type StateSnapshot } from "../src/shared/index.ts";
-import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
+import { VERIFY_SMOKE_BUDGET_MS, VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS, VERIFY_SMOKE_STEP_TIMEOUT_MS } from "../src/shared/limits.ts";
 import { resolveHubPaths } from "../src/shared/paths.ts";
 import { AGY_FORCE_FILE_TOKEN_STORAGE_ENV } from "../src/vendors/agy/paths.ts";
 import { wrapScriptAsPlatformCli } from "../test/fake-cli-shim.ts";
-import { digestOf, lostAfterRestart, sendAndAwaitReply, type RoundTrip } from "./verify-steps.ts";
-import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
-import { verifyComposerLayout } from "./verify-composer-layout.ts";
-import { verifyProjectListHeader } from "./verify-list-header.ts";
-import { verifyShellWidths } from "./verify-shell-widths.ts";
-import { verifySettingsKeyboard } from "./verify-settings-keyboard.ts";
 import { verifyCardCorners } from "./verify-card-corners.ts";
+import { verifyComposerInteractions } from "./verify-composer-interactions.ts";
+import { COMPOSER_CHAT_TEXTAREA_SELECTOR, verifyComposerLayout } from "./verify-composer-layout.ts";
+import {
+  createVerifyStepTracker,
+  formatVerifyError,
+  formatVerifyRunReport,
+  type VerifyFailure,
+  type VerifyPhaseRecord,
+  type VerifyStepContext,
+  type VerifyStepTracker,
+} from "./verify-diagnostics.ts";
+import { verifyProjectListHeader } from "./verify-list-header.ts";
+import { verifySettingsKeyboard } from "./verify-settings-keyboard.ts";
+import { verifyShellWidths } from "./verify-shell-widths.ts";
+import { digestOf, lostAfterRestart, sendAndAwaitReply, type RoundTrip } from "./verify-steps.ts";
 import { verifyTabFocus } from "./verify-tab-focus.ts";
 import { verifyTopBarUnderSettings } from "./verify-window-drag.ts";
 
@@ -34,11 +43,22 @@ const ROUND_TRIP_TEXT = "verify round trip";
 interface RunResult {
   ok: boolean;
   totalMs: number;
-  phases: Array<[string, number]>;
-  error?: string;
+  phases: VerifyPhaseRecord[];
+  failure?: VerifyFailure;
 }
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
+
+class DaemonExitError extends Error {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+
+  constructor(when: string, { code, signal }: Exit) {
+    super(`${when}（${signal ? `信号 ${signal}` : `退出码 ${code}`}）`);
+    this.code = code;
+    this.signal = signal;
+  }
+}
 
 // macOS limits Unix socket paths to 104 bytes.
 function shortTmp(): string {
@@ -105,24 +125,32 @@ interface LaunchedDaemon {
 
 async function launchDaemon(home: string, scratch: string): Promise<LaunchedDaemon> {
   const child = spawn(process.execPath, [DAEMON_MAIN], { cwd: REPO_ROOT, env: daemonEnv(home, scratch), stdio: ["ignore", "pipe", "pipe"] });
-  const exited = new Promise<Exit>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  const exited = new Promise<Exit>((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
   let out = "";
+  let loginFound = false;
   let err = "";
-  child.stdout!.setEncoding("utf8").on("data", (c: string) => (out += c));
-  child.stderr!.setEncoding("utf8").on("data", (c: string) => (err += c));
-  const login = await withTimeout(
-    "等守护进程给出登录网址",
-    new Promise<RegExpExecArray>((resolve, reject) => {
-      child.stdout!.on("data", () => {
-        const m = LOGIN_URL.exec(out);
-        if (m) resolve(m);
-      });
-      void exited.then(({ code }) => reject(new Error(`守护进程提前退出（退出码 ${code}）：${err}`)));
-    }),
-  ).catch(async (error: unknown) => {
-    child.kill("SIGKILL");
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    err = (err + chunk).slice(-VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS);
+  });
+  const ready = new Promise<RegExpExecArray>((resolve, reject) => {
+    child.on("error", reject);
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      if (loginFound) return;
+      const match = LOGIN_URL.exec(out + chunk);
+      if (match) {
+        loginFound = true;
+        out = "";
+        resolve(match);
+      } else {
+        out = (out + chunk).slice(-VERIFY_SMOKE_ERROR_DETAIL_MAX_CHARS);
+      }
+    });
+    void exited.then((exit) => reject(new DaemonExitError("守护进程给出登录网址前退出", exit)));
+  });
+  const login = await withTimeout("等守护进程给出登录网址", ready).catch(async (error: unknown) => {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await exited;
-    throw error;
+    throw error instanceof Error ? Object.assign(error, { daemonStderr: err }) : error;
   });
   const origin = `http://127.0.0.1:${login[1]}`;
   const uiToken = login[2]!;
@@ -147,7 +175,7 @@ async function fetchState(daemon: LaunchedDaemon, cookie: string): Promise<State
 async function stopDaemon(daemon: LaunchedDaemon, home: string): Promise<void> {
   requestShutdown(daemon.child, home, daemon.uiToken);
   const exit = await withTimeout("等守护进程正常关机", daemon.exited);
-  if (exit.code !== 0) throw new Error(`守护进程关机退出码 ${exit.code}（信号 ${exit.signal}）：${daemon.stderr()}`);
+  if (exit.code !== 0) throw new DaemonExitError("守护进程关机异常", exit);
   const leftovers = readLedgerFile(resolveHubPaths({ [ENV_HOME]: home }, home).childProcessesFile).filter((e) => isAlive(e.pid));
   if (leftovers.length > 0) throw new Error(`关机后还有子进程没退出：${leftovers.map((e) => `${e.pid}（${e.purpose}）`).join("、")}`);
 }
@@ -202,117 +230,211 @@ async function verifySavedProjectListWidth(page: Page): Promise<void> {
   await waitForListWidth(draggedPx, "等刷新后保持记住的左栏宽度");
 }
 
-async function renderAndRoundTrip(daemon: LaunchedDaemon, cookie: string, outDir: string, phase: (name: string) => void, state: StateSnapshot, checkComposer: boolean): Promise<RoundTrip> {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const pageErrors: string[] = [];
-    page.on("console", (m) => {
+async function runChromiumChecks(
+  browser: Browser,
+  daemon: LaunchedDaemon,
+  cookie: string,
+  outDir: string,
+  state: StateSnapshot,
+  tracker: VerifyStepTracker,
+  checkComposer: boolean,
+  conversationId: number | undefined,
+): Promise<RoundTrip> {
+  const pageErrors: string[] = [];
+  const page = await tracker.runPhase("浏览器渲染工作台", async () => {
+    const p = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    p.on("console", (m) => {
       if (m.type() === "error") pageErrors.push(`console.error: ${m.text()}`);
     });
-    page.on("pageerror", (e) => pageErrors.push(`pageerror: ${e.message}`));
-    await page.goto(daemon.loginUrl);
-    await page.waitForURL(`${daemon.origin}/`, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    await page.locator("#root textarea").first().waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
-    await verifySavedProjectListWidth(page);
-    const rootText = (await page.locator("#root").innerText()).trim();
+    p.on("pageerror", (e) => pageErrors.push(`pageerror: ${e.message}`));
+    p.on("crash", () => tracker.note("Chromium page crashed"));
+    p.on("close", () => tracker.note("Chromium page closed"));
+    await p.goto(daemon.loginUrl, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await p.waitForURL(`${daemon.origin}/`, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await p.locator("#root textarea").first().waitFor({ timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await p.waitForLoadState("networkidle", { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+    await verifySavedProjectListWidth(p);
+    const rootText = (await p.locator("#root").innerText()).trim();
     if (rootText === "") throw new Error("工作台渲染出来是空的");
     if (pageErrors.length > 0) throw new Error(`页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
-    phase("浏览器渲染工作台");
+    return p;
+  });
 
+  await tracker.runPhase("设置页打开时顶栏照样拖窗", async () => {
     await verifyTopBarUnderSettings(page);
     if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
-    phase("设置页打开时顶栏照样拖窗");
+  });
 
+  await tracker.runPhase("左栏长电脑名与新建按钮不重合", async () => {
     await verifyProjectListHeader(browser, daemon.loginUrl, daemon.origin);
-    phase("左栏长电脑名与新建按钮不重合");
+  });
 
+  await tracker.runPhase("Columns and single column at every scale", async () => {
     await verifyShellWidths(browser, daemon.loginUrl, daemon.origin);
-    phase("Columns and single column at every scale");
+  });
 
+  await tracker.runPhase("Settings and New PM keyboard focus at Compact and XL", async () => {
     await verifySettingsKeyboard(browser, daemon.loginUrl, daemon.origin, state.server.folderPicker);
-    phase("Settings and New PM keyboard focus at Compact and XL");
+  });
 
-    if (checkComposer) {
-      const id = state.conversations[0]?.conversation.id;
-      if (id === undefined) throw new Error("Composer layout check requires a conversation");
-      await verifyComposerLayout(daemon.loginUrl, id, outDir);
-      phase("WebKit composer layout");
-      await page.goto(new URL(`/#/c/${id}`, daemon.loginUrl).href);
-      await verifyComposerInteractions(page, "Chromium", outDir);
+  if (checkComposer) {
+    if (conversationId === undefined) throw new Error("Composer layout check requires a conversation");
+    await tracker.runPhase("Chromium composer interactions", async (steps) => {
+      await steps.step("conversation goto", () =>
+        page.goto(new URL(`/#/c/${conversationId}`, daemon.loginUrl).href, { timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS }),
+      );
+      await steps.step("wait chat composer", () =>
+        page.locator(COMPOSER_CHAT_TEXTAREA_SELECTOR).waitFor({ state: "visible", timeout: VERIFY_SMOKE_STEP_TIMEOUT_MS }),
+      );
+      await verifyComposerInteractions(page, "Chromium", outDir, steps);
       if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
-      phase("Chromium composer interactions");
-    }
+    });
+  }
 
-    const trip = await sendAndAwaitReply(page, { origin: daemon.origin, cookie, text: ROUND_TRIP_TEXT, timeoutMs: VERIFY_SMOKE_STEP_TIMEOUT_MS });
+  const trip = await tracker.runPhase("发消息等假 claude 回复、截图", async () => {
+    const result = await sendAndAwaitReply(page, { origin: daemon.origin, cookie, text: ROUND_TRIP_TEXT, timeoutMs: VERIFY_SMOKE_STEP_TIMEOUT_MS });
     await page.screenshot({ path: join(outDir, SCREENSHOT) });
     if (pageErrors.length > 0) throw new Error(`发消息时页面报错 ${pageErrors.length} 条：\n${pageErrors.join("\n")}`);
-    phase("发消息等假 claude 回复、截图");
+    return result;
+  });
 
+  await tracker.runPhase("Work panel tabs: no focus mark on press, outline by keyboard", async () => {
     await verifyTabFocus(page);
     await verifyCardCorners(page);
     if (pageErrors.length > 0) throw new Error(pageErrors.join("\n"));
-    phase("Work panel tabs: no focus mark on press, outline by keyboard");
-    return trip;
-  } finally {
-    await browser.close();
+  });
+
+  return trip;
+}
+
+export interface SmokeBrowserHandle {
+  close(): Promise<void>;
+}
+
+export interface SmokeBrowserDeps<TBrowser extends SmokeBrowserHandle = SmokeBrowserHandle> {
+  verifyWebKitComposer(conversationId: number, steps: VerifyStepContext): Promise<void>;
+  launchChromium(): Promise<TBrowser>;
+  runChromiumChecks(browser: TBrowser, tracker: VerifyStepTracker, checkComposer: boolean, conversationId: number | undefined): Promise<RoundTrip>;
+}
+
+export interface SmokeBrowserOptions {
+  checkComposer: boolean;
+  conversationId: number | undefined;
+  tracker: VerifyStepTracker;
+}
+
+export async function runBrowserVerifications<TBrowser extends SmokeBrowserHandle>(
+  deps: SmokeBrowserDeps<TBrowser>,
+  options: SmokeBrowserOptions,
+): Promise<RoundTrip> {
+  if (options.checkComposer) {
+    const id = options.conversationId;
+    if (id === undefined) throw new Error("Composer layout check requires a conversation");
+    await options.tracker.runPhase("WebKit composer layout", (steps) => deps.verifyWebKitComposer(id, steps));
   }
+
+  const browser = await deps.launchChromium();
+  let trip!: RoundTrip;
+  let primaryFailed = false;
+  let closeFailed: unknown;
+  let hasCloseFailed = false;
+  try {
+    trip = await deps.runChromiumChecks(browser, options.tracker, options.checkComposer, options.conversationId);
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    try {
+      await browser.close();
+    } catch (closeError) {
+      const detail = formatVerifyError(closeError).summary;
+      options.tracker.note(`Chromium browser.close failed during teardown: ${detail}`);
+      if (!primaryFailed) {
+        hasCloseFailed = true;
+        closeFailed = closeError;
+      }
+    }
+  }
+  if (hasCloseFailed) throw closeFailed;
+  return trip;
 }
 
 async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResult> {
   const started = performance.now();
-  const phases: Array<[string, number]> = [];
-  let mark = started;
-  const phase = (name: string) => {
-    const now = performance.now();
-    phases.push([name, now - mark]);
-    mark = now;
-  };
-
+  const tracker = createVerifyStepTracker();
   const root = mkdtempSync(join(shortTmp(), "bellwood-verify-"));
   const home = join(root, "home");
   const scratch = join(root, "scratch");
   let daemon: LaunchedDaemon | null = null;
+  let lastDaemon: LaunchedDaemon | null = null;
+
   try {
-    const build = spawnSync(process.execPath, [VITE_BIN, "build", "--logLevel", "error"], { cwd: REPO_ROOT, encoding: "utf8" });
-    if (build.status !== 0) throw new Error(`构建网页失败（退出码 ${build.status}）：${build.stderr}`);
-    phase("构建网页");
+    await tracker.runPhase("构建网页", async () => {
+      const build = spawnSync(process.execPath, [VITE_BIN, "build", "--logLevel", "error"], { cwd: REPO_ROOT, encoding: "utf8" });
+      if (build.status !== 0) throw new Error(`构建网页失败（退出码 ${build.status}）：${build.stderr}`);
+    });
 
-    daemon = await launchDaemon(home, scratch);
-    phase("起守护进程");
+    daemon = await tracker.runPhase("起守护进程", () => launchDaemon(home, scratch));
+    lastDaemon = daemon;
+    const activeDaemon = daemon;
 
-    const cookie = await loginCookie(daemon);
-    const headers = { cookie, origin: daemon.origin };
-    const health = await fetch(`${daemon.origin}${API_PATHS.health}`, { headers });
-    const healthBody = (await health.json()) as { ok?: boolean };
-    if (health.status !== 200 || healthBody.ok !== true) throw new Error(`健康检查不对：HTTP ${health.status} ${JSON.stringify(healthBody)}`);
-    const state = await fetchState(daemon, cookie);
-    phase("登录、健康检查、/api/state");
+    const { cookie, state } = await tracker.runPhase("登录、健康检查、/api/state", async () => {
+      const sessionCookie = await loginCookie(activeDaemon);
+      const headers = { cookie: sessionCookie, origin: activeDaemon.origin };
+      const health = await fetch(`${activeDaemon.origin}${API_PATHS.health}`, { headers });
+      const healthBody = (await health.json()) as { ok?: boolean };
+      if (health.status !== 200 || healthBody.ok !== true) throw new Error(`健康检查不对：HTTP ${health.status} ${JSON.stringify(healthBody)}`);
+      const snapshot = await fetchState(activeDaemon, sessionCookie);
+      return { cookie: sessionCookie, state: snapshot };
+    });
 
-    const trip = await renderAndRoundTrip(daemon, cookie, outDir, phase, state, checkComposer);
-    const before = digestOf(await fetchState(daemon, cookie), [trip.conversationId]);
+    const conversationId = state.conversations[0]?.conversation.id;
+    const trip = await runBrowserVerifications(
+      {
+        verifyWebKitComposer: (id, steps) => verifyComposerLayout(activeDaemon.loginUrl, id, outDir, steps),
+        launchChromium: () => chromium.launch({ headless: true }),
+        runChromiumChecks: (browser, stepTracker, composerFlag, id) =>
+          runChromiumChecks(browser, activeDaemon, cookie, outDir, state, stepTracker, composerFlag, id),
+      },
+      { checkComposer, conversationId, tracker },
+    );
 
-    await stopDaemon(daemon, home);
-    daemon = null;
-    phase("正常关机");
+    const before = await tracker.runPhase("正常关机", async () => {
+      const digest = digestOf(await fetchState(activeDaemon, cookie), [trip.conversationId]);
+      await stopDaemon(activeDaemon, home);
+      daemon = null;
+      return digest;
+    });
 
-    daemon = await launchDaemon(home, scratch);
-    phase("同一数据目录重启");
-    const after = digestOf(await fetchState(daemon, await loginCookie(daemon)), [trip.conversationId]);
-    const lost = lostAfterRestart(before, after);
-    if (lost.length > 0) throw new Error(`同一数据目录重启后数据变了：\n${lost.join("\n")}`);
-    if (!after.messages.some((m) => m.id === trip.replyMessageId)) throw new Error(`重启后找不到回复 ${trip.replyMessageId}`);
-    await stopDaemon(daemon, home);
-    daemon = null;
-    phase("核对消息、再关机");
+    lastDaemon = null;
+    daemon = await tracker.runPhase("同一数据目录重启", () => launchDaemon(home, scratch));
+    lastDaemon = daemon;
+    const restartedDaemon = daemon;
 
-    rmSync(root, { recursive: true });
-    if (existsSync(root)) throw new Error(`临时目录没删掉：${root}`);
-    phase("删临时目录");
-    return { ok: true, totalMs: performance.now() - started, phases };
+    await tracker.runPhase("核对消息、再关机", async () => {
+      const after = digestOf(await fetchState(restartedDaemon, await loginCookie(restartedDaemon)), [trip.conversationId]);
+      const lost = lostAfterRestart(before, after);
+      if (lost.length > 0) throw new Error(`同一数据目录重启后数据变了：\n${lost.join("\n")}`);
+      if (!after.messages.some((m) => m.id === trip.replyMessageId)) throw new Error(`重启后找不到回复 ${trip.replyMessageId}`);
+      await stopDaemon(restartedDaemon, home);
+      daemon = null;
+    });
+
+    await tracker.runPhase("删临时目录", async () => {
+      rmSync(root, { recursive: true });
+      if (existsSync(root)) throw new Error(`临时目录没删掉：${root}`);
+    });
+
+    return { ok: true, totalMs: performance.now() - started, phases: tracker.snapshot().phases };
   } catch (error) {
-    return { ok: false, totalMs: performance.now() - started, phases, error: error instanceof Error ? error.message : String(error) };
+    const snap = tracker.snapshot();
+    const failure = formatVerifyError(error, {
+      phasePath: snap.activePath,
+      phaseDurationMs: snap.activeDurationMs,
+      notes: snap.notes,
+      daemonStderr: (daemon ?? lastDaemon)?.stderr(),
+    });
+    return { ok: false, totalMs: performance.now() - started, phases: snap.phases, failure };
   } finally {
     if (daemon !== null) {
       daemon.child.kill("SIGKILL");
@@ -323,13 +445,6 @@ async function runOnce(outDir: string, checkComposer: boolean): Promise<RunResul
 }
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
-
-function describeRun(i: number, r: RunResult): string {
-  const phases = r.phases.map(([name, ms]) => `${name} ${seconds(ms)}`).join("，");
-  const status = r.ok ? "通过" : `失败：${r.error}`;
-  const over = r.totalMs > VERIFY_SMOKE_BUDGET_MS ? `（超过 ${seconds(VERIFY_SMOKE_BUDGET_MS)} 的目标）` : "";
-  return `第 ${i} 次：${seconds(r.totalMs)}${over}，${status}\n  ${phases}`;
-}
 
 async function main(): Promise<number> {
   const { values } = parseArgs({ options: { runs: { type: "string", default: "1" }, out: { type: "string", default: join(shortTmp(), "bellwood-verify-smoke") }, "composer-layout": { type: "boolean" } } });
@@ -343,7 +458,13 @@ async function main(): Promise<number> {
   for (let i = 1; i <= runs; i++) {
     const r = await runOnce(outDir, values["composer-layout"] ?? false);
     results.push(r);
-    const line = describeRun(i, r);
+    const line = formatVerifyRunReport(i, {
+      ok: r.ok,
+      totalMs: r.totalMs,
+      budgetMs: VERIFY_SMOKE_BUDGET_MS,
+      phases: r.phases,
+      failure: r.failure,
+    });
     lines.push(line);
     console.log(line);
   }
@@ -357,4 +478,6 @@ async function main(): Promise<number> {
   return failed === 0 ? 0 : 1;
 }
 
-process.exitCode = await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  process.exitCode = await main();
+}
