@@ -711,6 +711,145 @@ describe("Task Graph multi-review fan-in workspace inheritance (end-to-end)", ()
       await prepareWorkspace(wFix);
       expect(git(workerRow(wFix).worktree_path, "rev-parse", "HEAD")).toBe(remoteHead);
     });
+
+    it("graph done --branch --commit preserves expected for rewound remote and no-worker steps, and blocks cross-branch leaks", async () => {
+      const branchB = "feature/b-override";
+      git(repoDir, "branch", branchB, "main");
+      git(repoDir, "push", "--quiet", "origin", branchB);
+      const deliveredB = pushFromElsewhere(branchB, "export const a = 401;\n");
+      // Make local feature/b-override stale ahead of the rewound remote tip so checkout requires expected === deliveredB.
+      git(repoDir, "fetch", "--quiet", "origin", `+refs/heads/${branchB}:refs/heads/${branchB}`);
+      const staleClone = join(root, `stale-b-${++now}`);
+      git(root, "clone", "--quiet", "--branch", branchB, originDir, staleClone);
+      writeFileSync(join(staleClone, "a.ts"), "export const a = 402;\n");
+      git(staleClone, "commit", "-am", "stale extra local commit");
+      const staleLocalB = git(staleClone, "rev-parse", "HEAD");
+      git(repoDir, "fetch", "--quiet", staleClone, `${branchB}:refs/heads/${branchB}`);
+      expect(git(repoDir, "rev-parse", `refs/heads/${branchB}`)).toBe(staleLocalB);
+
+      // 1) Worker ran on its own branch, then PM ran graph done --branch feature/b-override --commit deliveredB.
+      const gOverride = createGraph([
+        { key: "impl", title: "Impl", brief: "Implement", deps: [] },
+        { key: "revB", title: "Review B", brief: "Review B", review: true, base: branchB, deps: ["impl"] },
+        { key: "fixB", title: "Fix B", brief: "Fix B", deps: ["revB"] },
+      ]);
+      const wImpl = gOverride.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl);
+      await reportTurn(wImpl, report({ status: "有问题", summary: "handed off to target branch" }));
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wImpl });
+      ledger.hubCall(lin.sessionId, "graph.done", {
+        graphId: gOverride.id,
+        nodeKey: "impl",
+        branch: branchB,
+        commit: deliveredB,
+      });
+
+      const wRevB = graphNow(gOverride.id).nodes.find((n) => n.key === "revB")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wRevB)?.checkout).toEqual({ kind: "review", branch: branchB, expected: deliveredB });
+      await prepareWorkspace(wRevB);
+      expect(git(workerRow(wRevB).worktree_path, "rev-parse", "HEAD")).toBe(deliveredB);
+      await reportTurn(wRevB, report({ status: "有问题", summary: "needs fix", verdict: "FAIL", sha: deliveredB }));
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wRevB });
+      ledger.hubCall(lin.sessionId, "graph.done", { graphId: gOverride.id, nodeKey: "revB" });
+
+      const wFixB = graphNow(gOverride.id).nodes.find((n) => n.key === "fixB")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wFixB)?.checkout).toMatchObject({ kind: "branch", base: branchB, expected: deliveredB });
+      await prepareWorkspace(wFixB);
+      expect(git(workerRow(wFixB).worktree_path, "rev-parse", "HEAD")).toBe(deliveredB);
+      ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: gOverride.id });
+
+      // 2) No-worktree step (worker === null) settled via graph done --branch --commit preserves expected and expected_missing.
+      const gNoWorker = createGraph([
+        { key: "impl", title: "Impl", deps: [] },
+        { key: "revB", title: "Review B", brief: "Review B", review: true, base: branchB, deps: ["impl"] },
+      ]);
+      ledger.hubCall(lin.sessionId, "graph.done", {
+        graphId: gNoWorker.id,
+        nodeKey: "impl",
+        branch: branchB,
+        commit: deliveredB,
+      });
+      const wRevNoWorker = graphNow(gNoWorker.id).nodes.find((n) => n.key === "revB")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wRevNoWorker)?.checkout).toEqual({ kind: "review", branch: branchB, expected: deliveredB });
+      await prepareWorkspace(wRevNoWorker);
+      expect(git(workerRow(wRevNoWorker).worktree_path, "rev-parse", "HEAD")).toBe(deliveredB);
+      ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: gNoWorker.id });
+
+      const missingSha = "deadbeef1234";
+      const gMissing = createGraph([
+        { key: "impl", title: "Impl", deps: [] },
+        { key: "revB", title: "Review B", brief: "Review B", review: true, base: branchB, deps: ["impl"] },
+      ]);
+      ledger.hubCall(lin.sessionId, "graph.done", {
+        graphId: gMissing.id,
+        nodeKey: "impl",
+        branch: branchB,
+        commit: missingSha,
+      });
+      const wRevMissing = graphNow(gMissing.id).nodes.find((n) => n.key === "revB")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wRevMissing)?.checkout).toEqual({ kind: "review", branch: branchB, expected: missingSha });
+      await prepareWorkspace(wRevMissing);
+      expect(taskText(wRevMissing)).toContain(missingSha);
+      ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: gMissing.id });
+    });
+
+    it("graph done --branch <other> isolates explicit review, implicit review, and inherited worktree.sync from cross-branch commits", async () => {
+      const gReverse = createGraph([
+        { key: "impl", title: "Impl", brief: "Implement", deps: [] },
+        { key: "revExplicit", title: "Explicit Review", brief: "Explicit", review: true, base: PR_BRANCH, deps: ["impl"] },
+        { key: "revImplicit", title: "Implicit Review", brief: "Implicit", review: true, deps: ["impl"] },
+        { key: "fix", title: "Fix", brief: "Fix", deps: ["revImplicit"] },
+      ]);
+      const wImpl = gReverse.nodes.find((n) => n.key === "impl")!.activeWorkerId!;
+      await prepareWorkspace(wImpl);
+      const impl = workerRow(wImpl);
+      writeFileSync(join(impl.worktree_path, "a.ts"), "export const a = 501;\n");
+      git(impl.worktree_path, "commit", "-am", "impl commit on worker branch");
+      git(impl.worktree_path, "push", "--quiet", "origin", impl.branch!);
+      const implSha = git(impl.worktree_path, "rev-parse", "HEAD");
+      // Point explicit review's base directly at impl.branch, and create a diverged remote commit on impl.branch.
+      ledger.hubCall(lin.sessionId, "graph.patch", {
+        graphId: gReverse.id,
+        specJson: JSON.stringify({ updateSteps: [{ key: "revExplicit", base: impl.branch! }] }),
+      });
+
+      const otherClone = join(root, `other-branch-${++now}`);
+      git(root, "clone", "--quiet", "--branch", "main", originDir, otherClone);
+      git(otherClone, "checkout", "-b", impl.branch!);
+      writeFileSync(join(otherClone, "a.ts"), "export const a = 502;\n");
+      git(otherClone, "commit", "-am", "rewritten remote impl branch");
+      git(otherClone, "push", "--quiet", "--force", "origin", impl.branch!);
+      const rewrittenRemote = git(otherClone, "rev-parse", "HEAD");
+
+      await reportTurn(wImpl, report({ status: "有问题", summary: "moved to other branch" }));
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wImpl });
+      // Override artifact.branch to an unrelated branch while reporting implSha (which only exists on stale local impl.branch).
+      ledger.hubCall(lin.sessionId, "graph.done", {
+        graphId: gReverse.id,
+        nodeKey: "impl",
+        branch: "feature/other",
+        commit: implSha,
+      });
+
+      // Explicit review targeting impl.branch must not receive implSha as expected, so diverged remote wins.
+      const wRevExplicit = graphNow(gReverse.id).nodes.find((n) => n.key === "revExplicit")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wRevExplicit)?.checkout).toEqual({ kind: "review", branch: impl.branch });
+      await prepareWorkspace(wRevExplicit);
+      expect(git(workerRow(wRevExplicit).worktree_path, "rev-parse", "HEAD")).toBe(rewrittenRemote);
+
+      // Implicit review targeting impl.branch must also drop expected instead of leaking feature/other's commit.
+      const wRevImplicit = graphNow(gReverse.id).nodes.find((n) => n.key === "revImplicit")!.activeWorkerId!;
+      expect(ledger.getWorktreeTask(wRevImplicit)?.checkout).toEqual({ kind: "review", branch: impl.branch });
+      await prepareWorkspace(wRevImplicit);
+      expect(git(workerRow(wRevImplicit).worktree_path, "rev-parse", "HEAD")).toBe(rewrittenRemote);
+      await reportTurn(wRevImplicit, report({ status: "有问题", summary: "fix", verdict: "FAIL", sha: rewrittenRemote }));
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: wRevImplicit });
+      ledger.hubCall(lin.sessionId, "graph.done", { graphId: gReverse.id, nodeKey: "revImplicit" });
+
+      // Inherited fix (lineage.kind === "step") must not receive feature/other's commit as worktree.sync expected.
+      const wFix = graphNow(gReverse.id).nodes.find((n) => n.key === "fix")!.activeWorkerId!;
+      expect(ledger.getWorktreeSyncTask(wFix)).toMatchObject({ kind: "sync", branch: impl.branch, expected: null });
+    });
   });
 
   describe("unchanged boundaries (regression baseline, passes before and after implementation)", () => {

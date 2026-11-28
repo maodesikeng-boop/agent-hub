@@ -250,37 +250,53 @@ function deliveredCommitFrom(step: TaskNodeDbRow | undefined): string | null {
   return REPORTED_COMMIT.exec(reported)?.[0]?.toLowerCase() ?? null;
 }
 
+function deliveredArtifactBranch(step: TaskNodeDbRow): string | null {
+  return readStoredArtifact(step.artifact_json).artifact?.branch?.trim() || null;
+}
+
+function deliveredCommitForTarget(
+  step: TaskNodeDbRow | undefined,
+  targetBranch: string | null,
+  projectId: number,
+  db?: Db,
+): string | null {
+  if (step === undefined) return null;
+  const artifactBranch = deliveredArtifactBranch(step);
+  if (targetBranch !== null) {
+    const deliveredBranch = artifactBranch ?? (db === undefined ? null : latestWorktreeWorker(db, projectId, step)?.branch ?? null);
+    return deliveredBranch === targetBranch ? deliveredCommitFrom(step) : null;
+  }
+  if (db === undefined) {
+    return artifactBranch === null ? deliveredCommitFrom(step) : null;
+  }
+  const worker = latestWorktreeWorker(db, projectId, step);
+  if (worker === null) return null;
+  return (artifactBranch ?? worker.branch) === worker.branch ? deliveredCommitFrom(step) : null;
+}
+
 export function upstreamDeliveredCommit(input: PlanInput, db?: Db): string | null {
   const { graphRow, step } = input;
   const internal = resolveInternalMemo(step.node_key, input, new Map());
   if (step.review === 1) {
     if (internal.codeStep.kind !== "one") return null;
-    const u = input.byKey.get(internal.codeStep.stepKey);
-    if (u === undefined) return null;
-    if (step.base !== null) {
-      if (db === undefined) return null;
-      const worker = latestWorktreeWorker(db, graphRow.project_id, u);
-      if (worker === null || worker.branch !== step.base) return null;
-    }
-    return deliveredCommitFrom(u);
+    return deliveredCommitForTarget(input.byKey.get(internal.codeStep.stepKey), step.base, graphRow.project_id, db);
   }
   if (step.base === "main") return null;
   const lineage = toStepUpstreamLineage(internal);
   if (lineage.kind === "step") {
-    return deliveredCommitFrom(input.byKey.get(lineage.stepKey));
+    return deliveredCommitForTarget(input.byKey.get(lineage.stepKey), null, graphRow.project_id, db);
   }
-  let target: { stepKey: TaskNodeKey; branch: string } | null = null;
   if (lineage.kind === "step_and_base") {
-    target = { stepKey: lineage.stepKey, branch: lineage.branch };
-  } else if (lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one") {
-    target = { stepKey: lineage.sourceStep.stepKey, branch: lineage.branch };
+    if (db === undefined) return null;
+    const u = input.byKey.get(lineage.stepKey);
+    const worker = u === undefined ? null : latestWorktreeWorker(db, graphRow.project_id, u);
+    if (worker === null || worker.branch !== lineage.branch) return null;
+    return (deliveredArtifactBranch(u!) ?? worker.branch) === lineage.branch ? deliveredCommitFrom(u) : null;
   }
-  if (target === null || db === undefined) return null;
-  const u = input.byKey.get(target.stepKey);
-  if (u === undefined) return null;
-  const worker = latestWorktreeWorker(db, graphRow.project_id, u);
-  if (worker === null || worker.branch !== target.branch) return null;
-  return deliveredCommitFrom(u);
+  if (lineage.kind === "reviewed_base" && lineage.sourceStep.kind === "one") {
+    return deliveredCommitForTarget(input.byKey.get(lineage.sourceStep.stepKey), lineage.branch, graphRow.project_id, db);
+  }
+  return null;
 }
 
 function continuedWorktreeTarget(
