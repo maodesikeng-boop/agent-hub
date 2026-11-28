@@ -808,7 +808,7 @@ describe("requestStop", () => {
     const id = post();
     ev({ type: "message.delivered", at: 1, messageIds: [id] });
     ledger.requestStop(conversationId);
-    expect(stops).toHaveBeenCalledWith({ conversationId, sessionId });
+    expect(stops).toHaveBeenCalledWith(expect.objectContaining({ conversationId, sessionId, stopId: expect.any(Number) }));
     const last = changes.at(-1);
     expect(last?.type === "session.status" && last.data.session.activity).toBe("stopping");
   });
@@ -837,7 +837,7 @@ describe("requestStop", () => {
     expect(ledger.getMessage(waiting)?.status).toBe("cancelled");
     expect(ledger.getMessage(system)?.status).toBe("queued");
     expect(ledger.getMessage(running)?.status).toBe("processing");
-    expect(stops).toHaveBeenCalledWith({ conversationId, sessionId });
+    expect(stops).toHaveBeenCalledWith(expect.objectContaining({ conversationId, sessionId, stopId: expect.any(Number) }));
     expect(changes.some((c) => c.type === "message.updated" && c.data.message.id === waiting && c.data.message.status === "cancelled")).toBe(true);
   });
 

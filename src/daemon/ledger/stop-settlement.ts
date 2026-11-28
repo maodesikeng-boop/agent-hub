@@ -1,6 +1,13 @@
 // Invariant: every stop request carries a monotonic StopId, and stop settlement never clears a newer stop or an active turn.
 import type { SessionActivity, SessionId } from "../../shared/domain.ts";
 import type { StopId, StopSettlementState } from "../../shared/ledger.ts";
+import { getAgentSession } from "../store/index.ts";
+import type { LedgerContext } from "./context.ts";
+import type { LedgerMessages } from "./messages.ts";
+import type { LedgerSessions } from "./sessions.ts";
+import type { LedgerTurnBackgroundWaits } from "./turn-background-waits.ts";
+import type { LedgerTurns } from "./turns.ts";
+import { TURN_STOPPED } from "./workers/text.ts";
 
 export interface StopSettlementDeps {
   hasPendingDriverEvents(sessionId: SessionId): boolean;
@@ -30,16 +37,88 @@ export interface StopSettlementController {
  * Precondition: deps provides synchronous drain checks and transactional settlement.
  * Postcondition: returns a bounded per-session stop settlement coordinator that matches every settlement strictly by StopId.
  */
-export function createStopSettlement(_deps: StopSettlementDeps): StopSettlementController {
-  throw new Error("Not implemented");
+export function createStopSettlement(deps: StopSettlementDeps): StopSettlementController {
+  let seq = 0;
+  const pending = new Map<SessionId, StopId>();
+
+  const settleStop = (sessionId: SessionId, stopId: StopId, state: StopSettlementState): void => {
+    if (state.driverBusy || state.setupActive) return;
+    const existing = pending.get(sessionId);
+    if (existing !== undefined && existing > stopId) return;
+    if (deps.hasPendingDriverEvents(sessionId) || deps.hasPendingTurnCompletions(sessionId)) {
+      pending.set(sessionId, stopId);
+      return;
+    }
+    pending.delete(sessionId);
+    deps.settleNow(sessionId, stopId);
+  };
+
+  const onSessionDrained = (sessionId: SessionId): void => {
+    const stopId = pending.get(sessionId);
+    if (stopId === undefined) return;
+    if (deps.hasPendingDriverEvents(sessionId) || deps.hasPendingTurnCompletions(sessionId)) return;
+    pending.delete(sessionId);
+    deps.settleNow(sessionId, stopId);
+  };
+
+  return {
+    nextStopId: () => ++seq,
+    settleStop,
+    onSessionDrained,
+    forget: (sessionId) => {
+      pending.delete(sessionId);
+    },
+    close: () => {
+      pending.clear();
+    },
+    pendingCount: () => pending.size,
+  };
+}
+
+export function settleStoppedSession(
+  ctx: Pick<LedgerContext, "db" | "now" | "write">,
+  deps: {
+    sessions: Pick<LedgerSessions, "liveOf">;
+    messages: Pick<LedgerMessages, "settleTurn">;
+    turns: Pick<LedgerTurns, "runningTurnOf" | "settleExit">;
+    workers: { backgroundWaits: Pick<LedgerTurnBackgroundWaits, "waitOf" | "releaseIn"> };
+  },
+  sessionId: SessionId,
+  stopId: StopId,
+): void {
+  ctx.write((p) => {
+    const live = deps.sessions.liveOf(sessionId);
+    if (live.activity !== "stopping" || live.stopId !== stopId) return;
+    if (deps.workers.backgroundWaits.waitOf(sessionId) !== null) {
+      deps.workers.backgroundWaits.releaseIn(p, sessionId, {
+        kind: "process_exited",
+        reason: "interrupt",
+        failureReason: TURN_STOPPED,
+      });
+    }
+    const session = getAgentSession(ctx.db, sessionId);
+    if (session === null) return;
+    if (deps.turns.runningTurnOf(sessionId) !== null) {
+      deps.turns.settleExit(p, session, {
+        type: "session.exited",
+        reason: "interrupt",
+        exitCode: null,
+        signal: null,
+        hadResult: false,
+        messageIds: [],
+        at: ctx.now(),
+      });
+    }
+    deps.messages.settleTurn(p, session);
+  });
 }
 
 /**
  * Precondition: called after insertAgentMessage attempts to record an agent.tool event.
  * Postcondition: returns false when a duplicate tool event (inserted is false) arrives on an already idle session so it cannot resurrect working state; returns true otherwise.
  */
-export function shouldApplyLiveToolStart(_inserted: boolean, _currentActivity: SessionActivity): boolean {
-  throw new Error("Not implemented");
+export function shouldApplyLiveToolStart(inserted: boolean, currentActivity: SessionActivity): boolean {
+  return inserted || currentActivity !== "idle";
 }
 
 /**
@@ -47,9 +126,9 @@ export function shouldApplyLiveToolStart(_inserted: boolean, _currentActivity: S
  * Postcondition: returns false when messageCount > 0 and transitionedCount === 0 and no delivered/processing input remains active (for example, all ids were already cancelled by Stop); returns true otherwise.
  */
 export function shouldApplyLiveDelivery(
-  _messageCount: number,
-  _transitionedCount: number,
-  _hasActiveInput: boolean,
+  messageCount: number,
+  transitionedCount: number,
+  hasActiveInput: boolean,
 ): boolean {
-  throw new Error("Not implemented");
+  return messageCount === 0 || transitionedCount > 0 || hasActiveInput;
 }

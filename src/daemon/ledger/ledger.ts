@@ -50,6 +50,7 @@ import { createLedgerPmWatches, type PmWatchRunnerLedger } from "./pm-watch-comm
 import { installWatchLinkClose } from "./pm-watches.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions, idle } from "./sessions.ts";
+import { createStopSettlement, settleStoppedSession } from "./stop-settlement.ts";
 import { completedWorkPage } from "./completed-work.ts";
 import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
@@ -311,7 +312,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const files = buildLedgerFiles(options, userHome, dataHome);
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const reminders = createChecklistReminders(ctx);
-  const sessions = createLedgerSessions(ctx, reminders.forget, (id) => turns.runningTurnOf(id)?.id ?? null);
+  const stopSettlement = createStopSettlement({
+    hasPendingDriverEvents: (id) => driverEvents.hasPending(id),
+    hasPendingTurnCompletions: (id) => completions.blocksSend(id),
+    settleNow: (id, stopId) => settleStoppedSession(ctx, { sessions, messages, turns, workers }, id, stopId),
+  });
+  const sessions = createLedgerSessions(ctx, (id) => { reminders.forget(id); stopSettlement.forget(id); }, (id) => turns.runningTurnOf(id)?.id ?? null);
   const { sessionState } = sessions;
   const sentFiles = createLedgerSentFiles(db, {
     sentFilesDir: options.sentFilesDir ?? join(dataHome, "sent-files"),
@@ -332,6 +338,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
     ownsInput: (id) => turns.ownsInput(id),
     requestTurnStop: (p, id, source) => turns.requestStopIn(p, id, source),
+    nextStopId: stopSettlement.nextStopId,
     stopTakenInput: (p, id, source) => turns.stopInputIn(p, id, source),
     onHubChecklist: (p, session, event) => {
       turns.recordOutputIn(p, session, event);
@@ -469,23 +476,19 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
   const completions = createTurnCompletionLedger(ctx, {
     apply: createTurnReceiptSettlement(db, { turns, messages, reminders, workers, handover, schedules, projectCatalog }),
-    onSettled: (receipt) => driverEvents.onSettled(receipt),
+    onSettled: (receipt) => { driverEvents.onSettled(receipt); if (!closing.signal.aborted) stopSettlement.onSessionDrained(receipt.sessionId); },
     onOverflow: (sessionId) => onTurnCompletionOverflow(ctx, sessionId),
   });
   const driverEvents = createDriverEventDrain({
     completions,
     beforeTurn: (id, signal) => reconcileTurnWorktree(db, id, options.worktreeBranchProbe, branches, signal),
-    factsFor(sessionId, event) {
-      const session = getAgentSession(db, sessionId)!;
-      return { worker: workers.turnFactsOf(session, event) };
-    },
+    factsFor(sessionId, event) { return { worker: workers.turnFactsOf(getAgentSession(db, sessionId)!, event) }; },
     apply: applyDriverEventNow,
     localLinks: sentFiles.localLinks,
     textMetaFor: (id, event, links, signal) => driverTextMeta(db, sentFiles, id, event, links, signal),
     onOverflow: (sessionId) => onTurnCompletionOverflow(ctx, sessionId),
-    onSessionDrained: (sessionId) => {
-      if (!closing.signal.aborted) handover.onSessionQuiescent(sessionId);
-    },
+    onSessionDrained: (id) => { if (!closing.signal.aborted) handover.onSessionQuiescent(id); },
+    onQueueEmpty: (id) => { if (!closing.signal.aborted) stopSettlement.onSessionDrained(id); },
   });
   return {
     postUserMessage: messages.postUserMessage,
@@ -539,6 +542,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),
     onStopRequested: (listener) => subscribe(stopListeners, listener),
+    settleStop: (id, stopId, state) => { if (!closing.signal.aborted) stopSettlement.settleStop(id, stopId, state); },
     onActionEnqueued: (listener) => subscribe(actionListeners, listener),
 
     applyDriverEvent(sessionId, event) {
@@ -717,11 +721,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     skipTaskNode: taskGraphs.skipNode,
     cancelTaskGraph: taskGraphs.cancelGraph,
     close(): void {
-      closing.abort();
-      driverEvents.close();
-      completions.close();
-      reminders.close();
-      workers.closeLifecycles();
+      closing.abort(); stopSettlement.close(); driverEvents.close(); completions.close(); reminders.close(); workers.closeLifecycles();
     },
   };
 }

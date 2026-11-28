@@ -428,6 +428,10 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
     cancel(sessionId) {
       for (const entry of running.values()) if (entry.sessionId === sessionId) entry.controller.abort();
     },
+    isRunning(sessionId) {
+      for (const entry of running.values()) if (entry.sessionId === sessionId) return true;
+      return false;
+    },
     async shutdown() {
       closed = true;
       const entries = [...running.values()];

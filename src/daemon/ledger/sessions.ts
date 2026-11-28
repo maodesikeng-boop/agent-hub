@@ -1,4 +1,5 @@
 import type { TurnId } from "../../shared/turn.ts";
+import type { StopId } from "../../shared/ledger.ts";
 import type { RecoveryResend } from "./turns.ts";
 import { randomUUID } from "node:crypto";
 import type {
@@ -45,6 +46,7 @@ export interface LiveSession {
   /** Cached code point count so each delta does not re-count the whole string. */
   streamingChars?: number;
   toolStepAt?: number;
+  stopId?: StopId | null;
 }
 
 interface LiveTool {
@@ -137,6 +139,7 @@ export const idle = (l: LiveSession) => {
   l.stepStartedAt = null;
   l.openTools = [];
   l.toolStepAt = undefined;
+  l.stopId = null;
   clearStreaming(l);
 };
 
