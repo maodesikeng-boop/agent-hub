@@ -88,8 +88,13 @@ export function validateStepSlot(raw: string | null | undefined, key: TaskNodeKe
   return slot;
 }
 
+/**
+ * Precondition: nodes contains every step in the graph and edges contains all directed dependencies.
+ * Postcondition: throws an invalid error naming the reviewed branch when any pending or waiting review step
+ * without an explicit base cannot resolve a unique upstream code step or unanimous reviewed base.
+ */
 export function assertReviewStepsHaveTarget(
-  nodes: Iterable<{ key: TaskNodeKey; review: number; base: string | null; status: string }>,
+  nodes: Iterable<{ key: TaskNodeKey; review: number; base: string | null; status: string; skipped?: number }>,
   edges: readonly TaskEdge[],
 ): void {
   for (const n of nodes) {

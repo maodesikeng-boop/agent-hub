@@ -1,3 +1,5 @@
+// Invariant: Workspace lineage is derived purely from Task Graph edges and step flags (review, skipped, base);
+// review and skipped steps are pass-through nodes that never create or contest a mutable worktree.
 import { existsSync } from "node:fs";
 import type { TaskNodeKey } from "../../../shared/domain.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
@@ -6,7 +8,62 @@ import { fail } from "../context.ts";
 import { readStoredArtifact, workerIdsOf } from "./rows.ts";
 import type { KeyAdjacency, StepWorkspacePlan, TaskGraphDbRow, TaskNodeDbRow } from "./types.ts";
 
-type StepMaps = { byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>; incoming: KeyAdjacency; outgoing: KeyAdjacency };
+export type StepMaps = { byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>; incoming: KeyAdjacency; outgoing: KeyAdjacency };
+
+export interface LineageNode {
+  readonly node_key: TaskNodeKey;
+  readonly review: number;
+  readonly skipped: number;
+  readonly base: string | null;
+}
+
+export type LineageMaps = {
+  byKey: ReadonlyMap<TaskNodeKey, LineageNode>;
+  incoming: KeyAdjacency;
+  outgoing: KeyAdjacency;
+};
+
+export type CodeStepRef =
+  | { kind: "none" }
+  | { kind: "one"; stepKey: TaskNodeKey }
+  | { kind: "many" };
+
+export type StepUpstreamLineage =
+  | { kind: "empty" }
+  | { kind: "step"; stepKey: TaskNodeKey }
+  | { kind: "reviewed_base"; branch: string; sourceStep: CodeStepRef }
+  | { kind: "step_and_base"; stepKey: TaskNodeKey; branch: string }
+  | { kind: "conflict" };
+
+/**
+ * Precondition: maps describes a Task Graph's step roles and adjacency lists (may contain dangling keys or cycles).
+ * Postcondition: resolves stepKey's upstream workspace lineage across arbitrary DAG fan-out/fan-in diamonds,
+ * passing through review and skipped steps and merging incoming paths as a commutative, associative meet-semilattice.
+ */
+export function resolveStepLineage(_stepKey: TaskNodeKey, _maps: LineageMaps): StepUpstreamLineage {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: maps.byKey maps known node keys to step rows.
+ * Postcondition: returns the union of workerIdsOf for stepKey and every DAG ancestor reachable via maps.incoming,
+ * terminating safely if maps.incoming contains a cycle.
+ */
+export function collectAncestorWorkerIds(
+  _stepKey: TaskNodeKey,
+  _maps: Pick<StepMaps, "byKey" | "incoming">,
+): Set<number> {
+  throw new Error("Not implemented");
+}
+
+/**
+ * Precondition: stepKey identifies a non-review, non-skipped code step in maps.
+ * Postcondition: returns true iff two or more distinct non-review, non-skipped downstream steps (excluding base === "main")
+ * resolve to continue stepKey's worktree; parallel review and base === "main" branches do not contest stepKey's worktree.
+ */
+export function isStepWorktreeContested(_db: Db, _projectId: number, _stepKey: TaskNodeKey, _maps: StepMaps): boolean {
+  throw new Error("Not implemented");
+}
 
 type UpstreamWorker = { id: number; worktree_path: string | null; branch: string; base_commit: string };
 
