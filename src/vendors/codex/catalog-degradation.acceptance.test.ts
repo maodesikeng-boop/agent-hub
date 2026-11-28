@@ -387,3 +387,111 @@ describe("Codex catalog regression checks (unchanged existing rules)", () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 });
+
+function makeSyntheticJwt(email: string, accountId: string | null): string {
+  const b64u = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url");
+  const header = b64u({ alg: "RS256", typ: "JWT" });
+  const payload = b64u({
+    email,
+    "https://api.openai.com/auth": {
+      chatgpt_plan_type: "pro",
+      ...(accountId !== null ? { chatgpt_account_id: accountId } : {}),
+    },
+  });
+  return `${header}.${payload}.synthetic-sig`;
+}
+
+describe("Codex account fallback ownership regressions", () => {
+  it("recovers models_cache.json when account/read fails (undefined) for a ChatGPT auth.json with account_id", async () => {
+    const root = makeTempDir("codex-undef-account-");
+    const codexHome = join(root, ".codex");
+    mkdirSync(codexHome, { recursive: true });
+    const now = new Date();
+    const authFile = join(codexHome, "auth.json");
+    const cacheFile = join(codexHome, "models_cache.json");
+    const token = makeSyntheticJwt("workspace@example.test", "acct-123");
+    writeFileSync(
+      authFile,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        OPENAI_API_KEY: null,
+        tokens: { id_token: token, access_token: token, refresh_token: "rt_synthetic", account_id: "acct-123" },
+      }),
+    );
+    utimesSync(authFile, new Date(now.getTime() - 60_000), new Date(now.getTime() - 60_000));
+    writeFileSync(cacheFile, JSON.stringify({ ...REAL_CODEX_MODELS_CACHE, fetched_at: now.toISOString() }));
+    utimesSync(cacheFile, now, now);
+
+    const codexPath = writeExecutableNodeScript(
+      join(root, "codex"),
+      `
+const readline = require("node:readline");
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    out({ jsonrpc: "2.0", id: msg.id, result: { userAgent: "agent-hub/0.169.0" } });
+  } else if (msg.method === "model/list") {
+    process.stderr.write(${JSON.stringify(REAL_CODEX_TIMEOUT_STDERR)});
+    out({ jsonrpc: "2.0", id: msg.id, result: { data: ${JSON.stringify(REAL_CODEX_BUILTIN_STATIC_MODELS)} } });
+  } else if (msg.method === "account/read") {
+    out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "workspace routing discovery failed" } });
+  }
+});
+`,
+    );
+
+    const raw = await queryCodexCatalog({
+      codexPath,
+      cwd: root,
+      env: { ...process.env, HOME: root, USERPROFILE: root, CODEX_HOME: codexHome },
+    });
+    expect(raw.degraded).toBe(true);
+    expect(raw.account).toBeUndefined();
+    const catalog = codexCatalogProbe.parse(raw);
+    expect(catalog?.models.map((m) => m.id)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"]);
+    expect(catalog?.defaultModelId).toBe("gpt-6.2-sol");
+    expect(JSON.stringify(raw)).not.toContain("rt_synthetic");
+    expect(JSON.stringify(raw)).not.toContain("synthetic-sig");
+  });
+
+  it("rejects models_cache.json fallback when account/read is undefined and auth.json is API-key, missing, or keyring-backed", () => {
+    const nowMs = Date.parse("2026-11-28T06:10:00Z");
+    const codexHome = makeTempDir("codex-ownership-guards-");
+    const authFile = join(codexHome, "auth.json");
+    const cacheFile = join(codexHome, "models_cache.json");
+    const configFile = join(codexHome, "config.toml");
+
+    writeFileSync(cacheFile, JSON.stringify(REAL_CODEX_MODELS_CACHE));
+    utimesSync(cacheFile, new Date(nowMs - 10_000), new Date(nowMs - 10_000));
+
+    // Keyring switch (no auth.json): cannot verify cache ownership, so refuse fallback even if RPC reports ChatGPT.
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).toBeNull();
+    expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
+
+    // API key auth.json when account/read failed.
+    writeFileSync(authFile, JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }));
+    utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+    expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
+
+    // Leftover auth.json when config.toml specifies keyring store.
+    writeFileSync(authFile, JSON.stringify({ auth_mode: "chatgpt" }));
+    utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+    writeFileSync(configFile, 'cli_auth_credentials_store = "keyring"\n');
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).toBeNull();
+    expect(readCodexModelsCacheFallback({ codexHome, account: undefined, nowMs })).toBeNull();
+
+    // Mismatched email between auth.json JWT and account/read result.
+    writeFileSync(configFile, 'cli_auth_credentials_store = "auto"\n');
+    const oldToken = makeSyntheticJwt("old-account@example.com", "acct-old");
+    writeFileSync(authFile, JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: oldToken } }));
+    utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).toBeNull();
+
+    // Matching email succeeds.
+    const sameToken = makeSyntheticJwt("user@example.com", "acct-same");
+    writeFileSync(authFile, JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: sameToken } }));
+    utimesSync(authFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+    expect(readCodexModelsCacheFallback({ codexHome, account: CHATGPT_ACCOUNT, nowMs })).not.toBeNull();
+  });
+});

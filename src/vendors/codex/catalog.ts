@@ -1,5 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
@@ -10,6 +10,7 @@ import {
   MAX_CATALOG_MODELS,
   MAX_CODEX_MODELS_CACHE_BYTES,
   MODEL_CATALOG_TIMEOUT_MS,
+  PROVIDER_SECRETS_FILE_MAX_BYTES,
   bundledModelCatalog,
   checkModel,
   mergeCatalogEfforts,
@@ -284,23 +285,44 @@ export function isCodexRemoteRefreshFailure(stderr: string): boolean {
   return CODEX_REMOTE_REFRESH_ERROR.test(stderr.replace(ANSI_ESCAPE, ""));
 }
 
-function isChatGptAccount(accountResult: unknown): boolean {
-  if (typeof accountResult !== "object" || accountResult === null) return false;
+type RpcAccountState =
+  | { readonly kind: "chatgpt"; readonly email: string | null }
+  | { readonly kind: "unknown" }
+  | { readonly kind: "ineligible" };
+
+function rpcAccountStateOf(accountResult: unknown): RpcAccountState {
+  if (accountResult === undefined) return { kind: "unknown" };
+  if (typeof accountResult !== "object" || accountResult === null) return { kind: "ineligible" };
   const inner = (accountResult as { account?: unknown }).account;
-  return typeof inner === "object" && inner !== null && (inner as { type?: unknown }).type === "chatgpt";
+  if (typeof inner !== "object" || inner === null || (inner as { type?: unknown }).type !== "chatgpt") {
+    return { kind: "ineligible" };
+  }
+  return { kind: "chatgpt", email: nonEmptyString((inner as { email?: unknown }).email) };
 }
 
-function readBoundedCacheFile(cachePath: string, authPath: string, maxBytes: number): { text: string; mtimeMs: number } | null {
+function decodeJwtEmail(jwt: unknown): string | null {
+  if (typeof jwt !== "string") return null;
+  const parts = jwt.split(".");
+  if (parts.length < 2 || !parts[1]) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    const direct = nonEmptyString(payload.email);
+    if (direct !== null) return direct;
+    const profile = payload["https://api.openai.com/profile"];
+    if (typeof profile === "object" && profile !== null && !Array.isArray(profile)) {
+      return nonEmptyString((profile as Record<string, unknown>).email);
+    }
+  } catch {
+  }
+  return null;
+}
+
+function readBoundedFile(filePath: string, maxBytes: number): { text: string; mtimeMs: number } | null {
   let fd: number | undefined;
   try {
-    fd = openSync(cachePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const st = fstatSync(fd);
     if (!st.isFile() || st.size <= 0 || st.size > maxBytes) return null;
-    try {
-      if (statSync(authPath).mtimeMs > st.mtimeMs) return null;
-    } catch {
-      // auth.json may be absent when credentials live in the OS keyring.
-    }
     const buf = Buffer.allocUnsafe(st.size);
     let offset = 0;
     while (offset < st.size) {
@@ -321,13 +343,48 @@ function readBoundedCacheFile(cachePath: string, authPath: string, maxBytes: num
   }
 }
 
+// Require a local ChatGPT auth.json anchor so keyring account switches without auth.json cannot reuse a prior account's cache.
+function readCodexAuthOwnership(codexHome: string): { mtimeMs: number; email: string | null } | null {
+  if (codexCredentialsStore(codexHome) === "keyring") return null;
+  const file = readBoundedFile(join(codexHome, "auth.json"), PROVIDER_SECRETS_FILE_MAX_BYTES);
+  if (file === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(file.text.replace(/^\uFEFF/, ""));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.auth_mode !== "chatgpt") return null;
+  if (typeof obj.OPENAI_API_KEY === "string" && obj.OPENAI_API_KEY.trim() !== "") return null;
+  const tokens = obj.tokens;
+  const email =
+    typeof tokens === "object" && tokens !== null && !Array.isArray(tokens)
+      ? (decodeJwtEmail((tokens as Record<string, unknown>).id_token) ??
+        decodeJwtEmail((tokens as Record<string, unknown>).access_token))
+      : null;
+  return { mtimeMs: file.mtimeMs, email };
+}
+
 export function readCodexModelsCacheFallback(options: CodexModelsCacheFallbackOptions): unknown | null {
-  if (!isChatGptAccount(options.account)) return null;
+  const rpcAccount = rpcAccountStateOf(options.account);
+  if (rpcAccount.kind === "ineligible") return null;
+  const auth = readCodexAuthOwnership(options.codexHome);
+  if (auth === null) return null;
+  if (
+    rpcAccount.kind === "chatgpt" &&
+    rpcAccount.email !== null &&
+    auth.email !== null &&
+    rpcAccount.email.toLowerCase() !== auth.email.toLowerCase()
+  ) {
+    return null;
+  }
   const nowMs = options.nowMs ?? Date.now();
   const maxAgeMs = options.maxAgeMs ?? CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS;
   const maxBytes = options.maxBytes ?? MAX_CODEX_MODELS_CACHE_BYTES;
-  const file = readBoundedCacheFile(join(options.codexHome, "models_cache.json"), join(options.codexHome, "auth.json"), maxBytes);
-  if (file === null) return null;
+  const file = readBoundedFile(join(options.codexHome, "models_cache.json"), maxBytes);
+  if (file === null || auth.mtimeMs > file.mtimeMs) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(file.text);

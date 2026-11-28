@@ -172,16 +172,18 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     }
     return slot.fingerprintSeen;
   };
-  const resetIfChanged = (slot: VendorCatalogSlot, next: CatalogFingerprint | null): boolean => {
+  const checkFingerprintChanged = (slot: VendorCatalogSlot, next: CatalogFingerprint | null): boolean => {
     if (!fingerprintChanged(slot.fingerprint, next)) return false;
-    const inputsChanged = slot.fingerprint !== null && slot.fingerprint.inputs !== next?.inputs;
-    resetCatalog(slot, next);
-    if (inputsChanged) options.onInputsChanged?.(slot.vendor);
+    // Preserve live cached catalogs when only probeState changes so a degraded re-probe cannot overwrite them.
+    if (slot.fingerprint !== null && slot.fingerprint.inputs !== next?.inputs) {
+      resetCatalog(slot, next);
+      options.onInputsChanged?.(slot.vendor);
+    }
     return true;
   };
   const invalidateOnChange = (slot: VendorCatalogSlot): boolean => {
     if (slot.fingerprint === null) return false;
-    return resetIfChanged(slot, fingerprintOf(slot, false));
+    return checkFingerprintChanged(slot, fingerprintOf(slot, false));
   };
 
   const ask = (slot: VendorCatalogSlot): Promise<void> => {
@@ -191,7 +193,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       for (let attempt = 0; attempt < MODEL_CATALOG_MAX_PROBE_ATTEMPTS; attempt++) {
         if (closed || !installed(slot)) return;
         const before = fingerprintOf(slot, true);
-        resetIfChanged(slot, before);
+        checkFingerprintChanged(slot, before);
         const { catalog, availability, degraded, reason } = await probeCatalog(source, slot.vendor, controller.signal);
         if (closed) return;
         const after = fingerprintOf(slot, true);
