@@ -311,13 +311,20 @@ function planPatch(g: TaskGraphCtx, caller: PmCaller, args: HubArgs<"graph.patch
   const updates = lists.update.map((u) => prepareUpdate(g, u, nodesByKey.get(validateNodeKey(u.key))!, vendor, caller.pmId, context?.capabilityInventory));
   const updatedByKey = new Map(updates.map((u) => [u.cur.node_key, u]));
   const doneKeys = new Set(doneSteps.map((step) => step.node_key));
+  const skipKeys = new Set(lists.skip.map((raw) => raw.trim()));
   assertReviewStepsHaveTarget(
     [
       ...[...nodesByKey.values()].map((n) => {
         const u = updatedByKey.get(n.node_key);
-        return { key: n.node_key, review: u?.nextReview ?? n.review, base: u !== undefined ? u.nextBase : n.base, status: doneKeys.has(n.node_key) ? "done" : n.status };
+        return {
+          key: n.node_key,
+          review: u?.nextReview ?? n.review,
+          base: u !== undefined ? u.nextBase : n.base,
+          status: doneKeys.has(n.node_key) ? "done" : n.status,
+          skipped: skipKeys.has(n.node_key) ? 1 : n.skipped,
+        };
       }),
-      ...added.map((a) => ({ ...a, status: "pending" })),
+      ...added.map((a) => ({ ...a, status: "pending", skipped: 0 })),
     ],
     finalEdges,
   );
