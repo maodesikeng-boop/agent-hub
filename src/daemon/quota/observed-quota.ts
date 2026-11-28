@@ -45,7 +45,7 @@ export interface ObservedQuotaStore {
   reconcileFetched(vendor: AgentVendor, fetched: QuotaResponse | null, probedAt: number, at?: number): QuotaReconcileOutcome;
   /**
    * Precondition: entries hold persisted session rate limits loaded at daemon startup with each session's updatedAt timestamp.
-   * Postcondition: seeds unexpired exhausted limits with observedAt = entry.updatedAt without overwriting fresher observations and returns the count of hydrated vendors.
+   * Postcondition: seeds unexpired exhausted limits at their original observation times, falling back to updatedAt for legacy entries, and returns the count of hydrated vendors.
    */
   hydrateFromRateLimits(entries: readonly PersistedSessionRateLimit[], at?: number): number;
   clearVendor(vendor: AgentVendor): void;
@@ -188,10 +188,12 @@ function isRateLimitWindowConfirmedAllowed(window: RateLimitWindow): boolean {
   return window.status !== "rejected" && Number.isFinite(window.utilization) && window.utilization < 1;
 }
 
-function windowObservedAt(window: RateLimitWindow, fallbackMs: number): number {
-  return typeof window.observedAt === "number" && Number.isFinite(window.observedAt) && window.observedAt > 0
-    ? Math.min(window.observedAt, fallbackMs)
-    : fallbackMs;
+function isObservationTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function persistedObservedAt(observedAt: unknown, updatedAt: number): number {
+  return isObservationTime(observedAt) ? Math.min(observedAt, updatedAt) : updatedAt;
 }
 
 interface ActiveFetchedWindow {
@@ -347,7 +349,6 @@ export function createObservedQuotaStore({
       const state = ensureState(vendor, at);
       const valid = validRateLimitWindows(info);
       const activeWindows = valid.filter(([, w]) => w.resetsAt <= 0 || w.resetsAt * 1000 > at);
-      const infoFallbackReset = info.resetsAt === null ? null : futureSeconds(info.resetsAt, at);
       let sawExhaustedWindow = false;
       const clearedWindows = new Set<string>();
       for (const [key, w] of activeWindows) {
@@ -355,7 +356,7 @@ export function createObservedQuotaStore({
           sawExhaustedWindow = true;
           const existing = state.windows.get(key);
           if (existing !== undefined && existing.observedAt > at) continue;
-          const resetsAt = futureSeconds(w.resetsAt, at) ?? infoFallbackReset;
+          const resetsAt = futureSeconds(w.resetsAt, at);
           state.windows.set(key, {
             source: "rate_limit",
             resetsAt,
@@ -377,8 +378,8 @@ export function createObservedQuotaStore({
         }
         return;
       }
-      if (isQuotaExhausted(info, at)) {
-        const resetsAt = infoFallbackReset;
+      if (!valid.some(([, w]) => isRateLimitWindowExhausted(w)) && isQuotaExhausted(info, at)) {
+        const resetsAt = info.resetsAt === null ? null : futureSeconds(info.resetsAt, at);
         if (state.unscoped === null || at >= state.unscoped.observedAt) {
           state.unscoped = {
             source: "rate_limit",
@@ -499,19 +500,15 @@ export function createObservedQuotaStore({
       }
       const hydrated = new Set<AgentVendor>();
       for (const entry of entries) {
-        const valid = validRateLimitWindows(entry.rateLimit);
-        const exhaustedWindows = valid.filter(
-          ([, w]) => (w.resetsAt <= 0 || w.resetsAt * 1000 > at) && isRateLimitWindowExhausted(w),
-        );
-        const infoFallbackReset = entry.rateLimit.resetsAt === null ? null : futureSeconds(entry.rateLimit.resetsAt, at);
+        const exhaustedWindows = validRateLimitWindows(entry.rateLimit).filter(([, w]) => isRateLimitWindowExhausted(w));
         if (exhaustedWindows.length > 0) {
           const state = ensureState(entry.vendor, at);
           const allowedMap = latestAllowedByVendor.get(entry.vendor);
           let changed = false;
           for (const [key, w] of exhaustedWindows) {
-            const observedAt = windowObservedAt(w, entry.updatedAt);
+            const observedAt = persistedObservedAt(w.observedAt, entry.updatedAt);
             if ((allowedMap?.get(key) ?? -Infinity) > observedAt) continue;
-            const resetsAt = futureSeconds(w.resetsAt, at) ?? infoFallbackReset;
+            const resetsAt = w.resetsAt > 0 ? w.resetsAt : null;
             const expiresAt = resetsAt === null ? observedAt + fallbackTtlMs : resetsAt * 1000;
             if (expiresAt <= at) continue;
             const existing = state.windows.get(key);
@@ -526,12 +523,13 @@ export function createObservedQuotaStore({
           continue;
         }
         if (!isQuotaExhausted(entry.rateLimit, at)) continue;
-        const resetsAt = infoFallbackReset;
-        const expiresAt = resetsAt === null ? entry.updatedAt + fallbackTtlMs : resetsAt * 1000;
+        const resetsAt = entry.rateLimit.resetsAt;
+        const observedAt = persistedObservedAt(entry.rateLimit.observedAt, entry.updatedAt);
+        const expiresAt = resetsAt === null ? observedAt + fallbackTtlMs : resetsAt * 1000;
         if (expiresAt <= at) continue;
         const state = ensureState(entry.vendor, at);
-        if (state.unscoped !== null && state.unscoped.observedAt >= entry.updatedAt) continue;
-        state.unscoped = { source: "rate_limit", reason: null, resetsAt, observedAt: entry.updatedAt, expiresAt };
+        if (state.unscoped !== null && state.unscoped.observedAt >= observedAt) continue;
+        state.unscoped = { source: "rate_limit", reason: null, resetsAt, observedAt, expiresAt };
         commitState(entry.vendor, state);
         hydrated.add(entry.vendor);
       }
@@ -660,7 +658,8 @@ function parsePersistedRateLimit(rawJson: string): RateLimitInfo | null {
     if (isValidRateLimitWindow(value)) windows[key] = value;
   }
   const resetsAt = typeof obj.resetsAt === "number" && Number.isFinite(obj.resetsAt) ? obj.resetsAt : null;
-  return { status: obj.status, resetsAt, windows };
+  const observedAt = isObservationTime(obj.observedAt) ? obj.observedAt : undefined;
+  return { status: obj.status, resetsAt, windows, ...(observedAt === undefined ? {} : { observedAt }) };
 }
 
 export function loadPersistedSessionRateLimits(db: Db): PersistedSessionRateLimit[] {

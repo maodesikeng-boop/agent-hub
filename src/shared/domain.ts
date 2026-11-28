@@ -598,6 +598,7 @@ export interface RateLimitInfo {
   status: string;
   resetsAt: number | null;
   windows: Record<string, RateLimitWindow>;
+  observedAt?: number;
 }
 
 export interface ApiRetryInfo {

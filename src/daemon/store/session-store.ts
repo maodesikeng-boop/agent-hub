@@ -91,23 +91,24 @@ function isWindowExhausted(w: RateLimitWindow): boolean {
   return w.utilization >= 1;
 }
 
-function validObservedAt(w: RateLimitWindow): number | null {
-  return typeof w.observedAt === "number" && Number.isFinite(w.observedAt) && w.observedAt > 0 ? w.observedAt : null;
+function validObservedAt({ observedAt }: RateLimitInfo | RateLimitWindow): number | null {
+  return typeof observedAt === "number" && Number.isFinite(observedAt) && observedAt > 0 ? observedAt : null;
 }
 
-function isWindowUnexpired(w: RateLimitWindow, parentResetsAt: number | null, prevUpdatedAt: number, nowMs: number): boolean {
+function isWindowUnexpired(w: RateLimitWindow, prevUpdatedAt: number, nowMs: number): boolean {
   if (w.resetsAt > 0) return w.resetsAt * 1000 > nowMs;
-  if (typeof parentResetsAt === "number" && Number.isFinite(parentResetsAt) && parentResetsAt > 0) {
-    return parentResetsAt * 1000 > nowMs;
-  }
   return (validObservedAt(w) ?? prevUpdatedAt) + OBSERVED_QUOTA_FALLBACK_TTL_MS > nowMs;
 }
 
-function stampTimelessExhaustedWindows(info: RateLimitInfo, nowMs: number): RateLimitInfo {
+function stampTimelessRejections(info: RateLimitInfo, nowMs: number): RateLimitInfo {
   const rawWindows = info.windows as unknown;
   if (typeof rawWindows !== "object" || rawWindows === null || Array.isArray(rawWindows)) return info;
+  const entries = Object.entries(rawWindows as Record<string, unknown>);
+  if (entries.length === 0 && info.status === "rejected" && info.resetsAt === null && validObservedAt(info) === null) {
+    return { ...info, observedAt: nowMs };
+  }
   let stamped: Record<string, RateLimitWindow> | null = null;
-  for (const [key, value] of Object.entries(rawWindows as Record<string, unknown>)) {
+  for (const [key, value] of entries) {
     if (!isValidRateLimitWindow(value) || !isWindowExhausted(value) || value.resetsAt > 0 || validObservedAt(value) !== null) {
       continue;
     }
@@ -135,7 +136,7 @@ function mergePersistedRateLimit(
   nowMs: number,
   prevUpdatedAt: number,
 ): RateLimitInfo {
-  const stampedNext = stampTimelessExhaustedWindows(next, nowMs);
+  const stampedNext = stampTimelessRejections(next, nowMs);
   if (prev === null) return stampedNext;
   const rawPrevWindows = prev.windows as unknown;
   if (typeof rawPrevWindows !== "object" || rawPrevWindows === null || Array.isArray(rawPrevWindows)) return stampedNext;
@@ -144,23 +145,11 @@ function mergePersistedRateLimit(
     typeof rawNextWindows === "object" && rawNextWindows !== null && !Array.isArray(rawNextWindows)
       ? { ...(rawNextWindows as Record<string, RateLimitWindow>) }
       : {};
-  const prevResetFromOverwrittenWindow =
-    typeof prev.resetsAt === "number" &&
-    Number.isFinite(prev.resetsAt) &&
-    prev.resetsAt > 0 &&
-    Object.entries(rawPrevWindows as Record<string, unknown>).some(
-      ([key, value]) =>
-        Object.prototype.hasOwnProperty.call(nextWindows, key) &&
-        isValidRateLimitWindow(value) &&
-        value.resetsAt === prev.resetsAt,
-    );
-  const effectivePrevResetsAt = prevResetFromOverwrittenWindow ? null : prev.resetsAt;
   const carried: Array<[string, RateLimitWindow]> = [];
   for (const [key, value] of Object.entries(rawPrevWindows as Record<string, unknown>)) {
     if (Object.prototype.hasOwnProperty.call(nextWindows, key)) continue;
     if (!isValidRateLimitWindow(value) || !isWindowExhausted(value)) continue;
-    if (!isWindowUnexpired(value, effectivePrevResetsAt, prevUpdatedAt, nowMs)) continue;
-    // Pin the original observation time when carrying a timestamp-less window so row updated_at bumps do not extend fallback TTL.
+    if (!isWindowUnexpired(value, prevUpdatedAt, nowMs)) continue;
     const carriedWindow =
       value.resetsAt > 0 ? value : { ...value, observedAt: validObservedAt(value) ?? prevUpdatedAt };
     carried.push([key, carriedWindow]);
@@ -180,14 +169,6 @@ function mergePersistedRateLimit(
     stampedNext.resetsAt * 1000 > nowMs
   ) {
     resets.push(stampedNext.resetsAt);
-  }
-  if (
-    resets.length === 0 &&
-    typeof effectivePrevResetsAt === "number" &&
-    Number.isFinite(effectivePrevResetsAt) &&
-    effectivePrevResetsAt * 1000 > nowMs
-  ) {
-    resets.push(effectivePrevResetsAt);
   }
   return {
     ...stampedNext,

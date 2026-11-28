@@ -468,6 +468,63 @@ describe("hub models quota inventory", () => {
     expect(afterLegacyRestart.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db), afterOriginalExpiry)).toBe(0);
     expect(afterLegacyRestart.getActive("codex", afterOriginalExpiry)).toBeNull();
   });
+
+  it("does not borrow a rejected 5h window's reset to revive an expired 7d rejection on restart", () => {
+    const expiry = NOW + OBSERVED_QUOTA_FALLBACK_TTL_MS;
+    let at = NOW;
+    const sessions = createSessionStore(f.db, { now: () => at });
+    sessions.update(f.pm.sessionId, { rateLimit: {
+      status: "rejected", resetsAt: null,
+      windows: { seven_day: { status: "rejected", utilization: 1, resetsAt: 0 } },
+    } });
+    at += 10 * 60_000;
+    const row = sessions.update(f.pm.sessionId, { rateLimit: {
+      status: "rejected", resetsAt: CHINA_RESET,
+      windows: { five_hour: { status: "rejected", utilization: 1, resetsAt: CHINA_RESET } },
+    } });
+    expect(row.rateLimit).toMatchObject({ resetsAt: CHINA_RESET, windows: { seven_day: { observedAt: NOW } } });
+
+    const restarted = createObservedQuotaStore({ db: f.db, now: () => at });
+    at = expiry;
+    expect(restarted.hydrateFromRateLimits(loadPersistedSessionRateLimits(f.db))).toBe(1);
+    expect(restarted.getActive("claude")).toMatchObject({ rejectedWindows: ["five_hour"], resetsAt: CHINA_RESET });
+
+    const live = createObservedQuotaStore();
+    live.observeRateLimit("claude", row.rateLimit!, NOW);
+    expect(live.getActive("claude", expiry - 1)?.rejectedWindows).toEqual(["five_hour", "seven_day"]);
+    expect(live.getActive("claude", expiry)?.rejectedWindows).toEqual(["five_hour"]);
+
+    const partial = sessions.update(f.pm.sessionId, { rateLimit: { status: "allowed", resetsAt: null, windows: {} } });
+    expect(Object.keys(partial.rateLimit!.windows)).toEqual(["five_hour"]);
+
+    const fetched: QuotaResponse = { groups: [{ vendor: "claude", id: "claude", windows: {
+      five_hour: { status: "allowed", utilization: 0, resetsAt: CHINA_RESET },
+    } }] };
+    expect(restarted.reconcileFetched("claude", fetched, at)).toBe("cleared");
+    expect(restarted.getActive("claude")).toBeNull();
+  });
+
+  it("does not restart the TTL of a windowless rejection when the session exits", () => {
+    const expiry = NOW + OBSERVED_QUOTA_FALLBACK_TTL_MS;
+    let at = NOW;
+    const sessions = createSessionStore(f.db, { now: () => at });
+    sessions.update(f.pm.sessionId, { rateLimit: { status: "rejected", resetsAt: null, windows: {} } });
+    at += 10 * 60_000;
+    const ended = sessions.update(f.pm.sessionId, { pid: null, status: "ended" });
+    expect(ended.updatedAt).toBe(at);
+
+    const persisted = loadPersistedSessionRateLimits(f.db);
+    at = expiry;
+    const restartedLate = createObservedQuotaStore({ db: f.db, now: () => at });
+    expect(restartedLate.hydrateFromRateLimits(persisted)).toBe(0);
+    expect(restartedLate.getActive("claude")).toBeNull();
+
+    at = expiry - 1;
+    const restartedEarly = createObservedQuotaStore({ db: f.db, now: () => at });
+    expect(restartedEarly.hydrateFromRateLimits(persisted)).toBe(1);
+    expect(restartedEarly.getActive("claude")).toMatchObject({ observedAt: NOW, expiresAt: expiry, resetsAt: null });
+    expect(ended.rateLimit?.observedAt).toBe(NOW);
+  });
 });
 
 describe("multi-window rate-limit preservation", () => {
