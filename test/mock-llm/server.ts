@@ -62,7 +62,7 @@ function flattenTextParts(value: unknown): string {
   return parts.join("\n");
 }
 
-function extractLastUserText(dialect: MockLlmDialect, body: unknown): string {
+export function extractLastUserText(dialect: MockLlmDialect, body: unknown): string {
   if (!isRecord(body)) return "";
   if (dialect === "anthropic-messages" || dialect === "openai-chat-completions") {
     const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -88,6 +88,40 @@ function extractLastUserText(dialect: MockLlmDialect, body: unknown): string {
     }
   }
   return "";
+}
+
+export function extractSystemText(dialect: MockLlmDialect, body: unknown): string {
+  if (!isRecord(body)) return "";
+  if (dialect === "anthropic-messages") {
+    return flattenTextParts(body.system);
+  }
+  if (dialect === "openai-responses") {
+    const parts: string[] = [];
+    const instructions = flattenTextParts(body.instructions);
+    if (instructions !== "") parts.push(instructions);
+    const input = Array.isArray(body.input) ? body.input : [];
+    for (const item of input) {
+      if (isRecord(item) && (item.role === "system" || item.role === "developer")) {
+        const text = flattenTextParts(item.content);
+        if (text !== "") parts.push(text);
+      }
+    }
+    return parts.join("\n");
+  }
+  if (dialect === "openai-chat-completions") {
+    const parts: string[] = [];
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    for (const m of messages) {
+      if (isRecord(m) && (m.role === "system" || m.role === "developer")) {
+        const text = flattenTextParts(m.content);
+        if (text !== "") parts.push(text);
+      }
+    }
+    return parts.join("\n");
+  }
+  const rawSystem = body.systemInstruction ?? body.system_instruction;
+  if (isRecord(rawSystem)) return flattenTextParts(rawSystem.parts ?? rawSystem.text);
+  return flattenTextParts(rawSystem);
 }
 
 function resolveUsage(usage?: MockLlmUsage): Required<MockLlmUsage> {
@@ -674,13 +708,17 @@ export async function createMockLlmServer(options: MockLlmServerOptions = {}): P
   const selectTurn = (dialect: MockLlmDialect, body: unknown): MockLlmTurn => {
     if (script.matchers && script.matchers.length > 0) {
       const lastUser = extractLastUserText(dialect, body);
+      const systemText = extractSystemText(dialect, body);
       for (let i = 0; i < script.matchers.length; i++) {
         if (consumedMatchers.has(i)) continue;
         const matcher = script.matchers[i]!;
-        if (lastUser.includes(matcher.whenLastUserContains)) {
-          if (matcher.once) consumedMatchers.add(i);
-          return matcher.turn;
-        }
+        const hasUserFilter = matcher.whenLastUserContains !== undefined;
+        const hasSystemFilter = matcher.whenSystemContains !== undefined;
+        if (!hasUserFilter && !hasSystemFilter) continue;
+        if (hasUserFilter && !lastUser.includes(matcher.whenLastUserContains!)) continue;
+        if (hasSystemFilter && !systemText.includes(matcher.whenSystemContains!)) continue;
+        if (matcher.once) consumedMatchers.add(i);
+        return matcher.turn;
       }
     }
     if (script.turns && turnCursor < script.turns.length) {
