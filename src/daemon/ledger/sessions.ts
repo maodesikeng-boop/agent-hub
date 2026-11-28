@@ -1,4 +1,5 @@
 import type { TurnId } from "../../shared/turn.ts";
+import type { StopId } from "../../shared/ledger.ts";
 import type { RecoveryResend } from "./turns.ts";
 import { randomUUID } from "node:crypto";
 import type {
@@ -45,6 +46,8 @@ export interface LiveSession {
   /** Cached code point count so each delta does not re-count the whole string. */
   streamingChars?: number;
   toolStepAt?: number;
+  stopId?: StopId | null;
+  settledStopId?: StopId;
 }
 
 interface LiveTool {
@@ -130,6 +133,9 @@ export const clearStreaming = (l: LiveSession) => {
 };
 
 export const idle = (l: LiveSession) => {
+  if (l.stopId != null) {
+    l.settledStopId = l.settledStopId === undefined ? l.stopId : Math.max(l.settledStopId, l.stopId);
+  }
   l.activity = "idle";
   l.currentTool = null;
   l.apiRetry = null;
@@ -137,6 +143,7 @@ export const idle = (l: LiveSession) => {
   l.stepStartedAt = null;
   l.openTools = [];
   l.toolStepAt = undefined;
+  l.stopId = null;
   clearStreaming(l);
 };
 
@@ -248,6 +255,8 @@ export function createLedgerSessions(ctx: LedgerContext, onForget?: (id: Session
       stepStartedAt: l.stepStartedAt ?? null,
       lastEventAt: row.lastEventAt,
       ...(l.streamingText ? { streamingText: l.streamingText } : {}),
+      ...(l.stopId != null ? { stopId: l.stopId } : {}),
+      ...(l.settledStopId !== undefined ? { settledStopId: l.settledStopId } : {}),
     };
   };
 

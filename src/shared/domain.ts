@@ -716,6 +716,8 @@ export interface AgentSessionRow {
 
 export type SessionActivity = "idle" | "working" | "stopping" | "preparing" | "background";
 
+export type StopId = number;
+
 export interface SessionState {
   sessionId: SessionId;
   conversationId: ConversationId | null;
@@ -737,6 +739,10 @@ export interface SessionState {
   lastEventAt: number | null;
   /** The session's running turn; null when idle, absent from daemons older than the turn ledger. */
   activeTurnId?: TurnId | null;
+  /** Active stop request id while activity is stopping. */
+  stopId?: StopId | null;
+  /** Highest stopId already settled for this session. */
+  settledStopId?: StopId;
 }
 
 export const HEALTH_MODULES = ["store", "actions", "driver", "ui-server", "agent-api"] as const;

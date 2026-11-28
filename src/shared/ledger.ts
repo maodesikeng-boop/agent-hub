@@ -40,6 +40,7 @@ import type {
   ProjectId,
   RouterItemId,
   SessionId,
+  StopId,
   TaskGraphId,
   TaskNodeKey,
   WorkerRecord,
@@ -269,10 +270,23 @@ export interface HubCallContext {
 
 export type GraphPrTarget = { cwd: string; branch: string } | { cwd: string; prUrl: string };
 
+export type { StopId };
+
+export interface StopEvent {
+  readonly conversationId: ConversationId;
+  readonly sessionId: SessionId;
+  readonly stopId?: StopId;
+}
+
+export interface StopSettlementState {
+  readonly driverBusy: boolean;
+  readonly setupActive: boolean;
+}
+
 export interface Ledger extends LedgerHandoverWork {
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   composerTarget(conversationId: ConversationId): ComposerTarget;
-  requestStop(conversationId: ConversationId): void;
+  requestStop(conversationId: ConversationId): StopId | null | void;
   endWorkerConversation(conversationId: ConversationId): void;
   rewindLastUserMessage(conversationId: ConversationId): Message | null;
   snapshot(): LedgerSnapshot;
@@ -356,7 +370,12 @@ export interface Ledger extends LedgerHandoverWork {
   onReviewVerified(params: ReviewVerifyParams, result: ReviewVerifyResult): void;
 
   syncPersonaFiles(): SyncPersonaFilesResult;
-  onStopRequested(listener: (event: { conversationId: ConversationId; sessionId: SessionId }) => void): Unsubscribe;
+  onStopRequested(listener: (event: StopEvent) => void): Unsubscribe;
+  /**
+   * Precondition: stopId came from a prior StopEvent for sessionId and driver.interrupt(sessionId) has resolved.
+   * Postcondition: when sessionId is still stopping for stopId and neither driver, setup, nor pending event drain is active, releases any open background wait, ends any orphaned running turn, and transitions live state to idle.
+   */
+  settleStop?(sessionId: SessionId, stopId: StopId, state: StopSettlementState): void;
   onActionEnqueued(listener: (action: AnyActionRow) => void): Unsubscribe;
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;
   settleDriverEvents(): Promise<void>;

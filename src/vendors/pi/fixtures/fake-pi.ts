@@ -51,6 +51,7 @@ export interface FakePiScript {
   writeSessionFile?: boolean;
   turns?: FakePiTurnScript[];
   ignoreStdinEnd?: boolean;
+  ignoreSigint?: boolean;
 }
 
 export interface FakePiLogEntry {
@@ -125,6 +126,7 @@ if (typeof script.exitBeforeReadyCode === "number") {
 
 process.on("SIGINT", () => {
   appendLog({ kind: "signal", signal: "SIGINT" });
+  if (script.ignoreSigint) return;
   if (currentTurn?.turnScript.abortOnSigint) abortCurrentTurn();
   process.stdout.write("", () => process.exit(0));
 });

@@ -108,6 +108,7 @@ import { resolveUpload } from "./uploads.ts";
 import { createWatchCommandRunner } from "./watches/launch.ts";
 import { createWatchRunner, type WatchRunner } from "./watches/runner.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
+import { wireSessionStopHandler } from "./stop-handler.ts";
 import { createSkillFiles } from "./skill-files.ts";
 import { DaemonAlreadyRunningError, acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { StartupError } from "./startup-error.ts";
@@ -246,7 +247,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 关闭${what}时出错：${error instanceof Error ? error.message : String(error)}`);
     }
   };
+  let closing = false;
   const shutdown = async () => {
+    closing = true;
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
     const closingReload = parts.selfReload ? step("热重启", () => within(parts.selfReload!.close(), PROBE_SHUTDOWN_DRAIN_MS)) : null;
     const closingQuota = parts.quota ? step("额度探测", () => within(parts.quota!.close(), PROBE_SHUTDOWN_DRAIN_MS)) : null;
@@ -621,10 +624,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         if (action.type === "session.end") driver.markEnding?.(action.params.sessionId);
         executor.wake();
       }),
-      ledger.onStopRequested(({ sessionId }) => {
-        setup.cancel(sessionId);
-        driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
-      }),
+      wireSessionStopHandler({ ledger, driver, setup, isClosing: () => closing, log }),
     );
     // Watches belong to PMs, not sessions, so they resume before any session starts and keep their deadlines.
     const watchRunner = createWatchRunner({

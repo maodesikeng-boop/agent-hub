@@ -20,6 +20,7 @@ import {
   type PmId,
   type TaskGraph,
   type StateSnapshot,
+  type StopConversationResponse,
   type WsServerMessage,
   type WorkerId,
   type WorkerPick,
@@ -89,7 +90,7 @@ export class DeviceHub {
   private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   private readonly rewindBarriers = new Map<ConversationId, number>();
   private readonly taskGraphListeners = new Set<(graph: TaskGraph) => void>();
-  private readonly stopRequests = new Map<ConversationId, Promise<void>>();
+  private readonly stopRequests = new Map<ConversationId, Promise<StopConversationResponse | void>>();
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -503,7 +504,7 @@ export class DeviceHub {
     }
   };
 
-  stop = (conversationId: ConversationId): Promise<void> => {
+  stop = (conversationId: ConversationId): Promise<StopConversationResponse | void> => {
     for (const flight of this.inFlightPosts.values()) {
       if (flight.conversationId === conversationId && flight.after === "none") flight.after = "stop";
     }

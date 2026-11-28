@@ -47,7 +47,7 @@ export interface SessionDriverHost<
   markHealthy(sessionId: SessionId): void;
   setPersonaSeen(st: TState, revision: number | null): void;
   clearTimer(st: TState, key: DriverTimerKey): void;
-  sigintForInterrupt(st: TState, proc: TProc, escalateTimer?: "none" | "interruptTimer" | "killTimer"): void;
+  sigintForInterrupt(st: TState, proc: TProc): void;
   forceKillProc(st: TState, proc: TProc): void;
   resolveInterrupt(st: TState): void;
   afterTurn(st: TState, proc: TProc): void;
@@ -84,7 +84,7 @@ export abstract class VendorSessionDriver<
       markHealthy: (sessionId) => this.markHealthy(sessionId),
       setPersonaSeen: (st, revision) => this.setPersonaSeen(st, revision),
       clearTimer: (st, key) => this.clearTimer(st, key),
-      sigintForInterrupt: (st, proc, escalateTimer) => this.sigintForInterrupt(st, proc, escalateTimer),
+      sigintForInterrupt: (st, proc) => this.sigintForInterrupt(st, proc),
       forceKillProc: (st, proc) => this.forceKillProc(st, proc),
       resolveInterrupt: (st) => this.resolveInterrupt(st),
       afterTurn: (st, proc) => this.afterTurn(st, proc),

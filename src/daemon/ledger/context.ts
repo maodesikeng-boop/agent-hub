@@ -2,10 +2,10 @@
 import { hostname } from "node:os";
 import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
 import type { Change, ChangeType, ComposerCommand } from "../../shared/api.ts";
-import type { AgentSessionRow, ConversationId, HealthModule, SessionId } from "../../shared/domain.ts";
+import type { AgentSessionRow, HealthModule, SessionId } from "../../shared/domain.ts";
 import { checkHubLimit, checkHubLimitAmount, formatHubLimitViolations, type HubLimitId } from "../../shared/hub-limits.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
+import type { LedgerErrorCode, ResolveFolder, StopEvent } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
 import { modelLabel, modelShortLabel, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
@@ -20,7 +20,7 @@ import type { ModelCatalogs } from "../driver/model-catalog.ts";
 import { kernelReadonlySandboxAvailable } from "../driver/kernel-readonly.ts";
 import { osSandboxAvailable } from "../driver/write-scope.ts";
 
-export type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
+export type { StopEvent };
 
 /** Side effects collected inside a transaction; dropped entirely on rollback. */
 export interface Pending {

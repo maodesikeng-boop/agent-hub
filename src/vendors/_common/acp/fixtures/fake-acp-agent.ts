@@ -51,6 +51,8 @@ export interface FakeAcpTurnScript {
   usageUpdate?: { used: number; size: number };
   waitForCancel?: boolean;
   ignoreCancel?: boolean;
+  /** Emits a duplicate failed tool_call_update after session/prompt resolves on cancel, matching real agy 1.5.18. */
+  postCancelToolUpdate?: FakeAcpToolStep;
   sleepMs?: number;
   spawnChildPidFile?: string;
   crashExitCode?: number;
@@ -657,7 +659,39 @@ const app = agent({ name: "fake-acp-agent" })
         await playToolCall(ctx.client, sessionId, tool);
       }
       await playReply(ctx.client, sessionId, turnScript);
-      return await endScriptedTurn(turnScript, cancelCtrl);
+      const result = await endScriptedTurn(turnScript, cancelCtrl);
+      if (result.stopReason === "cancelled" && turnScript.postCancelToolUpdate) {
+        const lateTool = turnScript.postCancelToolUpdate;
+        setImmediate(() => {
+          void ctx.client
+            .notify(methods.client.session.update, {
+              sessionId,
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId: lateTool.toolCallId,
+                title: lateTool.title,
+                ...(lateTool.name !== undefined ? { name: lateTool.name } : {}),
+                ...(lateTool.kind !== undefined ? { kind: lateTool.kind } : {}),
+                ...(lateTool.rawInput !== undefined ? { rawInput: lateTool.rawInput } : {}),
+                status: "failed",
+                rawOutput: lateTool.rawOutput ?? { output: "" },
+              },
+            })
+            .then(() =>
+              ctx.client.notify(methods.client.session.update, {
+                sessionId,
+                update: {
+                  sessionUpdate: "available_commands_update",
+                  availableCommands: [{ name: "post-cancel-fence", description: "fence" }],
+                },
+              }),
+            )
+            .finally(() => {
+              writeLog({ event: "post_cancel_tool_update_sent", sessionId, toolCallId: lateTool.toolCallId });
+            });
+        });
+      }
+      return result;
     } finally {
       activeTurnAbort.delete(sessionId);
     }

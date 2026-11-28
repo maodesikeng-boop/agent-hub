@@ -15,6 +15,7 @@ import {
   type FilesResponse,
   type PostMessageResponse,
   type RewindMessageResponse,
+  type StopConversationResponse,
 } from "../../shared/index.ts";
 import {
   FILE_ACTIONS_UNAVAILABLE_MESSAGE,
@@ -138,8 +139,8 @@ export function registerConversationRoutes(routes: FastifyInstance, c: UiCtx): v
   registerFileActionRoutes(routes, c);
 
   routes.post("/api/conversations/:id/stop", async (req, reply) => {
-    ledger.requestStop(idParam(req.params, "conversation id"));
-    return reply.code(202).send();
+    const stopId = ledger.requestStop(idParam(req.params, "conversation id")) ?? null;
+    return reply.code(202).send({ stopId } satisfies StopConversationResponse);
   });
 
   routes.post("/api/conversations/:id/end", async (req, reply) => {
