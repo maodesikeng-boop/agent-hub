@@ -227,11 +227,14 @@ None.
 
 ### Known static-analysis and process-cleanup boundaries
 
-To keep local selection fast and maintainable without adding speculative runtime emulation, three narrow edge cases are explicitly out of scope for `pnpm test:related` and remain covered by cloud CI's full-suite shards (`check (ubuntu 1/4..4/4)`):
+The following cases are outside the scope of `pnpm test:related`. The full suite still runs in cloud CI (`check (ubuntu 1/4..4/4)`):
 
 1. **Computed static class fields resolving to `"prototype"` (`class { static [KEY] = ... }`)**: Static AST purity analysis does not evaluate arbitrary computed static property keys to detect the JavaScript `TypeError` thrown if a computed static field name evaluates to `"prototype"` at runtime.
 2. **Dynamic template `new URL(...)` runtime `../` directory escape**: Dynamic template URL fallback scopes file dependencies to the normalized static prefix directory and does not assume runtime interpolated values inject `../` traversal segments to escape outside that prefix directory.
 3. **Tests spawning `detached: true` orphan processes**: `scripts/test-related.ts` waits for and reaps Vitest and every worker in Vitest's own process group (`-pgid` on POSIX, `taskkill /t /f` on Windows) before removing its temporary sandbox-skip directory, but does not track separate process groups explicitly detached by test code via `spawn(..., { detached: true })` (which remain the responsibility of the test and `test/spawn-guard.ts`).
+4. **Vite root-relative module imports (`/...`)**: The static resolver does not follow these specifiers. A scan of all 1,645 tracked JavaScript and TypeScript files at `9371af7e` found zero uses.
+
+**Whole-file queries mixed with ordinary re-exports**: If a module uses a whole-file query such as `?raw` and also re-exports ordinary symbols, the resolver propagates changes from the query target through that module as a whole-file dependency. Any change to the target selects affected consumers, even if that also selects tests for ordinary re-exports in the same module. Ordinary imports without a query still use symbol-level selection when they do not pass through a whole-file dependency.
 
 ---
 
