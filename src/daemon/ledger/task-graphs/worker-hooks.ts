@@ -374,7 +374,7 @@ export function workerGraphWorkspacePlan(g: TaskGraphCtx, workerId: WorkerId): S
 
 export function workerGraphUpstreamCommit(g: TaskGraphCtx, workerId: WorkerId): string | null {
   const input = activeStepPlanInput(g, workerId);
-  return input === undefined ? null : upstreamDeliveredCommit(input);
+  return input === undefined ? null : upstreamDeliveredCommit(input, g.db);
 }
 
 export function workerGraphStatus(g: TaskGraphCtx, workerId: WorkerId, sessionId: SessionId): WorkerHubStatus["taskGraph"] | undefined {
