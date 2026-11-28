@@ -295,8 +295,11 @@ export const FETCHED_QUOTA_TIMEOUT_MS = 20_000;
 export const CLAUDE_QUOTA_ACCOUNT_CACHE_MAX_ENTRIES = 1;
 export const OBSERVED_QUOTA_FALLBACK_TTL_MS = 15 * 60_000;
 export const HUB_MODELS_QUOTA_WAIT_MS = 1_500;
+export const HUB_MODELS_REFRESH_QUOTA_WAIT_MS = 8_000;
 export const OBSERVED_QUOTA_CACHE_MAX = 16;
 export const MAX_QUOTA_REASON_CHARS = 160;
+export const MAX_CODEX_MODELS_CACHE_BYTES = 4 * 1024 * 1024;
+export const CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const UPDATE_RELEASE_REPO = "maodesikeng-boop/agent-hub";
 export const UPDATE_CHECK_TTL_MS = 60 * 60_000;

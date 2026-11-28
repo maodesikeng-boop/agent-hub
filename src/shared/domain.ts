@@ -591,12 +591,14 @@ export interface RateLimitWindow {
   utilization: number;
   resetsAt: number;
   status: string;
+  observedAt?: number;
 }
 
 export interface RateLimitInfo {
   status: string;
   resetsAt: number | null;
   windows: Record<string, RateLimitWindow>;
+  observedAt?: number;
 }
 
 export interface ApiRetryInfo {
@@ -638,9 +640,18 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?:
 }
 
 export function clearRateLimitRejection(info: RateLimitInfo): RateLimitInfo | null {
+  const rawWindows = info.windows as unknown;
+  if (typeof rawWindows !== "object" || rawWindows === null || Array.isArray(rawWindows)) return null;
   const windows: Record<string, RateLimitWindow> = {};
-  for (const [k, w] of Object.entries(info.windows)) {
-    if (w) windows[k] = w.status === RATE_LIMIT_REJECTED ? { ...w, status: "allowed" } : w;
+  for (const [k, w] of Object.entries(rawWindows as Record<string, RateLimitWindow | null | undefined>)) {
+    if (w && typeof w === "object") {
+      if (w.status === RATE_LIMIT_REJECTED) {
+        const { observedAt: _ignored, ...rest } = w;
+        windows[k] = { ...rest, status: "allowed" };
+      } else {
+        windows[k] = w;
+      }
+    }
   }
   if (Object.keys(windows).length === 0) return null;
   return { ...info, status: "allowed", windows };
@@ -649,8 +660,11 @@ export function clearRateLimitRejection(info: RateLimitInfo): RateLimitInfo | nu
 export function exhaustRateLimitInfo(info: RateLimitInfo | null | undefined): RateLimitInfo {
   if (!info) return { status: RATE_LIMIT_REJECTED, resetsAt: null, windows: {} };
   const windows: Record<string, RateLimitWindow> = {};
-  for (const [k, w] of Object.entries(info.windows)) {
-    if (w && Number.isFinite(w.utilization)) windows[k] = { ...w };
+  const rawWindows = info.windows as unknown;
+  if (typeof rawWindows === "object" && rawWindows !== null && !Array.isArray(rawWindows)) {
+    for (const [k, w] of Object.entries(rawWindows as Record<string, RateLimitWindow | null | undefined>)) {
+      if (w && typeof w === "object" && Number.isFinite(w.utilization)) windows[k] = { ...w };
+    }
   }
   const entries = Object.entries(windows);
   if (entries.length === 0) {

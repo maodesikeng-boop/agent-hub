@@ -38,12 +38,12 @@ import { listenOnRunSocket } from "../run-socket.ts";
 import { unlessAborted } from "../sent-files.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
-import type { QuotaResponse, SelfReloadStatus } from "../../shared/api.ts";
+import type { SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
-import { HUB_MODELS_QUOTA_WAIT_MS, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
-import { mergeVendorQuota, type ObservedQuotaStore } from "../quota/observed-quota.ts";
+import { HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
 import { AGENT_VENDORS, isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
+import { prepareModelQuotas, type AgentApiQuotaOptions } from "./model-quotas.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -71,7 +71,7 @@ export interface AgentApiOptions {
   findTranscript?: (ref: TranscriptRef) => string | null;
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  quota?: { observed: ObservedQuotaStore; get(): Promise<QuotaResponse>; now?: () => number };
+  quota?: AgentApiQuotaOptions;
   sandboxGuard?: RouterSandboxGuard;
   onRouterDispatch?: (
     sessionId: SessionId,
@@ -555,25 +555,6 @@ async function prepareWorkerStart(
   return context;
 }
 
-async function modelQuotas(quota: AgentApiOptions["quota"], vendor: AgentVendor | undefined, signal: AbortSignal) {
-  if (quota === undefined) return undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const fetched = await unlessAborted(Promise.race([
-      quota.get().catch(() => null),
-      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), HUB_MODELS_QUOTA_WAIT_MS); }),
-    ]), signal, () => null);
-    const at = (quota.now ?? Date.now)();
-    const observed = quota.observed.snapshot(at);
-    return Object.fromEntries((vendor === undefined ? AGENT_VENDORS : [vendor]).flatMap((v) => {
-      const entry = mergeVendorQuota(v, observed[v] ?? null, fetched ?? null, at);
-      return entry === undefined ? [] : [[v, entry]];
-    }));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function createPreparation(opts: AgentApiOptions) {
   const { ledger } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
@@ -599,9 +580,10 @@ function createPreparation(opts: AgentApiOptions) {
     if (command === "models") {
       const vendor = isAgentVendor(body.vendor) ? body.vendor : undefined;
       if (body.vendor !== undefined && vendor === undefined) return {};
+      const refresh = body.refresh === true;
       const [modelCatalogs, vendorQuotas] = await Promise.all([
-        opts.models?.list({ refresh: body.refresh === true, ...(vendor ? { vendor } : {}) }),
-        modelQuotas(opts.quota, vendor, signal),
+        opts.models?.list({ refresh, ...(vendor ? { vendor } : {}) }),
+        prepareModelQuotas(opts.quota, vendor, refresh, signal),
       ]);
       return { modelCatalogs, vendorQuotas };
     }

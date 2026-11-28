@@ -1,13 +1,18 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { parse as parseToml } from "@decimalturn/toml-patch";
 import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
+  CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
+  MAX_CODEX_MODELS_CACHE_BYTES,
+  MAX_VENDOR_SYNC_CONFIG_BYTES,
   MODEL_CATALOG_TIMEOUT_MS,
+  PROVIDER_SECRETS_FILE_MAX_BYTES,
   bundledModelCatalog,
   checkModel,
   mergeCatalogEfforts,
@@ -72,36 +77,54 @@ function codexEffortsOf(entry: Record<string, unknown>): string[] | null {
 export function parseCodexModels(raw: unknown): ModelCatalog | null {
   const list = extractCodexModels(raw);
   if (list === null) return null;
-  const models: CatalogModel[] = [];
-  let defaultModel: string | null = null;
-  let defaultModelId: string | null = null;
-  let defaultEfforts: string[] | null = null;
-  for (const item of list) {
+  const parsed: Array<{
+    readonly model: CatalogModel;
+    readonly isDefault: boolean;
+    readonly priority: number | null;
+    readonly index: number;
+  }> = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
     if (entry.hidden === true || entry.visibility === "hide" || entry.visibility === "none") continue;
     const id = nonEmptyString(entry.id) ?? nonEmptyString(entry.model) ?? nonEmptyString(entry.slug);
-    if (id === null || checkModel("codex", id) !== null || models.some((m) => m.id === id)) continue;
+    if (id === null || checkModel("codex", id) !== null || seen.has(id)) continue;
+    seen.add(id);
     const label = truncateChars(
       nonEmptyString(entry.displayName) ?? nonEmptyString(entry.display_name) ?? nonEmptyString(entry.label) ?? id,
       MAX_CATALOG_LABEL_CHARS,
     );
     const description = nonEmptyString(entry.description);
     const efforts = codexEffortsOf(entry);
-    if (entry.isDefault === true && defaultModelId === null) {
-      defaultModel = label;
-      defaultModelId = id;
-      defaultEfforts = efforts;
-    }
-    models.push({
-      id,
-      label,
-      description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS),
-      efforts,
+    const priority = typeof entry.priority === "number" && Number.isFinite(entry.priority) ? entry.priority : null;
+    parsed.push({
+      model: {
+        id,
+        label,
+        description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS),
+        efforts,
+      },
+      isDefault: entry.isDefault === true,
+      priority,
+      index: i,
     });
-    if (models.length === MAX_CATALOG_MODELS) break;
   }
-  if (models.length === 0) return null;
+  if (parsed.length === 0) return null;
+  if (parsed.some((item) => item.priority !== null)) {
+    parsed.sort((a, b) => {
+      const pa = a.priority ?? Number.POSITIVE_INFINITY;
+      const pb = b.priority ?? Number.POSITIVE_INFINITY;
+      return pa !== pb ? pa - pb : a.index - b.index;
+    });
+  }
+  const limited = parsed.slice(0, MAX_CATALOG_MODELS);
+  const chosen = limited.find((item) => item.isDefault) ?? (limited[0]!.priority !== null ? limited[0] : undefined);
+  const models = limited.map((item) => item.model);
+  const defaultModel = chosen?.model.label ?? null;
+  const defaultModelId = chosen?.model.id ?? null;
+  const defaultEfforts = chosen?.model.efforts ?? null;
   const efforts = mergeCatalogEfforts(spec.models.efforts, models, defaultEfforts);
   return { ...bundledModelCatalog("codex"), source: "vendor", efforts, models, defaultEfforts, defaultModel, defaultModelId };
 }
@@ -130,7 +153,12 @@ export class CodexRpcError extends Error {
   }
 }
 
-export function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<unknown[]> {
+interface CodexAppServerOutcome {
+  readonly results: unknown[];
+  readonly remoteRefreshFailed: boolean;
+}
+
+function runCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<CodexAppServerOutcome> {
   const { codexPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   const label = calls.map((c) => c.method).join("、");
   return new Promise((resolve, reject) => {
@@ -148,6 +176,7 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
     const { child, detached } = spawned;
     trackChild(child, "probe:codex-app-server", { detached });
     let stderr = "";
+    let remoteRefreshFailed = false;
     let settled = false;
     let exitTimer: NodeJS.Timeout | undefined;
     const rl = createInterface({ input: child.stdout });
@@ -167,7 +196,7 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
         void killChildAndWait(child).finally(() => reject(error));
         return;
       }
-      void closeAndWaitChild(child, { signal }).finally(() => resolve(results));
+      void closeAndWaitChild(child, { signal }).finally(() => resolve({ results, remoteRefreshFailed }));
     };
     const onAbort = () => finish(new Error("cancelled"));
     signal?.addEventListener("abort", onAbort);
@@ -182,7 +211,9 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
     child.stdin.on("error", () => {});
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
+      const combined = stderr + chunk;
+      if (!remoteRefreshFailed && isCodexRemoteRefreshFailure(combined)) remoteRefreshFailed = true;
+      stderr = combined.slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
       termGroupAfterExit(child);
@@ -226,16 +257,178 @@ export function queryCodexAppServer(options: CodexModelQueryOptions, calls: read
   });
 }
 
+export async function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<unknown[]> {
+  return (await runCodexAppServer(options, calls)).results;
+}
+
 export async function queryCodexModels(options: CodexModelQueryOptions): Promise<unknown> {
   return (await queryCodexAppServer(options, [{ method: "model/list", params: {} }]))[0];
 }
 
-export async function queryCodexCatalog(options: CodexModelQueryOptions): Promise<{ models: unknown; account: unknown }> {
-  const [models, account] = await queryCodexAppServer(options, [
+export interface CodexCatalogQueryResult {
+  models: unknown;
+  account: unknown;
+  degraded?: boolean;
+}
+
+export interface CodexModelsCacheFallbackOptions {
+  codexHome: string;
+  account: unknown;
+  nowMs?: number;
+  maxAgeMs?: number;
+  maxBytes?: number;
+}
+
+const ANSI_ESCAPE = /\u001B\[[0-9;?]*[ -/]*[@-~]/g;
+const CODEX_REMOTE_REFRESH_ERROR = /failed to refresh available models:/i;
+
+export function isCodexRemoteRefreshFailure(stderr: string): boolean {
+  if (stderr === "") return false;
+  return CODEX_REMOTE_REFRESH_ERROR.test(stderr.replace(ANSI_ESCAPE, ""));
+}
+
+type RpcAccountState =
+  | { readonly kind: "chatgpt"; readonly email: string | null }
+  | { readonly kind: "unknown" }
+  | { readonly kind: "ineligible" };
+
+function rpcAccountStateOf(accountResult: unknown): RpcAccountState {
+  if (accountResult === undefined) return { kind: "unknown" };
+  if (typeof accountResult !== "object" || accountResult === null) return { kind: "ineligible" };
+  const inner = (accountResult as { account?: unknown }).account;
+  if (typeof inner !== "object" || inner === null || (inner as { type?: unknown }).type !== "chatgpt") {
+    return { kind: "ineligible" };
+  }
+  return { kind: "chatgpt", email: nonEmptyString((inner as { email?: unknown }).email) };
+}
+
+function decodeJwtEmail(jwt: unknown): string | null {
+  if (typeof jwt !== "string") return null;
+  const parts = jwt.split(".");
+  if (parts.length < 2 || !parts[1]) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    const direct = nonEmptyString(payload.email);
+    if (direct !== null) return direct;
+    const profile = payload["https://api.openai.com/profile"];
+    if (typeof profile === "object" && profile !== null && !Array.isArray(profile)) {
+      return nonEmptyString((profile as Record<string, unknown>).email);
+    }
+  } catch {
+  }
+  return null;
+}
+
+type BoundedFileRead =
+  | { readonly kind: "ok"; readonly text: string; readonly mtimeMs: number }
+  | { readonly kind: "missing" }
+  | { readonly kind: "unreadable" };
+
+function readBoundedFileResult(filePath: string, maxBytes: number, allowEmpty = false): BoundedFileRead {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > maxBytes || (!allowEmpty && st.size <= 0)) return { kind: "unreadable" };
+    if (st.size === 0) return { kind: "ok", text: "", mtimeMs: st.mtimeMs };
+    const buf = Buffer.allocUnsafe(st.size);
+    let offset = 0;
+    while (offset < st.size) {
+      const n = readSync(fd, buf, offset, st.size - offset, offset);
+      if (n <= 0) break;
+      offset += n;
+    }
+    return { kind: "ok", text: buf.subarray(0, offset).toString("utf8"), mtimeMs: st.mtimeMs };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "missing" } : { kind: "unreadable" };
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+    }
+  }
+}
+
+function readBoundedFile(filePath: string, maxBytes: number): { text: string; mtimeMs: number } | null {
+  const res = readBoundedFileResult(filePath, maxBytes);
+  return res.kind === "ok" ? { text: res.text, mtimeMs: res.mtimeMs } : null;
+}
+
+// Require a local ChatGPT auth.json anchor and a verified non-keyring config.toml so keyring accounts cannot reuse a prior account's cache.
+function readCodexAuthOwnership(codexHome: string): { mtimeMs: number; email: string | null } | null {
+  const store = codexCredentialsStore(codexHome);
+  if (store.kind === "unverified" || store.store === "keyring") return null;
+  const file = readBoundedFile(join(codexHome, "auth.json"), PROVIDER_SECRETS_FILE_MAX_BYTES);
+  if (file === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(file.text.replace(/^\uFEFF/, ""));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.auth_mode !== "chatgpt") return null;
+  if (typeof obj.OPENAI_API_KEY === "string" && obj.OPENAI_API_KEY.trim() !== "") return null;
+  const tokens = obj.tokens;
+  const email =
+    typeof tokens === "object" && tokens !== null && !Array.isArray(tokens)
+      ? (decodeJwtEmail((tokens as Record<string, unknown>).id_token) ??
+        decodeJwtEmail((tokens as Record<string, unknown>).access_token))
+      : null;
+  return { mtimeMs: file.mtimeMs, email };
+}
+
+export function readCodexModelsCacheFallback(options: CodexModelsCacheFallbackOptions): unknown | null {
+  const rpcAccount = rpcAccountStateOf(options.account);
+  if (rpcAccount.kind === "ineligible") return null;
+  const auth = readCodexAuthOwnership(options.codexHome);
+  if (auth === null) return null;
+  if (
+    rpcAccount.kind === "chatgpt" &&
+    rpcAccount.email !== null &&
+    auth.email !== null &&
+    rpcAccount.email.toLowerCase() !== auth.email.toLowerCase()
+  ) {
+    return null;
+  }
+  const nowMs = options.nowMs ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? CODEX_MODELS_CACHE_FALLBACK_MAX_AGE_MS;
+  const maxBytes = options.maxBytes ?? MAX_CODEX_MODELS_CACHE_BYTES;
+  const file = readBoundedFile(join(options.codexHome, "models_cache.json"), maxBytes);
+  if (file === null || auth.mtimeMs > file.mtimeMs) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(file.text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const fetchedAt = (parsed as { fetched_at?: unknown }).fetched_at;
+  if (fetchedAt !== undefined) {
+    if (typeof fetchedAt !== "string") return null;
+    const fetchedMs = Date.parse(fetchedAt);
+    if (!Number.isFinite(fetchedMs) || nowMs - fetchedMs > maxAgeMs) return null;
+  } else if (nowMs - file.mtimeMs > maxAgeMs) {
+    return null;
+  }
+  return parseCodexModels(parsed) === null ? null : parsed;
+}
+
+export async function queryCodexCatalog(options: CodexModelQueryOptions): Promise<CodexCatalogQueryResult> {
+  const { results: [models, account], remoteRefreshFailed } = await runCodexAppServer(options, [
     { method: "model/list", params: {} },
     { method: "account/read", params: {}, optional: true },
   ]);
-  return { models, account };
+  if (!remoteRefreshFailed) return { models, account };
+  const env = options.env ?? process.env;
+  const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim() || options.cwd;
+  const codexHome = vendorConfigHome("codex", homeDir, env);
+  const fallback = codexHome === null ? null : readCodexModelsCacheFallback({ codexHome, account });
+  return { models: fallback ?? models, account, degraded: true };
 }
 
 export async function queryCodexSkills(options: CodexModelQueryOptions): Promise<unknown> {
@@ -245,6 +438,7 @@ export async function queryCodexSkills(options: CodexModelQueryOptions): Promise
 
 export const codexCatalogProbe: VendorCatalogProbe = {
   parse: (raw) => parseCodexModels((raw as { models?: unknown } | null)?.models),
+  isDegraded: (raw) => (raw as { degraded?: unknown } | null)?.degraded === true,
   availabilityOf(raw) {
     const read = (raw as { account?: unknown } | null)?.account;
     if (typeof read !== "object" || read === null || !("account" in read)) return "unknown";
@@ -254,28 +448,31 @@ export const codexCatalogProbe: VendorCatalogProbe = {
   },
 };
 
-function codexCredentialsStore(codexHome: string): string | null {
-  let text: string;
+type CodexCredentialsStoreResult =
+  | { readonly kind: "ok"; readonly store: string | null }
+  | { readonly kind: "unverified" };
+
+function codexCredentialsStore(codexHome: string): CodexCredentialsStoreResult {
+  const file = readBoundedFileResult(join(codexHome, "config.toml"), MAX_VENDOR_SYNC_CONFIG_BYTES, true);
+  if (file.kind === "missing") return { kind: "ok", store: null };
+  if (file.kind === "unreadable") return { kind: "unverified" };
+  let parsed: unknown;
   try {
-    text = readFileSync(join(codexHome, "config.toml"), "utf8");
+    parsed = parseToml(file.text.replace(/^\uFEFF/, ""), { integersAsBigInt: false });
   } catch {
-    return null;
+    return { kind: "unverified" };
   }
-  for (const line of text.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("[")) return null;
-    const match = /^cli_auth_credentials_store\s*=\s*(?:"([^"]*)"|'([^']*)')/u.exec(trimmed);
-    if (match) return match[1] ?? match[2] ?? null;
-  }
-  return null;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { kind: "unverified" };
+  const value = (parsed as Record<string, unknown>).cli_auth_credentials_store;
+  return { kind: "ok", store: typeof value === "string" ? value : null };
 }
 
-// auth.json may be absent when cli_auth_credentials_store is keyring or auto.
+// auth.json may be absent when cli_auth_credentials_store is keyring or auto, or when config.toml cannot be verified.
 export function codexAuthFileAvailability(env: NodeJS.ProcessEnv, homeDir: string): VendorAvailability {
   const codexHome = vendorConfigHome("codex", homeDir, env)!;
   if (existsSync(join(codexHome, "auth.json"))) return "available";
   const store = codexCredentialsStore(codexHome);
-  return store === "keyring" || store === "auto" ? "unknown" : "signed_out";
+  return store.kind === "unverified" || store.store === "keyring" || store.store === "auto" ? "unknown" : "signed_out";
 }
 
 export function createCodexCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
