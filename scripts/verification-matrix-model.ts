@@ -1,4 +1,9 @@
 // Canonical VerificationMatrix types, bounds, Zod schema parser, redaction helpers, and deterministic Markdown renderer.
+import { createRequire } from "node:module";
+import { posix } from "node:path";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 import { z } from "zod";
 import { AGENT_VENDORS, vendorLabel, type AgentVendor } from "../src/shared/vendors.ts";
 import type { VendorEndpointSupport } from "../test/mock-llm/types.ts";
@@ -133,7 +138,26 @@ export const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/;
 export const PLACEHOLDER_VALUE_RE = /^(?:unknown|n\/a|na|none|null|undefined|tbd|latest|unverified|manual|ok|passed|local|placeholder|-|\?)$/i;
 export const FORBIDDEN_REFERENCE_RE = new RegExp(`\\b(?:${["open", "claw"].join("")}|${["mag", "pie"].join("")})\\b`, "i");
 const GITHUB_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const MATRIX_LINK_TARGET_RE = /verification-matrix(?:\.(?:md|json))?(?:$|[/?#])/i;
+const MATRIX_LINK_TARGET_RE = /(?:^|\/)verification-matrix(?:\.(?:md|json))?(?:$|\/)/i;
+const releaseMarkdown = unified().use(remarkParse).use(remarkGfm);
+type MarkdownRoot = ReturnType<typeof releaseMarkdown.parse>;
+type MarkdownNode = MarkdownRoot | MarkdownRoot["children"][number];
+const require = createRequire(import.meta.url);
+
+function htmlLinkTargets(html: string): string[] {
+  const { JSDOM } = require("jsdom") as {
+    JSDOM: { fragment(html: string): { querySelectorAll(selector: string): ArrayLike<{ getAttribute(name: string): string | null }> } };
+  };
+  return Array.from(JSDOM.fragment(html).querySelectorAll("a[href]"), (anchor) => anchor.getAttribute("href")!);
+}
+
+function normalizedLinkPath(url: URL): string {
+  try {
+    return posix.normalize(decodeURIComponent(url.pathname));
+  } catch {
+    return url.pathname;
+  }
+}
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -147,21 +171,27 @@ export function isValidReleaseRefForVersion(ref: string, version: string): boole
 }
 
 export function extractMatrixLinkTargets(markdown: string): string[] {
-  const found: string[] = [];
-  const seen = new Set<string>();
-  const record = (raw: string) => {
-    const target = raw.trim().replace(/^<|>$/g, "");
-    if (!target || seen.has(target)) return;
-    if (MATRIX_LINK_TARGET_RE.test(target)) {
-      seen.add(target);
-      found.push(target);
+  const links: string[] = [];
+  const references = new Set<string>();
+  const definitions = new Map<string, string>();
+  const walk = (node: MarkdownNode): void => {
+    if (node.type === "link" && node.url) links.push(node.url);
+    if (node.type === "linkReference" && node.identifier) references.add(node.identifier);
+    if (node.type === "definition" && node.identifier && node.url && !definitions.has(node.identifier)) {
+      definitions.set(node.identifier, node.url);
     }
+    if (node.type === "html" && node.value) links.push(...htmlLinkTargets(node.value));
+    if ("children" in node) for (const child of node.children) walk(child);
   };
-  for (const match of markdown.matchAll(/\]\(([^)\s]+)\)/g)) record(match[1]!);
-  for (const match of markdown.matchAll(/^\s*\[[^\]]+\]:\s*(\S+)/gm)) record(match[1]!);
-  for (const match of markdown.matchAll(/href=["']([^"']+)["']/gi)) record(match[1]!);
-  for (const match of markdown.matchAll(/https?:\/\/[^\s)\]>'"。，；：]+/g)) record(match[0]!);
-  return found;
+  walk(releaseMarkdown.parse(markdown));
+  for (const id of references) {
+    const target = definitions.get(id);
+    if (target) links.push(target);
+  }
+  return [...new Set(links)].filter((target) => {
+    const url = URL.parse(target, "https://github.com/");
+    return url !== null && MATRIX_LINK_TARGET_RE.test(normalizedLinkPath(url));
+  });
 }
 
 export function validateRenderedReleaseMatrixLinks(
@@ -180,11 +210,12 @@ export function validateRenderedReleaseMatrixLinks(
     problems.push("Release downloads template must include a pinned link to docs/verification-matrix.md");
     return problems;
   }
-  const expectedRe = new RegExp(
-    `^https://github\\.com/${escapeRegex(repo)}/blob/${escapeRegex(ref)}/docs/verification-matrix\\.(?:md|json)(?:#[A-Za-z0-9_.-]+)?$`,
-  );
+  const expectedPath = `/${repo}/blob/${ref}/docs/verification-matrix`;
   for (const target of targets) {
-    if (!expectedRe.test(target)) {
+    const url = URL.parse(target);
+    const path = url && normalizedLinkPath(url);
+    if (url?.origin !== "https://github.com" || url.username || url.password || url.search ||
+      (url.hash && !/^#[A-Za-z0-9_.-]+$/.test(url.hash)) || (path !== `${expectedPath}.md` && path !== `${expectedPath}.json`)) {
       problems.push(
         `Release downloads matrix link "${target}" must point to release ref "${ref}" on "${repo}" (expected https://github.com/${repo}/blob/${ref}/docs/verification-matrix.md), not a floating branch or another ref`,
       );
@@ -451,7 +482,7 @@ export function renderVerificationMatrixMarkdown(matrix: VerificationMatrix): st
     "",
     "## Reproduce and update",
     "",
-    "Offline `check` validates schema, commit-bound run references, workflow configs, Markdown sync, and packaged Feishu commands without network access. Pass `--verify-runs` to also query GitHub Actions metadata (`head_sha`, workflow path, and passing job runner platforms) for every recorded CI run.",
+    "Offline `check` validates schema, commit-bound run references, workflow configs, Markdown sync, and packaged Feishu commands without network access. Pass `--verify-runs` to also check the commit, workflow, runner platform, and successful completion of the required test steps against GitHub Actions metadata for each recorded CI run.",
     "",
     "```sh",
     "node scripts/verification-matrix.ts check",

@@ -1,7 +1,9 @@
 // Derives packaged desktop Feishu CLI paths from actual packaging scripts and Tauri configs so README cannot drift.
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parseSync } from "oxc-parser";
 import {
+  DAEMON_SOURCE_SUBDIRS,
   FEISHU_CLI_ENTRY_FILE,
   FEISHU_SOURCE_SUBDIR,
   REPO_ROOT,
@@ -36,6 +38,24 @@ function requireMatch(source: string, pattern: RegExp, description: string): str
   return match[1];
 }
 
+function stagesFeishuSource(stageCommon: string, feishuSubdir: string): boolean {
+  const { program, errors } = parseSync("stage-runtime-common.ts", stageCommon);
+  if (errors.length > 0) throw new Error(`Unable to parse scripts/stage-runtime-common.ts: ${errors[0]!.message}`);
+  for (const statement of program.body) {
+    const declaration = statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+    if (declaration?.type !== "VariableDeclaration") continue;
+    for (const { id, init } of declaration.declarations) {
+      if (id.type !== "Identifier" || id.name !== "DAEMON_SOURCE_SUBDIRS") continue;
+      const list = init?.type === "TSAsExpression" ? init.expression : init;
+      return list?.type === "ArrayExpression" && list.elements.some((item) =>
+        (item?.type === "Identifier" && item.name === "FEISHU_SOURCE_SUBDIR") ||
+        (item?.type === "Literal" && item.value === feishuSubdir),
+      );
+    }
+  }
+  return false;
+}
+
 export function readPackagedFeishuLayout(repoRoot: string): PackagedFeishuLayout {
   const stageCommon = readFileSync(join(repoRoot, "scripts", "stage-runtime-common.ts"), "utf8");
   const declaredStagedSrcDir = requireMatch(
@@ -53,10 +73,8 @@ export function readPackagedFeishuLayout(repoRoot: string): PackagedFeishuLayout
     /export\s+const\s+FEISHU_CLI_ENTRY_FILE\s*=\s*["']([^"']+)["']/,
     "FEISHU_CLI_ENTRY_FILE",
   );
-  const daemonSubdirs = requireMatch(stageCommon, /const\s+DAEMON_SOURCE_SUBDIRS\s*=\s*\[([^\]]+)\]/, "DAEMON_SOURCE_SUBDIRS");
-  const hasFeishuSubdir =
-    new RegExp(`\\bFEISHU_SOURCE_SUBDIR\\b|["']${feishuSubdir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(daemonSubdirs);
-  if (!hasFeishuSubdir) {
+  const isCurrentRepo = resolve(repoRoot) === resolve(REPO_ROOT);
+  if (!stagesFeishuSource(stageCommon, feishuSubdir) || (isCurrentRepo && !DAEMON_SOURCE_SUBDIRS.some((subdir) => subdir === feishuSubdir))) {
     throw new Error(`scripts/stage-runtime-common.ts DAEMON_SOURCE_SUBDIRS must include "${feishuSubdir}"`);
   }
   const copyTargetExpr = requireMatch(
@@ -77,7 +95,7 @@ export function readPackagedFeishuLayout(repoRoot: string): PackagedFeishuLayout
 
   const sourceFeishuEntry = `src/${feishuSubdir}/${feishuEntryFile}`;
   const stagedFeishuEntry = `${actualStagedSrcDir}/${feishuSubdir}/${feishuEntryFile}`;
-  if (resolve(repoRoot) === resolve(REPO_ROOT)) {
+  if (isCurrentRepo) {
     const expectedSource = `src/${FEISHU_SOURCE_SUBDIR}/${FEISHU_CLI_ENTRY_FILE}`;
     const expectedStaged = `${STAGED_DAEMON_SRC_DIR}/${FEISHU_SOURCE_SUBDIR}/${FEISHU_CLI_ENTRY_FILE}`;
     if (sourceFeishuEntry !== SOURCE_FEISHU_ENTRY_RELATIVE_PATH || sourceFeishuEntry !== expectedSource) {

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { RELEASE_INSTALLER_FILES } from "../src/shared/update.ts";
 import { RELEASE_ASSETS, assertVersionSourcesMatch, composeReleaseNotes, isTagPushOf, prepareReleaseAssets } from "./release-assets.ts";
 import { REPO_ROOT, readDesktopAppVersion, sha256FileHex } from "./stage-runtime-common.ts";
+import { validateRenderedReleaseMatrixLinks } from "./verification-matrix-model.ts";
 
 function writeArtifact(dir: string, name: string, body: string, hashOverride?: string): void {
   mkdirSync(dir, { recursive: true });
@@ -30,6 +31,39 @@ function versionSourcesRepo(versions: { pkg: string; tauri: string; securitySeri
 }
 
 describe("scripts/release-assets.ts", () => {
+  const linkOptions = { repo: "example-org/agent-hub", ref: "v0.4.0" };
+  const matrixUrl = `https://github.com/${linkOptions.repo}/blob`;
+  const pinnedLink = `[matrix](${matrixUrl}/v0.4.0/docs/verification-matrix.md)`;
+  const floatingLink = `[matrix](${matrixUrl}/main/docs/verification-matrix.md)`;
+
+  it.each([
+    `\`\`\`md\n${floatingLink}\n\`\`\``,
+    `~~~md\n${floatingLink}\n~~~`,
+    `    ${floatingLink}`,
+    `\`${floatingLink}\``,
+    `[unused]: ${matrixUrl}/main/docs/verification-matrix.md`,
+    `<!-- ${floatingLink} -->`,
+  ])("ignores a non-rendered link: %s", (example) => {
+    expect(validateRenderedReleaseMatrixLinks(`${example}\n\n${pinnedLink}`, linkOptions)).toEqual([]);
+  });
+
+  it("requires a rendered matrix link even if an example contains a pinned URL", () => {
+    expect(validateRenderedReleaseMatrixLinks(`\`\`\`md\n${pinnedLink}\n\`\`\``, linkOptions)).toHaveLength(1);
+  });
+
+  it.each([
+    `[matrix](${matrixUrl}/main/docs/verification%2Dmatrix.md)`,
+    `[matrix][ref]\n\n[ref]: ${matrixUrl}/main/docs/verification%2dmatrix.md`,
+    `<${matrixUrl}/main/docs/verification%2Dmatrix.md>`,
+    `<a href='${matrixUrl}/main/docs/verification%2Dmatrix.md'>matrix</a>`,
+  ])("rejects an encoded floating link: %s", (link) => {
+    expect(validateRenderedReleaseMatrixLinks(`${pinnedLink}\n\n${link}`, linkOptions)).toHaveLength(1);
+  });
+
+  it("accepts a pinned link with an encoded path", () => {
+    expect(validateRenderedReleaseMatrixLinks(`[matrix](${matrixUrl}/v0.4.0/docs/verification%2Dmatrix.md)`, linkOptions)).toEqual([]);
+  });
+
   it("writes to GitHub only from a run started by pushing that exact tag", () => {
     const push = { GITHUB_EVENT_NAME: "push", GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.4.0-rc.1" };
     expect(isTagPushOf("v0.4.0-rc.1", push)).toBe(true);

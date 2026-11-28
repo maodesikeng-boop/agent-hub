@@ -9,8 +9,15 @@ import {
   type MatrixValidationProblem,
   type VerificationMatrix,
   type VerificationPlatform,
+  type VerificationRunRecord,
   type WorkflowRealCliPlatformMap,
 } from "./verification-matrix-model.ts";
+
+interface GitHubWorkflowStepMetadata {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
 
 export interface GitHubWorkflowJobMetadata {
   id: number;
@@ -18,6 +25,7 @@ export interface GitHubWorkflowJobMetadata {
   status: string;
   conclusion: string | null;
   labels: readonly string[];
+  steps: readonly GitHubWorkflowStepMetadata[];
 }
 
 export interface GitHubWorkflowRunMetadata {
@@ -41,6 +49,33 @@ export type GitHubRunFetcher = (ref: GitHubRunRef) => Promise<GitHubWorkflowRunM
 const GITHUB_RUN_URL_CAPTURE_RE =
   /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/actions\/runs\/(\d+)(?:\/job\/(\d+))?$/;
 const MAX_JOB_PAGES = 5;
+
+type RequiredJob = { name: string; steps: readonly string[] };
+
+function shardJobs(job: string, count: number): RequiredJob[] {
+  return Array.from({ length: count }, (_, index) => {
+    const shard = `${index + 1}/${count}`;
+    return { name: `${job}${shard})`, steps: [`Run pnpm test:ci --shard=${shard}`] };
+  });
+}
+
+const WINDOWS_JOB = "windows (fusa-win-helper & integration)";
+const REQUIRED_OFFLINE_JOBS: Partial<Record<string, readonly RequiredJob[]>> = {
+  "check.yml": [...shardJobs("check (ubuntu ", 4), { name: "verify-smoke (ubuntu)", steps: ["Run pnpm verify"] }],
+  "windows.yml": [{ name: WINDOWS_JOB, steps: ["Run cross-platform core unit tests on Windows"] }],
+  "macos.yml": shardJobs("macos (", 2),
+  "mac-desktop.yml": [{
+    name: "mac-desktop (arm64 DMG & self-test)",
+    steps: [
+      "Mac packaging, supervisor and write-scope sandbox unit tests",
+      "Self-test from mounted DMG (headless, temp data dir and port, no repo, no host Node)",
+    ],
+  }],
+};
+const REQUIRED_MOCK_JOBS: Partial<Record<string, readonly RequiredJob[]>> = {
+  "windows.yml": [{ name: WINDOWS_JOB, steps: ["Run mock-LLM unit and real-CLI tests on Windows"] }],
+  "nightly.yml": [{ name: "real-cli-mock-llm (ubuntu protocol drift)", steps: ["Run real-CLI + mock-LLM suite on Ubuntu"] }],
+};
 
 export function platformsFromRunsOn(runsOn: string | string[] | undefined): VerificationPlatform[] {
   const labels = Array.isArray(runsOn) ? runsOn : typeof runsOn === "string" ? [runsOn] : [];
@@ -192,6 +227,60 @@ export async function defaultGitHubRunFetcher(ref: GitHubRunRef): Promise<GitHub
   };
 }
 
+function verifyRunJobs(
+  run: VerificationRunRecord,
+  ref: GitHubRunRef,
+  jobs: readonly GitHubWorkflowJobMetadata[],
+  path: string,
+): MatrixValidationProblem[] {
+  const problems: MatrixValidationProblem[] = [];
+  const fail = (message: string) => problems.push({ path: `${path}.urlOrRef`, code: "unverified_run_evidence", message });
+  const candidates = ref.jobId ? jobs.filter((job) => String(job.id) === ref.jobId) : jobs;
+  if (ref.jobId && candidates.length === 0) {
+    fail(`Actions run ${ref.runId} does not contain job ${ref.jobId}`);
+    return problems;
+  }
+  for (const job of candidates) {
+    if (!Array.isArray(job.labels) || job.labels.some((label) => typeof label !== "string")) {
+      fail(`Actions job ${job.id} (${job.name}) has missing or invalid runner labels`);
+    }
+  }
+  if (problems.length > 0) return problems;
+
+  const onPlatform = candidates.filter((job) =>
+    job.status === "completed" && job.conclusion === "success" && platformsFromRunsOn([...job.labels]).includes(run.platform),
+  );
+  if (onPlatform.length === 0) {
+    return [{ path: `${path}.platform`, code: "platform_mismatch", message: `Actions run ${ref.runId} has no passing job on "${run.platform}"${ref.jobId ? ` at job ${ref.jobId}` : ""}` }];
+  }
+
+  const requirements = run.kind === "real_cli_mock_llm" ? REQUIRED_MOCK_JOBS[run.source]
+    : run.kind === "fake_cli_offline" ? REQUIRED_OFFLINE_JOBS[run.source] : undefined;
+  const required = requirements?.filter((job) => !ref.jobId || job.name === onPlatform[0]!.name) ?? [];
+  if (required.length === 0) {
+    fail(`Actions run ${ref.runId} has no recognized test job for ${run.kind} in ${run.source}${ref.jobId ? ` at job ${ref.jobId}` : ""}`);
+  }
+  for (const { name, steps } of required) {
+    const job = onPlatform.find((item) => item.name === name);
+    if (!job) {
+      fail(`Actions run ${ref.runId} is missing passing test job "${name}" on "${run.platform}"`);
+      continue;
+    }
+    for (const name of steps) {
+      const matches = Array.isArray(job.steps) ? job.steps.filter((step) => step.name === name) : [];
+      if (matches.length !== 1) {
+        fail(`Actions job ${job.id} must contain exactly one required test step "${name}" (found ${matches.length})`);
+        continue;
+      }
+      const step = matches[0]!;
+      if (step.status !== "completed" || step.conclusion !== "success") {
+        fail(`Actions job ${job.id} test step "${name}" did not succeed (status=${step.status}, conclusion=${String(step.conclusion)})`);
+      }
+    }
+  }
+  return problems;
+}
+
 export async function verifyRecordedRunsOnline(
   matrix: VerificationMatrix,
   opts?: { fetcher?: GitHubRunFetcher; expectedRepo?: string },
@@ -263,34 +352,7 @@ export async function verifyRecordedRunsOnline(
       });
     }
 
-    if (ref.jobId) {
-      const job = meta.jobs.find((item) => String(item.id) === ref.jobId);
-      if (!job) {
-        problems.push({
-          path: `${path}.urlOrRef`,
-          code: "unverified_run_evidence",
-          message: `Actions run ${ref.runId} does not contain job ${ref.jobId}`,
-        });
-      } else if (job.status !== "completed" || job.conclusion !== "success") {
-        problems.push({
-          path: `${path}.urlOrRef`,
-          code: "unverified_run_evidence",
-          message: `Actions job ${ref.jobId} (${job.name}) did not succeed (status=${job.status}, conclusion=${String(job.conclusion)})`,
-        });
-      } else {
-        const jobPlatforms = platformsFromRunsOn([...job.labels]);
-        if (!jobPlatforms.includes(run.platform)) {
-          problems.push({
-            path: `${path}.platform`,
-            code: "platform_mismatch",
-            message: `Actions job ${ref.jobId} (${job.name}) ran on [${jobPlatforms.join(", ") || "unknown"}], not "${run.platform}"`,
-          });
-        }
-      }
-      continue;
-    }
-
-    if (meta.status !== "completed" || meta.conclusion !== "success") {
+    if (!ref.jobId && (meta.status !== "completed" || meta.conclusion !== "success")) {
       problems.push({
         path: `${path}.urlOrRef`,
         code: "unverified_run_evidence",
@@ -298,18 +360,7 @@ export async function verifyRecordedRunsOnline(
       });
     }
 
-    const passingPlatforms = new Set<VerificationPlatform>();
-    for (const job of meta.jobs) {
-      if (job.status !== "completed" || job.conclusion !== "success") continue;
-      for (const platform of platformsFromRunsOn([...job.labels])) passingPlatforms.add(platform);
-    }
-    if (!passingPlatforms.has(run.platform)) {
-      problems.push({
-        path: `${path}.platform`,
-        code: "platform_mismatch",
-        message: `Actions run ${ref.runId} has no passing job on "${run.platform}" (passing job platforms: [${[...passingPlatforms].sort().join(", ") || "none"}])`,
-      });
-    }
+    problems.push(...verifyRunJobs(run, ref, meta.jobs, path));
   }
 
   return problems;

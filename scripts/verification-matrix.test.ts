@@ -899,6 +899,12 @@ describe("regression: review blocker fixes (commit-bound runs, strict live_servi
       expect(mutatedCopyDest).not.toBe(origStageCommon);
       writeFileSync(stageCommonPath, mutatedCopyDest);
       expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(1);
+      for (const comment of ["// FEISHU_SOURCE_SUBDIR,", "/* FEISHU_SOURCE_SUBDIR, */"]) {
+        const commentedSubdir = origStageCommon.replace("  FEISHU_SOURCE_SUBDIR,", `  ${comment}`);
+        expect(commentedSubdir).not.toBe(origStageCommon);
+        writeFileSync(stageCommonPath, commentedSubdir);
+        expect(() => readPackagedFeishuLayout(tmpRoot)).toThrow(/DAEMON_SOURCE_SUBDIRS must include "feishu"/);
+      }
       writeFileSync(stageCommonPath, origStageCommon);
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });

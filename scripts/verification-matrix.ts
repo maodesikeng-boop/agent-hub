@@ -797,20 +797,10 @@ export async function validateRepoVerificationMatrixAsync(
   opts?: { appVersionOverride?: string; verifyRuns?: boolean; runFetcher?: GitHubRunFetcher },
 ): Promise<MatrixValidationProblem[]> {
   const problems = validateRepoVerificationMatrix(repoRoot, opts?.appVersionOverride);
-  if (!opts?.verifyRuns) return problems;
+  if (!opts?.verifyRuns || problems.length > 0) return problems;
   const jsonPath = join(repoRoot, "docs", "verification-matrix.json");
-  if (!existsSync(jsonPath)) return problems;
-  try {
-    const matrix = parseVerificationMatrix(JSON.parse(readFileSync(jsonPath, "utf8")) as unknown);
-    const onlineProblems = await verifyRecordedRunsOnline(matrix, {
-      fetcher: opts.runFetcher,
-      expectedRepo: UPDATE_RELEASE_REPO,
-    });
-    problems.push(...onlineProblems);
-  } catch {
-    return problems;
-  }
-  return problems;
+  const matrix = parseVerificationMatrix(JSON.parse(readFileSync(jsonPath, "utf8")) as unknown);
+  return verifyRecordedRunsOnline(matrix, { fetcher: opts.runFetcher, expectedRepo: UPDATE_RELEASE_REPO });
 }
 
 function parseCliFlags(args: readonly string[]): Map<string, string> {
@@ -836,7 +826,7 @@ const CLI_USAGE = [
   "",
   "Modes:",
   "  check               Offline schema, workflow-config, Markdown-sync, release-link, and Feishu layout validation (no network).",
-  "  check --verify-runs Also queries GitHub Actions metadata (head_sha, workflow path, passing job platform) for each recorded CI run.",
+  "  check --verify-runs Also checks GitHub Actions metadata for the commit, workflow, runner platform, and required test steps.",
 ].join("\n");
 
 export function runVerificationMatrixCli(argv: readonly string[], opts?: { repoRoot?: string }): number {

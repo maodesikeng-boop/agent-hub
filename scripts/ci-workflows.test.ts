@@ -372,6 +372,7 @@ describe(".github/workflows", () => {
       "scripts/verification-matrix-feishu.ts",
       "scripts/verification-matrix-model.ts",
       "scripts/verification-matrix-runs.ts",
+      "scripts/verification-matrix-runs.fixture.ts",
       "scripts/build-mac-app.sh",
       "scripts/stage-mac-runtime.ts",
       "scripts/stage-win-runtime.ts",
@@ -380,6 +381,7 @@ describe(".github/workflows", () => {
       "src/feishu/main.ts",
       ".github/workflows/check.yml",
       ".github/workflows/macos.yml",
+      ".github/workflows/mac-desktop.yml",
       ".github/workflows/windows.yml",
       ".github/workflows/nightly.yml",
     ]) {

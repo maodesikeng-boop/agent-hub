@@ -1,133 +1,171 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { UPDATE_RELEASE_REPO } from "../src/shared/limits.ts";
 import { REPO_ROOT } from "./stage-runtime-common.ts";
 import {
+  parseGitHubRunUrl,
   parseVerificationMatrix,
+  renderVerificationMatrixMarkdown,
   runVerificationMatrixCli,
   runVerificationMatrixCliAsync,
   verifyRecordedRunsOnline,
   type GitHubRunFetcher,
   type GitHubWorkflowRunMetadata,
+  type VerificationMatrix,
 } from "./verification-matrix.ts";
+import { FIXTURE_JOB_ID, FIXTURE_METADATA, WINDOWS_MOCK_STEP, metadataFixture } from "./verification-matrix-runs.fixture.ts";
 
-const REPO_MATRIX_PATH = join(REPO_ROOT, "docs", "verification-matrix.json");
+const cargoPath = "apps/windows/Cargo.toml";
+const matrixPath = "docs/verification-matrix.json";
+const markdownPath = "docs/verification-matrix.md";
+const workflowsPath = ".github/workflows";
 
-function loadRepoMatrix() {
-  return parseVerificationMatrix(JSON.parse(readFileSync(REPO_MATRIX_PATH, "utf8")) as unknown);
+function copyWorkflows(repoRoot: string): void {
+  cpSync(join(REPO_ROOT, workflowsPath), join(repoRoot, workflowsPath), { recursive: true });
 }
 
-function validFetcherForRepoMatrix(): GitHubRunFetcher {
-  const byRunId: Record<string, GitHubWorkflowRunMetadata> = {
-    "46132355340": {
-      id: 46132355340,
-      head_sha: "6f6eed4107d8a7cc77a0a615c72fba59b1cc77c7",
-      path: ".github/workflows/check.yml",
-      status: "completed",
-      conclusion: "success",
-      jobs: [{ id: 140940083341, name: "check (ubuntu 1/4)", status: "completed", conclusion: "success", labels: ["ubuntu-latest"] }],
-    },
-    "46132355360": {
-      id: 46132355360,
-      head_sha: "6f6eed4107d8a7cc77a0a615c72fba59b1cc77c7",
-      path: ".github/workflows/windows.yml",
-      status: "completed",
-      conclusion: "success",
-      jobs: [
-        {
-          id: 140940083042,
-          name: "windows (fusa-win-helper & integration)",
-          status: "completed",
-          conclusion: "success",
-          labels: ["windows-latest"],
-        },
-      ],
-    },
+function writeMatrixRepo(repoRoot: string, matrix: VerificationMatrix): void {
+  mkdirSync(join(repoRoot, dirname(matrixPath)), { recursive: true });
+  mkdirSync(join(repoRoot, dirname(cargoPath)), { recursive: true });
+  cpSync(join(REPO_ROOT, cargoPath), join(repoRoot, cargoPath));
+  copyWorkflows(repoRoot);
+  writeFileSync(join(repoRoot, matrixPath), JSON.stringify(matrix));
+  writeFileSync(join(repoRoot, markdownPath), renderVerificationMatrixMarkdown(matrix));
+}
+
+interface WorkflowJob {
+  name?: string;
+  "runs-on"?: string;
+  strategy?: { matrix?: { shard?: string[] } };
+  steps?: Array<{ name?: string; run?: string }>;
+}
+
+function snapshotFetcher(matrix: VerificationMatrix): GitHubRunFetcher {
+  return async ({ runId }) => {
+    const run = matrix.recordedRuns.find((item) => parseGitHubRunUrl(item.urlOrRef)?.runId === runId);
+    if (!run) throw new Error(`No recorded run ${runId} in the test matrix`);
+    const path = `${workflowsPath}/${run.source}`;
+    const { jobs } = parseYaml(readFileSync(join(REPO_ROOT, path), "utf8")) as { jobs: Record<string, WorkflowJob> };
+    const success = { status: "completed", conclusion: "success" };
+    const jobMetadata = Object.entries(jobs).filter(([, job]) => job["runs-on"]).flatMap(([key, job]) =>
+      (job.strategy?.matrix?.shard ?? [""]).map((shard) => ({
+        name: (job.name ?? key).replaceAll("${{ matrix.shard }}", shard),
+        labels: [job["runs-on"]!],
+        steps: (job.steps ?? []).flatMap(({ name, run }) => {
+          const stepName = name ?? (run && `Run ${run.split("\n")[0]}`);
+          return stepName ? [{ ...success, name: stepName.replaceAll("${{ matrix.shard }}", shard) }] : [];
+        }),
+        ...success,
+      })),
+    );
+    const jobId = parseGitHubRunUrl(run.urlOrRef)?.jobId;
+    return { id: Number(runId), head_sha: run.commit, path, ...success, jobs: jobMetadata.map((job, index) => ({
+      ...job, id: index === 0 && jobId ? Number(jobId) : index + 1,
+    })) };
   };
-  return async (ref) => {
-    const found = byRunId[ref.runId];
-    if (!found) throw new Error(`Run ${ref.runId} not found`);
-    return found;
-  };
+}
+
+function withFixtureJob(job: Partial<GitHubWorkflowRunMetadata["jobs"][number]>): GitHubWorkflowRunMetadata {
+  return { ...FIXTURE_METADATA, jobs: [{ ...FIXTURE_METADATA.jobs[0]!, ...job }] };
 }
 
 describe("verification-matrix online run verification (--verify-runs)", () => {
-  it("passes when recorded Actions runs match head_sha, workflow path, conclusion, and passing job platform", async () => {
-    const matrix = loadRepoMatrix();
-    const problems = await verifyRecordedRunsOnline(matrix, { fetcher: validFetcherForRepoMatrix() });
-    expect(problems).toEqual([]);
+  it.each([undefined, FIXTURE_JOB_ID])("checks the required Windows mock test step (job %s)", async (jobId) => {
+    const matrix = metadataFixture();
+    const run = matrix.recordedRuns[0]!;
+    const scoped = { ...matrix, recordedRuns: [{ ...run, urlOrRef: jobId ? `${run.urlOrRef}/job/${jobId}` : run.urlOrRef }] };
+    expect(await verifyRecordedRunsOnline(scoped, { fetcher: async () => FIXTURE_METADATA })).toEqual([]);
+
+    const steps = FIXTURE_METADATA.jobs[0]!.steps;
+    for (const conclusion of ["skipped", "failure", "cancelled", null]) {
+      const problems = await verifyRecordedRunsOnline(scoped, {
+        fetcher: async () => withFixtureJob({
+          steps: steps.map((step) => step.name === WINDOWS_MOCK_STEP ? { ...step, conclusion } : step),
+        }),
+      });
+      expect(problems).toEqual([expect.objectContaining({
+        code: "unverified_run_evidence", message: expect.stringContaining(`conclusion=${String(conclusion)}`),
+      })]);
+    }
+    const missingStep = await verifyRecordedRunsOnline(scoped, {
+      fetcher: async () => withFixtureJob({ steps: steps.filter((step) => step.name !== WINDOWS_MOCK_STEP) }),
+    });
+    expect(missingStep).toEqual([expect.objectContaining({
+      code: "unverified_run_evidence", message: expect.stringContaining(WINDOWS_MOCK_STEP),
+    })]);
   });
 
-  it("rejects counterexamples where self-reported fields match but linked Actions run metadata disagrees", async () => {
-    const matrix = loadRepoMatrix();
-
-    const wrongShaProblems = await verifyRecordedRunsOnline(matrix, {
-      fetcher: async (ref) => {
-        const meta = await validFetcherForRepoMatrix()(ref);
-        return ref.runId === "46132355360" ? { ...meta, head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } : meta;
-      },
-    });
-    expect(wrongShaProblems.some((p) => p.code === "unverified_run_evidence" && p.path.includes("commit"))).toBe(true);
-
-    const wrongWorkflowProblems = await verifyRecordedRunsOnline(matrix, {
-      fetcher: async (ref) => {
-        const meta = await validFetcherForRepoMatrix()(ref);
-        return ref.runId === "46132355360" ? { ...meta, path: ".github/workflows/check.yml" } : meta;
-      },
-    });
-    expect(wrongWorkflowProblems.some((p) => p.code === "workflow_mismatch" && p.path.includes("source"))).toBe(true);
-
-    const wrongPlatformProblems = await verifyRecordedRunsOnline(matrix, {
-      fetcher: async (ref) => {
-        const meta = await validFetcherForRepoMatrix()(ref);
-        return ref.runId === "46132355360"
-          ? { ...meta, jobs: [{ id: 1, name: "ubuntu-job", status: "completed", conclusion: "success", labels: ["ubuntu-latest"] }] }
-          : meta;
-      },
-    });
-    expect(wrongPlatformProblems.some((p) => p.code === "platform_mismatch" && p.path.includes("platform"))).toBe(true);
-
-    const failedRunProblems = await verifyRecordedRunsOnline(matrix, {
-      fetcher: async (ref) => {
-        const meta = await validFetcherForRepoMatrix()(ref);
-        return ref.runId === "46132355340" ? { ...meta, conclusion: "failure" } : meta;
-      },
-    });
-    expect(failedRunProblems.some((p) => p.code === "unverified_run_evidence")).toBe(true);
-
-    const skippedPlatformJobProblems = await verifyRecordedRunsOnline(matrix, {
-      fetcher: async (ref) => {
-        const meta = await validFetcherForRepoMatrix()(ref);
-        return ref.runId === "46132355360"
-          ? { ...meta, jobs: [{ id: 2, name: "win-job", status: "completed", conclusion: "skipped", labels: ["windows-latest"] }] }
-          : meta;
-      },
-    });
-    expect(skippedPlatformJobProblems.some((p) => p.code === "platform_mismatch")).toBe(true);
-
-    const jobUrlMatrix = {
-      ...matrix,
-      recordedRuns: matrix.recordedRuns.map((run) =>
-        run.id === "gh-run:46132355360:mock-llm" ? { ...run, urlOrRef: `${run.urlOrRef}/job/999999` } : run,
-      ),
-    };
-    const badJobProblems = await verifyRecordedRunsOnline(jobUrlMatrix, { fetcher: validFetcherForRepoMatrix() });
-    expect(badJobProblems.some((p) => p.code === "unverified_run_evidence")).toBe(true);
+  it.each([
+    ["wrong SHA", { ...FIXTURE_METADATA, head_sha: "a".repeat(40) }, "unverified_run_evidence", ".commit"],
+    ["wrong workflow", { ...FIXTURE_METADATA, path: ".github/workflows/check.yml" }, "workflow_mismatch", ".source"],
+    ["wrong platform", withFixtureJob({ labels: ["ubuntu-latest"] }), "platform_mismatch", ".platform"],
+    ["failed run", { ...FIXTURE_METADATA, conclusion: "failure" }, "unverified_run_evidence", ".urlOrRef"],
+    ["skipped job", withFixtureJob({ conclusion: "skipped" }), "platform_mismatch", ".platform"],
+  ] as const)("rejects mismatched metadata: %s", async (_label, metadata, code, field) => {
+    const problems = await verifyRecordedRunsOnline(metadataFixture(), { fetcher: async () => metadata });
+    expect(problems).toEqual([expect.objectContaining({ code, path: `recordedRuns[0]${field}` })]);
   });
 
-  it("keeps offline check working without network while check --verify-runs enforces fetched metadata and rejects bad release links", async () => {
+  it("rejects a job URL for a job absent from the run", async () => {
+    const matrix = metadataFixture();
+    const run = matrix.recordedRuns[0]!;
+    const badJob = { ...matrix, recordedRuns: [{ ...run, urlOrRef: `${run.urlOrRef}/job/999999` }] };
+    expect(await verifyRecordedRunsOnline(badJob, { fetcher: async () => FIXTURE_METADATA })).toEqual([
+      expect.objectContaining({ code: "unverified_run_evidence", message: expect.stringContaining("does not contain job") }),
+    ]);
+  });
+
+  it("makes the CLI fail closed on missing labels, verification errors, and HTTP errors", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bellwood-matrix-metadata-"));
+    try {
+      const { releaseVersion } = parseVerificationMatrix(JSON.parse(readFileSync(join(REPO_ROOT, matrixPath), "utf8")) as unknown);
+      writeMatrixRepo(root, metadataFixture(releaseVersion));
+      const check = (runFetcher: GitHubRunFetcher) =>
+        runVerificationMatrixCliAsync(["check", "--verify-runs"], { repoRoot: root, runFetcher });
+      expect(await check(async () => FIXTURE_METADATA)).toBe(0);
+      expect(await check(async () => withFixtureJob({ labels: undefined! }))).toBe(1);
+      expect(await check(async () => ({
+        ...FIXTURE_METADATA,
+        get head_sha(): string { throw new Error("metadata error"); },
+      }))).toBe(1);
+      expect(await check(async () => { throw new Error("HTTP 404 Not Found"); })).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks the repository snapshot without a fixed set of Actions run IDs", async () => {
+    const matrix = parseVerificationMatrix(JSON.parse(readFileSync(join(REPO_ROOT, matrixPath), "utf8")) as unknown);
     expect(runVerificationMatrixCli(["check"], { repoRoot: REPO_ROOT })).toBe(0);
-    expect(await runVerificationMatrixCliAsync(["check", "--verify-runs"], { repoRoot: REPO_ROOT, runFetcher: validFetcherForRepoMatrix() })).toBe(0);
-    expect(
-      await runVerificationMatrixCliAsync(["check", "--verify-runs"], {
-        repoRoot: REPO_ROOT,
-        runFetcher: async () => {
-          throw new Error("HTTP 404 Not Found");
-        },
-      }),
-    ).toBe(1);
+    expect(await runVerificationMatrixCliAsync(["check", "--verify-runs"], {
+      repoRoot: REPO_ROOT, runFetcher: snapshotFetcher(matrix),
+    })).toBe(0);
 
+    const macRun = {
+      id: "gh-run:46132355370",
+      source: "mac-desktop.yml",
+      platform: "macos",
+      kind: "fake_cli_offline",
+      commit: matrix.commit,
+      urlOrRef: `https://github.com/${UPDATE_RELEASE_REPO}/actions/runs/46132355370`,
+      completedAt: matrix.recordedAt,
+    } as const;
+    const extended = { ...matrix, recordedRuns: [...matrix.recordedRuns.filter((run) => run.id !== macRun.id), macRun] };
+    const root = mkdtempSync(join(tmpdir(), "bellwood-matrix-extended-"));
+    try {
+      writeMatrixRepo(root, extended);
+      expect(await runVerificationMatrixCliAsync(["check", "--verify-runs"], {
+        repoRoot: root, runFetcher: snapshotFetcher(extended),
+      })).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects bad release links and validates tester evidence in a copied repository", () => {
     const tmpRoot = mkdtempSync(join(tmpdir(), "bellwood-release-downloads-guard-"));
     try {
       const files = [
@@ -143,10 +181,6 @@ describe("verification-matrix online run verification (--verify-runs)", () => {
         "scripts/stage-win-runtime.ts",
         "scripts/stage-runtime-common.ts",
         "src/feishu/main.ts",
-        ".github/workflows/check.yml",
-        ".github/workflows/macos.yml",
-        ".github/workflows/windows.yml",
-        ".github/workflows/nightly.yml",
         ".github/release-downloads.md",
       ];
       for (const rel of files) {
@@ -154,6 +188,7 @@ describe("verification-matrix online run verification (--verify-runs)", () => {
         mkdirSync(join(dst, ".."), { recursive: true });
         writeFileSync(dst, readFileSync(join(REPO_ROOT, rel)));
       }
+      copyWorkflows(tmpRoot);
       expect(runVerificationMatrixCli(["check"], { repoRoot: tmpRoot })).toBe(0);
 
       const dlPath = join(tmpRoot, ".github", "release-downloads.md");
