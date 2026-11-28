@@ -1,7 +1,8 @@
 // 守卫自己的测试：起的子进程会被记下；没退出的、detached 组里还有后代的会被认出来，清掉之后就干净了。
 import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { killLeaked, leakedChildren, trackedChildren, waitForNoLeaks } from "./spawn-guard.ts";
+import { TEST_CHILD_EXIT_WAIT_MS } from "../src/shared/limits.ts";
+import { killLeaked, leakedChildren, SPAWN_GUARD_EXIT_WAIT_MS, trackedChildren, waitForNoLeaks } from "./spawn-guard.ts";
 
 const SLEEP = ["-e", "setInterval(() => {}, 1000)"];
 
@@ -44,5 +45,9 @@ describe("spawn-guard", () => {
     // 就算之后这个 pid 变成了别的活着的新进程组（例如把 pid 指向当前进程组），已锁住 groupCleared 的记录也不会再当成残留
     Object.defineProperty(child, "pid", { value: process.pid });
     expect(leakedChildren().filter((t) => t.child === child)).toEqual([]);
+  });
+
+  it("本地等待常量与 TEST_CHILD_EXIT_WAIT_MS 保持一致", () => {
+    expect(SPAWN_GUARD_EXIT_WAIT_MS).toBe(TEST_CHILD_EXIT_WAIT_MS);
   });
 });
